@@ -1,0 +1,62 @@
+[package]
+name = "ime-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ime_core"
+crate-type = ["rlib"]
+
+[dependencies]
+
+# crossterm 只給互動測試工具 try_ime 用（raw mode 逐鍵讀鍵盤）。
+#
+# 掛成 optional + feature，讓**函式庫本體維持零依賴**——core/ 要保持
+# 平台無關才好移植，見 CLAUDE.md 的架構原則。
+# 平常編譯與 cargo test 都不會拉到它，只有跑 try_ime 時才需要：
+#   cargo run --release -p ime-core --features tui --bin try_ime
+[dependencies.crossterm]
+version = "0.29.0"
+optional = true
+
+# 設定檔（TOML）的讀寫。
+#
+# 跟 crossterm 一樣掛成 optional——但這個**預設開啟**，因為輸入法
+# 本體要讀設定。純演算法的測試與計分工具可以 `--no-default-features`
+# 把它關掉，維持 core 的零依賴特性。
+[dependencies.toml]
+version = "0.9"
+optional = true
+
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+optional = true
+
+# 詞庫的記憶體映射。
+#
+# 為什麼需要：輸入法的 DLL 載在**每一個宿主行程**裡（檔案總管永遠挖著
+# 它，再加瀏覽器、編輯器、Word），而二進位詞庫有 57MB 是檔案內容。
+# 讀進 Vec 的話每個行程各背一份，五個行程就 345MB；mmap 讓它們共用
+# 同一份實體記憶體，而且只有真正碰過的頁算進 RSS。
+#
+# 唯讀檔案頁在記憶體壓力下還能直接丟棄重讀、不必寫進交換區——換頁停頓
+# 是最糟的那種卡頓。
+#
+# 跟其他依賴一樣掛成 optional，**預設開啟**：關掉會退回 `fs::read`，
+# 行為完全一樣、只是不共用。`--no-default-features` 仍然維持零依賴。
+# memmap2 是跨平台的（Windows/macOS/Linux），core 的程式碼不必碰平台
+# 差異，Phase 6 移植成本是零。
+[dependencies.memmap2]
+version = "0.9"
+optional = true
+
+[features]
+default = ["config", "mmap"]
+tui = ["dep:crossterm"]
+config = ["dep:toml", "dep:serde"]
+mmap = ["dep:memmap2"]
+
+[[bin]]
+name = "try_ime"
+required-features = ["tui"]

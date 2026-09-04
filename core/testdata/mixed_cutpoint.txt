@@ -1,0 +1,341 @@
+# 切點測資：三語所有排列組合
+#
+# 15 種組合（中/英/日 的單語重複、兩語、三語排列）× 20 句 = 300 句
+# 每種組合 10 句有分隔符空白（標成獨立的 `_` 段）、10 句完全黏著。
+#
+# 標記規則（依「通用語言輸入法 篩選規則」canvas）：
+#   `_`  分隔符空白，自成一段（空白鍵前後均為切點）
+#   `|`  切點
+#   相鄰同引擎的段視為同一詞列，不切
+#   注音的一聲空白被音節吸收，不標
+#
+# 注音按鍵依「注音按鍵合法表及對照表.md」（使用者核對過）轉換。
+#
+# 格式：文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+#
+#   第一欄 文字期望：各段用 `|` 分隔，`_` = 分隔符空白自成一段
+#   第二欄 按鍵期望：**同樣的切法標在按鍵層級**，`|` 就是切點位置
+#   第三欄 按鍵序列：使用者實際按的鍵
+#
+#   第二欄是計分基準——它不需要任何推導，逐字元比對即可。
+#   按鍵序列裡的空白可能是「一聲」也可能是「分隔符」，正是要測的東西：
+#     `check| |u vu84`   第一個空白是分隔符（前後都切），第二個是「一」的一聲
+
+已經|_|完成	u3ru/ | |j06t/6	u3ru/  j06t/6
+明天|_|記得	au/6wu0 | |ru42k6	au/6wu0  ru42k6
+一下|_|沒問題	u vu84| |ao6jp4wu6	u vu84 ao6jp4wu6
+好吃|_|買	cl3t | |a93	cl3t  a93
+好|_|測試	cl3| |hk4g4	cl3 hk4g4
+資料|_|檔案	y xul4| |2;304	y xul4 2;304
+可以|_|時間	dk3u3| |g6ru0 	dk3u3 g6ru0 
+討論|_|確認	wl3xjp4| |fm,4bp4	wl3xjp4 fm,4bp4
+上傳|_|_|已經	g;4tj06| | |u3ru/ 	g;4tj06  u3ru/ 
+今天|_|明天	rup wu0 | |au/6wu0 	rup wu0  au/6wu0 
+這個一下	5k4ek7u vu84	5k4ek7u vu84
+見面好吃	ru04au04cl3t 	ru04au04cl3t 
+開好	d9 cl3	d9 cl3
+問題資料	jp4wu6y xul4	jp4wu6y xul4
+需要可以	vm ul4dk3u3	vm ul4dk3u3
+工作討論	ej/ yji4wl3xjp4	ej/ yji4wl3xjp4
+修改上傳	vu. e93g;4tj06	vu. e93g;4tj06
+完成今天	j06t/6rup wu0 	j06t/6rup wu0 
+記得這個	ru42k65k4ek7	ru42k65k4ek7
+沒問題見面	ao6jp4wu6ru04au04	ao6jp4wu6ru04au04
+notebook|_|test	notebook| |test	notebook test
+file|_|data	file| |data	file data
+commit|_|deploy	commit| |deploy	commit deploy
+client|_|debug	client| |debug	client debug
+report|_|push	report| |push	report push
+build|_|_|login	build| | |login	build  login
+hello|_|world	hello| |world	hello world
+check|_|meeting	check| |meeting	check meeting
+good|_|notebook	good| |notebook	good notebook
+email|_|file	email| |file	email file
+reviewcommit	reviewcommit	reviewcommit
+serverclient	serverclient	serverclient
+configreport	configreport	configreport
+mergebuild	mergebuild	mergebuild
+searchhello	searchhello	searchhello
+updatecheck	updatecheck	updatecheck
+buggood	buggood	buggood
+testemail	testemail	testemail
+datareview	datareview	datareview
+deployserver	deployserver	deployserver
+美味しい|_|頑張って	oishii| |gannbatte	oishii gannbatte
+電話|_|仕事	dennwa| |shigoto	dennwa shigoto
+時間|_|会議	jikann| |kaigi	jikann kaigi
+電車|_|学校	dennsha| |gakkou	dennsha gakkou
+ございます|_|こんにちは	gozaimasu| |konnnichiha	gozaimasu konnnichiha
+アニメ|_|寿司	anime| |sushi	anime sushi
+あります|_|です	arimasu| |desu	arimasu desu
+お願い|_|失礼	onegai| |shitsurei	onegai shitsurei
+楽しい|_|美味しい	tanoshii| |oishii	tanoshii oishii
+友達|_|電話	tomodachi| |dennwa	tomodachi dennwa
+やすみじかん	yasumijikann	yasumijikann
+しゃしんでんしゃ || 写真電車	shashinndennsha	shashinndennsha
+ありがとうございます	arigatougozaimasu	arigatougozaimasu
+あしたあにめ || 明日アニメ	ashitaanime	ashitaanime
+せいたんあります || 生誕あります	seitannarimasu	seitannarimasu
+わかりましたおねがい || わかりましたお願い	wakarimashitaonegai	wakarimashitaonegai
+だいじょうぶたのしい || 大丈夫楽しい	daijoubutanoshii	daijoubutanoshii
+がんばってともだち || 頑張って友達	gannbattetomodachi	gannbattetomodachi
+しごとやすみ || 仕事休み	shigotoyasumi	shigotoyasumi
+かいぎしゃしん || 会議写真	kaigishashinn	kaigishashinn
+討論|_|build	wl3xjp4| |build	wl3xjp4 build
+上傳|_|hello	g;4tj06| |hello	g;4tj06 hello
+今天|_|check	rup wu0 | |check	rup wu0  check
+這個|_|good	5k4ek7| |good	5k4ek7 good
+見面|_|email	ru04au04| |email	ru04au04 email
+開|_|review	d9 | |review	d9  review
+問題|_|server	jp4wu6| |server	jp4wu6 server
+需要|_|config	vm ul4| |config	vm ul4 config
+工作|_|merge	ej/ yji4| |merge	ej/ yji4 merge
+修改|_|search	vu. e93| |search	vu. e93 search
+完成|update	j06t/6|update	j06t/6update
+記得|bug	ru42k6|bug	ru42k6bug
+沒問題|test	ao6jp4wu6|test	ao6jp4wu6test
+買|data	a93|data	a93data
+測試|deploy	hk4g4|deploy	hk4g4deploy
+檔案|debug	2;304|debug	2;304debug
+時間|push	g6ru0 |push	g6ru0 push
+確認|login	fm,4bp4|login	fm,4bp4login
+已經|world	u3ru/ |world	u3ru/ world
+明天|meeting	au/6wu0 |meeting	au/6wu0 meeting
+明天|_|アニメ	au/6wu0 | |anime	au/6wu0  anime
+一下|_|あります	u vu84| |arimasu	u vu84 arimasu
+好吃|_|お願い	cl3t | |onegai	cl3t  onegai
+好|_|楽しい	cl3| |tanoshii	cl3 tanoshii
+資料|_|友達	y xul4| |tomodachi	y xul4 tomodachi
+可以|_|休み	dk3u3| |yasumi	dk3u3 yasumi
+討論|_|写真	wl3xjp4| |shashinn	wl3xjp4 shashinn
+上傳|_|ありがとう	g;4tj06| |arigatou	g;4tj06 arigatou
+今天|_|明日	rup wu0 | |ashita	rup wu0  ashita
+這個|_|生誕	5k4ek7| |seitann	5k4ek7 seitann
+見面|わかりました	ru04au04|wakarimashita	ru04au04wakarimashita
+開|大丈夫	d9 |daijoubu	d9 daijoubu
+問題|頑張って	jp4wu6|gannbatte	jp4wu6gannbatte
+需要|仕事	vm ul4|shigoto	vm ul4shigoto
+工作|会議	ej/ yji4|kaigi	ej/ yji4kaigi
+修改|学校	vu. e93|gakkou	vu. e93gakkou
+完成|こんにちは	j06t/6|konnnichiha	j06t/6konnnichiha
+記得|寿司	ru42k6|sushi	ru42k6sushi
+沒問題|です	ao6jp4wu6|desu	ao6jp4wu6desu
+買|失礼	a93|shitsurei	a93shitsurei
+file|_|開	file| |d9 	file d9 
+commit|_|問題	commit| |jp4wu6	commit jp4wu6
+client|_|需要	client| |vm ul4	client vm ul4
+report|_|工作	report| |ej/ yji4	report ej/ yji4
+build|_|修改	build| |vu. e93	build vu. e93
+hello|_|完成	hello| |j06t/6	hello j06t/6
+check|_|記得	check| |ru42k6	check ru42k6
+good|_|沒問題	good| |ao6jp4wu6	good ao6jp4wu6
+email|_|買	email| |a93	email a93
+review|_|測試	review| |hk4g4	review hk4g4
+server|檔案	server|2;304	server2;304
+config|時間	config|g6ru0 	configg6ru0 
+merge|確認	merge|fm,4bp4	mergefm,4bp4
+search|已經	search|u3ru/ 	searchu3ru/ 
+update|明天	update|au/6wu0 	updateau/6wu0 
+bug|一下	bug|u vu84	bugu vu84
+test|好吃	test|cl3t 	testcl3t 
+data|好	data|cl3	datacl3
+deploy|資料	deploy|y xul4	deployy xul4
+debug|可以	debug|dk3u3	debugdk3u3
+debug|_|しごと || debug_仕事	debug| |shigoto	debug shigoto
+push|_|会議	push| |kaigi	push kaigi
+login|_|学校	login| |gakkou	login gakkou
+world|_|こんにちは	world| |konnnichiha	world konnnichiha
+meeting|_|寿司	meeting| |sushi	meeting sushi
+notebook|_|です	notebook| |desu	notebook desu
+file|_|失礼	file| |shitsurei	file shitsurei
+commit|_|美味しい	commit| |oishii	commit oishii
+client|_|電話	client| |dennwa	client dennwa
+report|_|時間	report| |jikann	report jikann
+build|電車	build|dennsha	builddennsha
+hello|ございます	hello|gozaimasu	hellogozaimasu
+check|アニメ	check|anime	checkanime
+good|あります	good|arimasu	goodarimasu
+email|お願い	email|onegai	emailonegai
+review|楽しい	review|tanoshii	reviewtanoshii
+server|友達	server|tomodachi	servertomodachi
+config|やすみ || config休み	config|yasumi	configyasumi
+merge|写真	merge|shashinn	mergeshashinn
+search|ありがとう	search|arigatou	searcharigatou
+学校|_|已經	gakkou| |u3ru/ 	gakkou u3ru/ 
+こんにちは|_|明天	konnnichiha| |au/6wu0 	konnnichiha au/6wu0 
+寿司|_|一下	sushi| |u vu84	sushi u vu84
+です|_|好吃	desu| |cl3t 	desu cl3t 
+失礼|_|好	shitsurei| |cl3	shitsurei cl3
+美味しい|_|資料	oishii| |y xul4	oishii y xul4
+電話|_|可以	dennwa| |dk3u3	dennwa dk3u3
+時間|_|討論	jikann| |wl3xjp4	jikann wl3xjp4
+電車|_|上傳	dennsha| |g;4tj06	dennsha g;4tj06
+ございます|_|今天	gozaimasu| |rup wu0 	gozaimasu rup wu0 
+アニメ|這個	anime|5k4ek7	anime5k4ek7
+あります|見面	arimasu|ru04au04	arimasuru04au04
+お願い|開	onegai|d9 	onegaid9 
+楽しい|問題	tanoshii|jp4wu6	tanoshiijp4wu6
+友達|需要	tomodachi|vm ul4	tomodachivm ul4
+休み|工作	yasumi|ej/ yji4	yasumiej/ yji4
+写真|修改	shashinn|vu. e93	shashinnvu. e93
+ありがとう|完成	arigatou|j06t/6	arigatouj06t/6
+明日|記得	ashita|ru42k6	ashitaru42k6
+生誕|沒問題	seitann|ao6jp4wu6	seitannao6jp4wu6
+生誕|_|notebook	seitann| |notebook	seitann notebook
+わかりました|_|file	wakarimashita| |file	wakarimashita file
+大丈夫|_|commit	daijoubu| |commit	daijoubu commit
+頑張って|_|client	gannbatte| |client	gannbatte client
+仕事|_|report	shigoto| |report	shigoto report
+会議|_|build	kaigi| |build	kaigi build
+学校|_|hello	gakkou| |hello	gakkou hello
+こんにちは|_|check	konnnichiha| |check	konnnichiha check
+寿司|_|good	sushi| |good	sushi good
+です|_|email	desu| |email	desu email
+失礼|review	shitsurei|review	shitsureireview
+美味しい|server	oishii|server	oishiiserver
+電話|config	dennwa|config	dennwaconfig
+時間|merge	jikann|merge	jikannmerge
+電車|search	dennsha|search	dennshasearch
+ございます|update	gozaimasu|update	gozaimasuupdate
+アニメ|bug	anime|bug	animebug
+あります|test	arimasu|test	arimasutest
+お願い|data	onegai|data	onegaidata
+楽しい|deploy	tanoshii|deploy	tanoshiideploy
+測試|_|deploy|_|頑張って	hk4g4| |deploy| |gannbatte	hk4g4 deploy gannbatte
+檔案|_|debug|_|しごと || 檔案_debug_仕事	2;304| |debug| |shigoto	2;304 debug shigoto
+時間|_|push|_|会議	g6ru0 | |push| |kaigi	g6ru0  push kaigi
+確認|_|login|_|学校	fm,4bp4| |login| |gakkou	fm,4bp4 login gakkou
+已經|_|world|_|こんにちは	u3ru/ | |world| |konnnichiha	u3ru/  world konnnichiha
+明天|_|meeting|_|寿司	au/6wu0 | |meeting| |sushi	au/6wu0  meeting sushi
+一下|_|notebook|_|です	u vu84| |notebook| |desu	u vu84 notebook desu
+好吃|_|file|_|失礼	cl3t | |file| |shitsurei	cl3t  file shitsurei
+好|_|commit|_|美味しい	cl3| |commit| |oishii	cl3 commit oishii
+資料|_|client|_|電話	y xul4| |client| |dennwa	y xul4 client dennwa
+可以|report|時間	dk3u3|report|jikann	dk3u3reportjikann
+討論|build|電車	wl3xjp4|build|dennsha	wl3xjp4builddennsha
+上傳|hello|ございます	g;4tj06|hello|gozaimasu	g;4tj06hellogozaimasu
+今天|check|アニメ	rup wu0 |check|anime	rup wu0 checkanime
+這個|good|あります	5k4ek7|good|arimasu	5k4ek7goodarimasu
+見面|email|お願い	ru04au04|email|onegai	ru04au04emailonegai
+開|review|楽しい	d9 |review|tanoshii	d9 reviewtanoshii
+問題|server|友達	jp4wu6|server|tomodachi	jp4wu6servertomodachi
+需要|config|やすみ || 需要config休み	vm ul4|config|yasumi	vm ul4configyasumi
+工作|merge|写真	ej/ yji4|merge|shashinn	ej/ yji4mergeshashinn
+工作|_|会議|_|build	ej/ yji4| |kaigi| |build	ej/ yji4 kaigi build
+修改|_|学校|_|hello	vu. e93| |gakkou| |hello	vu. e93 gakkou hello
+完成|_|こんにちは|_|check	j06t/6| |konnnichiha| |check	j06t/6 konnnichiha check
+記得|_|寿司|_|good	ru42k6| |sushi| |good	ru42k6 sushi good
+沒問題|_|です|_|email	ao6jp4wu6| |desu| |email	ao6jp4wu6 desu email
+買|_|失礼|_|review	a93| |shitsurei| |review	a93 shitsurei review
+測試|_|美味しい|_|server	hk4g4| |oishii| |server	hk4g4 oishii server
+檔案|_|電話|_|config	2;304| |dennwa| |config	2;304 dennwa config
+時間|_|時間|_|merge	g6ru0 | |jikann| |merge	g6ru0  jikann merge
+確認|_|電車|_|search	fm,4bp4| |dennsha| |search	fm,4bp4 dennsha search
+已經|ございます|update	u3ru/ |gozaimasu|update	u3ru/ gozaimasuupdate
+明天|アニメ|bug	au/6wu0 |anime|bug	au/6wu0 animebug
+一下|あります|test	u vu84|arimasu|test	u vu84arimasutest
+好吃|お願い|data	cl3t |onegai|data	cl3t onegaidata
+好|楽しい|deploy	cl3|tanoshii|deploy	cl3tanoshiideploy
+資料|ともだち|debug || 資料友達debug	y xul4|tomodachi|debug	y xul4tomodachidebug
+可以|休み|push	dk3u3|yasumi|push	dk3u3yasumipush
+討論|写真|login	wl3xjp4|shashinn|login	wl3xjp4shashinnlogin
+上傳|ありがとう|world	g;4tj06|arigatou|world	g;4tj06arigatouworld
+今天|明日|meeting	rup wu0 |ashita|meeting	rup wu0 ashitameeting
+update|_|明天|_|アニメ	update| |au/6wu0 | |anime	update au/6wu0  anime
+bug|_|一下|_|あります	bug| |u vu84| |arimasu	bug u vu84 arimasu
+test|_|好吃|_|お願い	test| |cl3t | |onegai	test cl3t  onegai
+data|_|好|_|楽しい	data| |cl3| |tanoshii	data cl3 tanoshii
+deploy|_|資料|_|友達	deploy| |y xul4| |tomodachi	deploy y xul4 tomodachi
+debug|_|可以|_|やすみ || debug_可以_休み	debug| |dk3u3| |yasumi	debug dk3u3 yasumi
+push|_|討論|_|写真	push| |wl3xjp4| |shashinn	push wl3xjp4 shashinn
+login|_|上傳|_|ありがとう	login| |g;4tj06| |arigatou	login g;4tj06 arigatou
+world|_|今天|_|明日	world| |rup wu0 | |ashita	world rup wu0  ashita
+meeting|_|這個|_|生誕	meeting| |5k4ek7| |seitann	meeting 5k4ek7 seitann
+notebook|見面|わかりました	notebook|ru04au04|wakarimashita	notebookru04au04wakarimashita
+file|開|大丈夫	file|d9 |daijoubu	filed9 daijoubu
+commit|問題|頑張って	commit|jp4wu6|gannbatte	commitjp4wu6gannbatte
+client|需要|仕事	client|vm ul4|shigoto	clientvm ul4shigoto
+report|工作|会議	report|ej/ yji4|kaigi	reportej/ yji4kaigi
+build|修改|学校	build|vu. e93|gakkou	buildvu. e93gakkou
+hello|完成|こんにちは	hello|j06t/6|konnnichiha	helloj06t/6konnnichiha
+check|記得|寿司	check|ru42k6|sushi	checkru42k6sushi
+good|沒問題|です	good|ao6jp4wu6|desu	goodao6jp4wu6desu
+email|買|失礼	email|a93|shitsurei	emaila93shitsurei
+email|_|お願い|_|開	email| |onegai| |d9 	email onegai d9 
+review|_|楽しい|_|問題	review| |tanoshii| |jp4wu6	review tanoshii jp4wu6
+server|_|友達|_|需要	server| |tomodachi| |vm ul4	server tomodachi vm ul4
+config|_|やすみ|_|工作 || config_休み_工作	config| |yasumi| |ej/ yji4	config yasumi ej/ yji4
+merge|_|写真|_|修改	merge| |shashinn| |vu. e93	merge shashinn vu. e93
+search|_|ありがとう|_|完成	search| |arigatou| |j06t/6	search arigatou j06t/6
+update|_|明日|_|記得	update| |ashita| |ru42k6	update ashita ru42k6
+bug|_|生誕|_|沒問題	bug| |seitann| |ao6jp4wu6	bug seitann ao6jp4wu6
+test|_|わかりました|_|買	test| |wakarimashita| |a93	test wakarimashita a93
+data|_|大丈夫|_|測試	data| |daijoubu| |hk4g4	data daijoubu hk4g4
+deploy|頑張って|檔案	deploy|gannbatte|2;304	deploygannbatte2;304
+debug|しごと|時間 || debug仕事時間	debug|shigoto|g6ru0 	debugshigotog6ru0 
+push|会議|確認	push|kaigi|fm,4bp4	pushkaigifm,4bp4
+login|学校|已經	login|gakkou|u3ru/ 	logingakkouu3ru/ 
+world|こんにちは|明天	world|konnnichiha|au/6wu0 	worldkonnnichihaau/6wu0 
+meeting|寿司|一下	meeting|sushi|u vu84	meetingsushiu vu84
+notebook|です|好吃	notebook|desu|cl3t 	notebookdesucl3t 
+file|失礼|好	file|shitsurei|cl3	fileshitsureicl3
+commit|美味しい|資料	commit|oishii|y xul4	commitoishiiy xul4
+client|電話|可以	client|dennwa|dk3u3	clientdennwadk3u3
+友達|_|需要|_|config	tomodachi| |vm ul4| |config	tomodachi vm ul4 config
+休み|_|工作|_|merge	yasumi| |ej/ yji4| |merge	yasumi ej/ yji4 merge
+写真|_|修改|_|search	shashinn| |vu. e93| |search	shashinn vu. e93 search
+ありがとう|_|完成|_|update	arigatou| |j06t/6| |update	arigatou j06t/6 update
+明日|_|記得|_|bug	ashita| |ru42k6| |bug	ashita ru42k6 bug
+生誕|_|沒問題|_|test	seitann| |ao6jp4wu6| |test	seitann ao6jp4wu6 test
+わかりました|_|買|_|data	wakarimashita| |a93| |data	wakarimashita a93 data
+大丈夫|_|測試|_|deploy	daijoubu| |hk4g4| |deploy	daijoubu hk4g4 deploy
+がんばって|_|檔案|_|debug || 頑張って_檔案_debug	gannbatte| |2;304| |debug	gannbatte 2;304 debug
+仕事|_|時間|_|_|push	shigoto| |g6ru0 | | |push	shigoto g6ru0   push
+会議|確認|login	kaigi|fm,4bp4|login	kaigifm,4bp4login
+学校|已經|world	gakkou|u3ru/ |world	gakkouu3ru/ world
+こんにちは|明天|meeting	konnnichiha|au/6wu0 |meeting	konnnichihaau/6wu0 meeting
+寿司|一下|notebook	sushi|u vu84|notebook	sushiu vu84notebook
+です|好吃|file	desu|cl3t |file	desucl3t file
+失礼|好|commit	shitsurei|cl3|commit	shitsureicl3commit
+美味しい|資料|client	oishii|y xul4|client	oishiiy xul4client
+電話|可以|report	dennwa|dk3u3|report	dennwadk3u3report
+時間|討論|build	jikann|wl3xjp4|build	jikannwl3xjp4build
+電車|上傳|hello	dennsha|g;4tj06|hello	dennshag;4tj06hello
+電車|_|search|_|已經	dennsha| |search| |u3ru/ 	dennsha search u3ru/ 
+ございます|_|update|_|明天	gozaimasu| |update| |au/6wu0 	gozaimasu update au/6wu0 
+アニメ|_|bug|_|一下	anime| |bug| |u vu84	anime bug u vu84
+あります|_|test|_|好吃	arimasu| |test| |cl3t 	arimasu test cl3t 
+お願い|_|data|_|好	onegai| |data| |cl3	onegai data cl3
+楽しい|_|deploy|_|資料	tanoshii| |deploy| |y xul4	tanoshii deploy y xul4
+ともだち|_|debug|_|可以 || 友達_debug_可以	tomodachi| |debug| |dk3u3	tomodachi debug dk3u3
+休み|_|push|_|討論	yasumi| |push| |wl3xjp4	yasumi push wl3xjp4
+写真|_|login|_|上傳	shashinn| |login| |g;4tj06	shashinn login g;4tj06
+ありがとう|_|world|_|今天	arigatou| |world| |rup wu0 	arigatou world rup wu0 
+明日|meeting|這個	ashita|meeting|5k4ek7	ashitameeting5k4ek7
+生誕|notebook|見面	seitann|notebook|ru04au04	seitannnotebookru04au04
+わかりました|file|開	wakarimashita|file|d9 	wakarimashitafiled9 
+大丈夫|commit|問題	daijoubu|commit|jp4wu6	daijoubucommitjp4wu6
+頑張って|client|需要	gannbatte|client|vm ul4	gannbatteclientvm ul4
+仕事|report|工作	shigoto|report|ej/ yji4	shigotoreportej/ yji4
+会議|build|修改	kaigi|build|vu. e93	kaigibuildvu. e93
+学校|hello|完成	gakkou|hello|j06t/6	gakkouhelloj06t/6
+こんにちは|check|記得	konnnichiha|check|ru42k6	konnnichihacheckru42k6
+寿司|good|沒問題	sushi|good|ao6jp4wu6	sushigoodao6jp4wu6
+
+# ---- 外來語 f 系列（2026-08-28 補）----
+# 規格表的「外來語」原本只列 v，補上 f 之後才有 ふぁ ふぃ ふ ふぇ ふぉ ふゅ。
+# fujisan（富士山）、fairu（ファイル）這類詞會用到。
+富士山	fujisann	fujisann
+ファイル	fairu	fairu
+ソフト	sofuto	sofuto
+フィルム	firumu	firumu
+フォーク	fo-ku	fo-ku
+ふゅーじょん	fyu-jonn	fyu-jonn
+ファン	fann	fann
+コーヒー	ko-hi-	ko-hi-
+富士山|_|photo	fujisann| |photo	fujisann photo
+ソフト|_|update	sofuto| |update	sofuto update
+ファイル|save	fairu|save	fairusave
+ファン|_|好	fann| |cl3	fann cl3
+買|_|ソフト	a93| |sofuto	a93 sofuto
+富士山|_|photo|_|好	fujisann| |photo| |cl3	fujisann photo cl3

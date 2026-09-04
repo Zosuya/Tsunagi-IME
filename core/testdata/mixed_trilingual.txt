@@ -1,0 +1,72 @@
+# 混合語言測資（第四組）：真實的三語混雜句
+#
+# 使用者實測時貼的十個句子，中英日交錯出現在同一句裡。
+# 這組不測「切得對不對」（那是 mixed_* 那三組的職責），測的是
+# **每一段都要有合法解讀**——依核心原則，引擎可以猜錯排序，但不能
+# 給不出東西、也不能吐出不合法的組合。
+#
+# 格式：文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+#
+#   第一欄 文字期望：各段用 `|` 分隔，`_` = 分隔符空白自成一段
+#   第二欄 按鍵期望：**同樣的切法標在按鍵層級**，`|` 就是切點位置
+#   第三欄 按鍵序列：使用者實際按的鍵
+#
+#   第二欄是計分基準——它不需要任何推導，逐字元比對即可。
+#   按鍵序列裡的空白可能是「一聲」也可能是「分隔符」，正是要測的東西：
+#     `check| |u vu84`   第一個空白是分隔符（前後都切），第二個是「一」的一聲
+
+# 句1：今天的 meeting 真的很 boring
+今天|_|meeting|_|真的	rup wu0 | |meeting| |5p 2k7	rup wu0  meeting 5p 2k7
+boring	boring	boring
+# 句2：supermarket 買了牛奶
+supermarket	supermarket	supermarket
+牛奶	su.6s93	su.6s93
+# 句3：project 的 deadline 是明天
+project|_|deadline	project| |deadline	project deadline
+明天	au/6wu0 	au/6wu0 
+# 句4：餐廳的 food 真的很 amazing
+餐廳|_|food	h0 wu/ | |food	h0 wu/  food
+amazing	amazing	amazing
+# 句5：日文詞（ずっと / どうしよう / 頑張って）
+zutto || ずっと	zutto	zutto
+doushiyou || どうしよう	doushiyou	doushiyou
+gannbatte || 頑張って	gannbatte	gannbatte
+# 句6：itinerary / hotel / flight
+itinerary	itinerary	itinerary
+hotel|_|flight	hotel| |flight	hotel flight
+# 句7：天氣很好 + 日文 散歩
+天氣	wu0 fu4	wu0 fu4
+sannpo || 散歩	sannpo	sannpo
+# 句8：design / improve
+design|_|improve	design| |improve	design improve
+# 句9：期末考 + 複習
+期末考	fu6ai4dl3	fu6ai4dl3
+# 句10：中文 + switch
+中文|_|switch	5j/ jp6| |switch	5j/ jp6 switch
+# ---- 標點符號 ----
+# 標點跟注音是**同一個按鍵的兩種身分**（`,`=ㄝ、`.`=ㄡ），
+# 全形/半形看前一段是什麼語言。日文逗號是讀點「、」不是「，」。
+# 句11：中文 + 中文全形逗號
+你好|，	su3cl3|,	su3cl3,
+# 句12：英文 + 半形逗號
+hello|,	hello|,	hello,
+# 句13：日文 + 讀點
+頑張って|、	gannbatte|,	gannbatte,
+# 句14：中文 + 句號
+你好|。	su3cl3|.	su3cl3.
+# 句15：英文 + 半形句號
+hello|.	hello|.	hello.
+# 句16：中英混合，逗號**前面是英文**→ 半形
+你好|hello|,	su3cl3|hello|,	su3cl3hello,
+# 句17：連續標點要沿用同一種寫法（不能半全形混用）
+hello|.|.|.	hello|.|.|.	hello...
+# 句18：中文連續句號
+你好|。|。|。	su3cl3|.|.|.	su3cl3...
+# 句19：跨標點斷詞——hi 在沒標點時會跟後面黏成 hirup
+hi|,|今天	hi|,|rup wu0 	hi,rup wu0 
+# 句20：同理 go，標點天然就是邊界
+go|,|好	go|,|cl3	go,cl3
+# 句21：email（@ 沒有任何引擎能消化，要原樣輸出）
+a|@|b|.|com	a|@|b|.|com	a@b.com
+# 句22：中文 + 未知符號
+你好|@	su3cl3|@	su3cl3@

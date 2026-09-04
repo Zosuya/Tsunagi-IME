@@ -1,0 +1,54 @@
+# 混合語言測資（第七組）：英文詞的結尾偷走注音音節的開頭
+#
+# 這組測的是一個結構性陷阱——「常用英文詞 ＋ 一個字母 = 也是常用
+# 英文詞」的組合在 en_50k 裡有 1265 組：
+#
+#   the → them / then / they      for → ford / fork / form / fort
+#   you → your                    know → known / knows
+#
+# 於是英文段會多吃一個字元，而剩下的注音殘段往往仍然合法：
+#
+#   file ＋ d9（開，結尾是一聲空白） → 英:filed | 注:9  ← 9+空白是ㄡˉ，也合法
+#   the  ＋ yl3（早）                → 英:they  | 注:l3
+#
+# 「英文詞＋注音」是這個輸入法的核心使用情境，而前六組測資只覆蓋到
+# 3 句這種模式——那是測資的盲點，不是問題不存在。這組把它補起來。
+#
+# 每一句都是「一個英文詞 ＋ 一個中文詞」，30 個不同的英文詞。
+# 選詞的標準是「英文詞＋注音的第一個鍵」也在英文詞典裡，也就是
+# 一定會觸發這個陷阱。
+#
+# 格式：文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+#
+#   第二、三欄的空白是**真的空白**（注音的一聲），不是符號
+
+file|開	file|d9 	filed9 
+for|開	for|d9 	ford9 
+not|改	not|e93	note93
+can|改	can|e93	cane93
+was|成	was|t/6	wast/6
+the|改	the|e93	thee93
+you|開	you|d9 	youd9 
+know|你	know|su3	knowsu3
+are|你	are|su3	aresu3
+and|早	and|yl3	andyl3
+have|你	have|su3	havesu3
+that|你	that|su3	thatsu3
+what|你	what|su3	whatsu3
+use|開	use|d9 	used9 
+take|你	take|su3	takesu3
+make|你	make|su3	makesu3
+time|開	time|d9 	timed9 
+home|早	home|yl3	homeyl3
+name|開	name|d9 	named9 
+work|你	work|su3	worksu3
+look|早	look|yl3	lookyl3
+want|你	want|su3	wantsu3
+come|你	come|su3	comesu3
+call|改	call|e93	calle93
+part|早	part|yl3	partyl3
+play|你	play|su3	playsu3
+turn|你	turn|su3	turnsu3
+show|早	show|yl3	showyl3
+hand|早	hand|yl3	handyl3
+this|開	this|d9 	thisd9 

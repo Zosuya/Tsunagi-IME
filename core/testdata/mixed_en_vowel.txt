@@ -1,0 +1,97 @@
+# 混合語言測資（第九組）：英文詞 ＋ 母音開頭的注音音節
+#
+# 注音音節以母音鍵開頭時（a93 買、e93 改、u3 已、ul4 要、aj4 目、
+# el3 稿），前面英文詞的尾巴加上那個母音常常變成合法日文，
+# 於是被日文段吃走：
+#
+#   email ＋ a93（買）  →  英:em | 日:aila | 注:93
+#                          `aila` 是あいら，合法日文
+#   commit ＋ a93       →  英:com | 日:mita | 注:93
+#   server ＋ a93       →  英:ser | 日:vera | 注:93
+#
+# 這類組合有 5904 種——任何子音結尾的英文詞加母音都是合法日文，
+# 而「英文詞＋注音」是這個輸入法的核心使用情境。
+#
+# 這組是目前最弱的一環，加進來的時候第 1 名只有 8%、前 3 名 76%。
+# 保留失敗案例是刻意的：測資反映真實需求，不是反映目前的能力。
+#
+# 六個中文詞輪流配，每個 5～13 句。
+#
+# 2026-09-01 修正：原本的 e93 修、o4 我、i3 以、aj4 暗、el3 考
+# 文字與按鍵讀音對不上（check_testdata 抓出來的），引擎永遠不可能
+# 過。文字改成該按鍵真正的讀音——**這組的規格是按鍵**：音節必須
+# 母音字母開頭才會跟前面的英文詞黏成日文，照文字反推按鍵
+# （修 = vul ）就失去測試目的了。
+#
+# o4（ㄟˋ）與 i3（ㄛˇ）整個換掉：那兩個音幾乎沒有字（i3 一個都
+# 沒有），使用者裁決改用 u3 與 ul4。
+#
+# 2026-09-02 裁決：`u3`（ㄧˇ）那 13 列改標**寬容-列舉**「已 || 以」。
+#
+# 理由是這組測資的規格是按鍵，不是文字——中文那個字只是載體，前面是
+# 英文詞、後面是字串結尾，**沒有任何中文上下文**可以決定該是「已」還
+# 是「以」，兩個都是常用字。原本寫死「已」而引擎給「以」，等於拿一個
+# 硬幣的正反面在扣分：13 列裡有 8 列是這樣掛的（見 CLAUDE.md 的
+# 「已／以」未決項）。照期望基準審核.md 的 A4「中文同音詞（兩個都是
+# 真詞）→ 寬容-列舉」處理。引擎與 priority.txt 都沒有動。
+#
+# **考慮過補成「已經」，量完否決**：那樣答案會唯一（詞層蓋過單字排序，
+# 已/以 之爭直接消失），13 列的通過數也從 8 升到 10——但多的那 2 分是
+# 靠削弱難度換來的。`config`／`token`／`route` 的切法會從錯變對，而那
+# 三個正是這組要抓的「英文詞尾＋母音黏成日文」；`buffer` 反而倒退。
+# 這組的價值在於保留最難的案例，不在於分數好看。
+
+# 格式：文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+#
+#   第二、三欄的空白是**真的空白**（注音的一聲），不是符號
+
+email|買	email|a93	emaila93
+commit|改	commit|e93	commite93
+server|已 || server|以	server|u3	serveru3
+input|已 || input|以	input|u3	inputu3
+output|要	output|ul4	outputul4
+format|目	format|aj4	formataj4
+result|要	result|ul4	resultul4
+update|買	update|a93	updatea93
+delete|改	delete|e93	deletee93
+upload|已 || upload|以	upload|u3	uploadu3
+config|已 || config|以	config|u3	configu3
+file|要	file|ul4	fileul4
+data|目	data|aj4	dataaj4
+user|稿	user|el3	userel3
+admin|要	admin|ul4	adminul4
+login|買	login|a93	logina93
+logout|改	logout|e93	logoute93
+submit|已 || submit|以	submit|u3	submitu3
+filter|已 || filter|以	filter|u3	filteru3
+target|要	target|ul4	targetul4
+deploy|目	deploy|aj4	deployaj4
+review|稿	review|el3	reviewel3
+status|要	status|ul4	statusul4
+button|買	button|a93	buttona93
+header|改	header|e93	headere93
+footer|已 || footer|以	footer|u3	footeru3
+layout|已 || layout|以	layout|u3	layoutu3
+module|要	module|ul4	moduleul4
+number|目	number|aj4	numberaj4
+value|稿	value|el3	valueel3
+index|要	index|ul4	indexul4
+query|買	query|a93	querya93
+cache|改	cache|e93	cachee93
+token|已 || token|以	token|u3	tokenu3
+route|已 || route|以	route|u3	routeu3
+render|要	render|ul4	renderul4
+widget|目	widget|aj4	widgetaj4
+parser|稿	parser|el3	parserel3
+logger|要	logger|ul4	loggerul4
+worker|買	worker|a93	workera93
+socket|改	socket|e93	sockete93
+buffer|已 || buffer|以	buffer|u3	bufferu3
+stream|已 || stream|以	stream|u3	streamu3
+packet|要	packet|ul4	packetul4
+handler|目	handler|aj4	handleraj4
+manager|稿	manager|el3	managerel3
+monitor|要	monitor|ul4	monitorul4
+backup|買	backup|a93	backupa93
+restore|改	restore|e93	restoree93
+migrate|已 || migrate|以	migrate|u3	migrateu3

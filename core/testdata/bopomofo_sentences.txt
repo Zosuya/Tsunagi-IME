@@ -1,0 +1,72 @@
+# 注音長句（第十二組）：50 句純中文，測分詞
+#
+# 【為什麼要這一組】前面十一組的注音段有 93.3% 只有 1～2 個音節——
+# 混合語言輸入天然會把中文切碎，而 1～2 個音節根本沒有分詞歧異。
+# 選詞層的分詞演算法（貪婪最長匹配 vs 全域最佳化）在那種長度上
+# 量不出差別。這組專門補這個盲點：每句 7～14 個音節連續不斷。
+#
+# 2026-09-01 加入，起因是研究 libchewing 的轉換引擎。
+#
+# 【句子怎麼來的】人工寫的日常與工作句，**不從詞庫抽樣**。
+#
+# 【按鍵怎麼來的】程式產生。先人工斷詞（空白分隔），每個詞查
+# BPMFMappings 的詞層讀音；單字只接受「只有一種讀音」的，多音字
+# 一律要標註（例如「的」寫成 的(ㄉㄜ˙)）否則產生器直接報錯——不猜。
+# 50 句裡有 16 句因為多音字被擋下來過（要／有／會／多／看／信／
+# 太／好／把／難／說），標註後才產出。
+#
+# 產生器：scratchpad 的 gen_sent.py。產出後用 check_testdata 驗過。
+#
+# 格式：文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+#
+#   第二、三欄的空白是**真的空白**（注音的一聲），不是符號
+我今天早上去公司開會	ji3rup wu0 yl3g;4fm4ej/ n d9 cjo4	ji3rup wu0 yl3g;4fm4ej/ n d9 cjo4
+這個專案的進度有點落後	5k4ek75j0 042k7rup42j4u.32u03xji4c.4	5k4ek75j0 042k7rup42j4u.32u03xji4c.4
+明天下午要跟客戶討論需求	au/6wu0 vu84j3ul4ep dk4cj4wl3xjp4vm fu.6	au/6wu0 vu84j3ul4ep dk4cj4wl3xjp4vm fu.6
+請幫我確認這份資料有沒有問題	fu/31; ji3fm,4bp45k4zp4y xul4u.3ao6u.3jp4wu6	fu/31; ji3fm,4bp45k4zp4y xul4u.3ao6u.3jp4wu6
+系統更新之後效能明顯改善	vu4wj/3e/ vup 5 c.4vul4s/6au/6vu03e93g04	vu4wj/3e/ vup 5 c.4vul4s/6au/6vu03e93g04
+我們需要重新設計這個功能的介面	ji3ap6vm ul4tj/6vup gk4ru45k4ek7ej/ s/62k7ru,4au04	ji3ap6vm ul4tj/6vup gk4ru45k4ek7ej/ s/62k7ru,4au04
+昨天的會議記錄已經寄給大家	yji6wu0 2k7cjo4u4ru4xj4u3ru/ ru4eo3284ru8 	yji6wu0 2k7cjo4u4ru4xj4u3ru/ ru4eo3284ru8 
+如果有任何問題隨時跟我聯絡	bj6eji3u.3bp4ck6jp4wu6njo6g6ep ji3xu06xji4	bj6eji3u.3bp4ck6jp4wu6njo6g6ep ji3xu06xji4
+這次的版本修正了幾個錯誤	5k4h42k71031p3vu. 5/4xk7ru3ek7hji4j4	5k4h42k71031p3vu. 5/4xk7ru3ek7hji4j4
+測試環境跟正式環境的設定不一樣	hk4g4cj06ru/4ep 5/4g4cj06ru/42k7gk42u/41j4u u;4	hk4g4cj06ru/4ep 5/4g4cj06ru/42k7gk42u/41j4u u;4
+我覺得這個方案比較可行	ji3rm,62k65k4ek7z; 041u3rul3dk3vu/6	ji3rm,62k65k4ek7z; 041u3rul3dk3vu/6
+今年的目標是提升產品品質	rup su062k7aj41ul g4wu6g/ t03qup3qup356	rup su062k7aj41ul g4wu6g/ t03qup3qup356
+他已經完成所有的工作	w8 u3ru/ j06t/6nji3u.32k7ej/ yji4	w8 u3ru/ j06t/6nji3u.32k7ej/ yji4
+公司決定增加研發人員	ej/ n rm,62u/4y/ ru8 u06z8 bp6m06	ej/ n rm,62u/4y/ ru8 u06z8 bp6m06
+這份報告需要主管簽名	5k4zp41l4el4vm ul45j3ej03fu0 au/6	5k4zp41l4el4vm ul45j3ej03fu0 au/6
+我明天早上會準時到	ji3au/6wu0 yl3g;4cjo45jp3g62l4	ji3au/6wu0 yl3g;4cjo45jp3g62l4
+天氣越來越冷記得多穿衣服	wu0 fu4m,4x96m,4x/3ru42k62ji tj0 u zj6	wu0 fu4m,4x96m,4x/3ru42k62ji tj0 u zj6
+週末我們一起去看電影	5. ai4ji3ap6u fu3fm4d042u04u/3	5. ai4ji3ap6u fu3fm4d042u04u/3
+這家餐廳的東西很好吃	5k4ru8 h0 wu/ 2k72j/ vu cp3cl3t 	5k4ru8 h0 wu/ 2k72j/ vu cp3cl3t 
+你有沒有收到我寄的信	su3u.3ao6u.3g. 2l4ji3ru42k7vup4	su3u.3ao6u.3g. 2l4ji3ru42k7vup4
+下班之後我想去運動	vu8410 5 c.4ji3vu;3fm4mp42j/4	vu8410 5 c.4ji3vu;3fm4mp42j/4
+最近工作太忙沒有時間休息	yjo4rup4ej/ yji4w94a;6ao6u.3g6ru0 vu. vu6	yjo4rup4ej/ yji4w94a;6ao6u.3g6ru0 vu. vu6
+希望明天不會下雨	vu j;4au/6wu0 1j4cjo4vu84m3	vu j;4au/6wu0 1j4cjo4vu84m3
+我已經買好車票了	ji3u3ru/ a93cl3tk qul4xk7	ji3u3ru/ a93cl3tk qul4xk7
+學校附近新開了一家書店	vm,6vul4zj4rup4vup d9 xk7u ru8 gj 2u04	vm,6vul4zj4rup4vup d9 xk7u ru8 gj 2u04
+媽媽今天煮了很多好吃的菜	a8 a8 rup wu0 5j3xk7cp32ji cl3t 2k7h94	a8 a8 rup wu0 5j3xk7cp32ji cl3t 2k7h94
+這本書的內容非常有趣	5k41p3gj 2k7so4bj/6zo t;6u.3fm4	5k41p3gj 2k7so4bj/6zo t;6u.3fm4
+他們正在討論明年的計畫	w8 ap65/4y94wl3xjp4au/6su062k7ru4cj84	w8 ap65/4y94wl3xjp4au/6su062k7ru4cj84
+請把門關好	fu/3183ap6ej0 cl3	fu/3183ap6ej0 cl3
+我需要一台新的電腦	ji3vm ul4u w96vup 2k72u04sl3	ji3vm ul4u w96vup 2k72u04sl3
+資料庫的查詢速度變慢了	y xul4dj42k7t86vmp6nj42j41u04a04xk7	y xul4dj42k7t86vmp6nj42j41u04a04xk7
+這個錯誤應該是設定造成的	5k4ek7hji4j4u/ e9 g4gk42u/4yl4t/62k7	5k4ek7hji4j4u/ e9 g4gk42u/4yl4t/62k7
+我會在明天之前完成這個任務	ji3cjo4y94au/6wu0 5 fu06j06t/65k4ek7bp4j4	ji3cjo4y94au/6wu0 5 fu06j06t/65k4ek7bp4j4
+使用者反應這個功能很難使用	g3m/45k3z03u/45k4ek7ej/ s/6cp3s06g3m/4	g3m/45k3z03u/45k4ek7ej/ s/6cp3s06g3m/4
+我們應該先確認需求再開始開發	ji3ap6u/ e9 vu0 fm,4bp4vm fu.6y94d9 g3d9 z8 	ji3ap6u/ e9 vu0 fm,4bp4vm fu.6y94d9 g3d9 z8 
+這段程式的邏輯有點複雜	5k42j04t/6g42k7xji6ru6u.32u03zj4y86	5k42j04t/6g42k7xji6ru6u.32u03zj4y86
+他的想法跟我完全不同	w8 2k7vu;3z83ep ji3j06fm061j4wj/6	w8 2k7vu;3z83ep ji3j06fm061j4wj/6
+今天的天氣很適合出去走走	rup wu0 2k7wu0 fu4cp3g4ck6tj fm4y.3y.3	rup wu0 2k7wu0 fu4cp3g4ck6tj fm4y.3y.3
+記得明天帶傘出門	ru42k6au/6wu0 294n03tj ap6	ru42k6au/6wu0 294n03tj ap6
+這個問題我想了很久	5k4ek7jp4wu6ji3vu;3xk7cp3ru.3	5k4ek7jp4wu6ji3vu;3xk7cp3ru.3
+公司提供很好的福利	ej/ n wu6ej/ cp3cl32k7zj6xu4	ej/ n wu6ej/ cp3cl32k7zj6xu4
+新的版本下週就會上線	vup 2k71031p3vu845. ru.4cjo4g;4vu04	vup 2k71031p3vu845. ru.4cjo4g;4vu04
+我已經跟他說過這件事	ji3u3ru/ ep w8 gji eji45k4ru04g4	ji3u3ru/ ep w8 gji eji45k4ru04g4
+這個網站的設計很漂亮	5k4ek7j;35042k7gk4ru4cp3qul4xu;4	5k4ek7j;35042k7gk4ru4cp3qul4xu;4
+請告訴我你的想法	fu/3el4nj4ji3su32k7vu;3z83	fu/3el4nj4ji3su32k7vu;3z83
+明天的會議改到下午三點	au/6wu0 2k7cjo4u4e932l4vu84j3n0 2u03	au/6wu0 2k7cjo4u4e932l4vu84j3n0 2u03
+我覺得這樣做比較安全	ji3rm,62k65k4u;4yji41u3rul30 fm06	ji3rm,62k65k4u;4yji41u3rul30 fm06
+這些資料需要重新整理	5k4vu, y xul4vm ul4tj/6vup 5/3xu3	5k4vu, y xul4vm ul4tj/6vup 5/3xu3
+他是我們部門最資深的工程師	w8 g4ji3ap61j4ap6yjo4y gp 2k7ej/ t/6g 	w8 g4ji3ap61j4ap6yjo4y gp 2k7ej/ t/6g 
+謝謝你的幫忙	vu,4vu,4su32k71; a;6	vu,4vu,4su32k71; a;6

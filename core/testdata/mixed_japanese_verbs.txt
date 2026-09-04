@@ -1,0 +1,53 @@
+# 混合語言測資（第五組）：日文動詞活用
+#
+# 使用者提供的十個中英日混雜句，取其中的日文段落。刻意挑難的文法：
+# 使役受身、受身進行形、てもらう、なければ+受身+てしまう、
+# わけにはいかない——但全都是日常會用到的範圍，不是文語或方言。
+#
+# 這組的職責在新架構下改變了。
+#
+# 舊架構有個 conjugation.rs 專門展開活用形，這組是為了驗證它而做的
+# ——mozc 詞庫只收動詞原形（買う），變化形（買って、買われた）查不到。
+# 新架構（phase12-rework）沒有那個模組，也不需要：切點引擎的職責是
+# **切語言**，不是切詞。同一個語言內部不切，詞與詞的邊界是選詞模組的事。
+#
+# 所以這 16 句的期望是「整句一段日文」（第二欄沒有任何 `|`），
+# 跟排序的「相鄰同語言不切」規則一致。它們現在驗的是：
+# 長串日文不會被英文或注音搶走。
+#
+# 格式：文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+#
+#   第一欄 文字期望：各段用 `|` 分隔，`_` = 分隔符空白自成一段
+#   第二欄 按鍵期望：**同樣的切法標在按鍵層級**，`|` 就是切點位置
+#   第三欄 按鍵序列：使用者實際按的鍵
+#
+#   第二欄是計分基準——它不需要任何推導，逐字元比對即可。
+#   按鍵序列裡的空白可能是「一聲」也可能是「分隔符」，正是要測的東西：
+#     `check| |u vu84`   第一個空白是分隔符（前後都切），第二個是「一」的一聲
+
+# 句1：昨晚被老闆叫去加班（使役受身）
+上司に残業させられた	joushinizanngyousaserareta	joushinizanngyousaserareta
+# 句2：如果早知道會塞車，早點出發就好了（た形+ておけば良かった）
+もっと早く出発しておけば	mottohayakushuppatsushiteokeba	mottohayakushuppatsushiteokeba
+# 句3：報告反覆被修改（受身+てもらう）
+何度も直されても	nanndomonaosaretemo	nanndomonaosaretemo
+なかなか満足してもらえない	nakanakamannzokushitemoraenai	nakanakamannzokushitemoraenai
+# 句4：結果等了一小時（使役受身+羽目になる）
+一時間も待たされる	ichijikannmomatasareru	ichijikannmomatasareru
+羽目になった	hameninatta	hameninatta
+# 句5：請大家吃飯（てあげる）
+みんなに奢ってあげる	minnnaniogotteageru	minnnaniogotteageru
+# 句6：每次都被推工作（受身進行形）
+仕事を押し付けられている	shigotowooshitsukerareteiru	shigotowooshitsukerareteiru
+# 句7：週五前要交（なければ+受身+てしまう）
+金曜日までに提出しなければ	kinnyoubimadeniteishutsushinakereba	kinnyoubimadeniteishutsushinakereba
+単位を落とされてしまう	tanniwootosareteshimau	tanniwootosareteshimau
+# 句8：不能放棄（わけにはいかない）
+諦めるわけにはいかない	akirameruwakenihaikanai	akirameruwakenihaikanai
+頑張り続けるしかない	gannbaritsuzukerushikanai	gannbaritsuzukerushikanai
+# 句9：如果當初聽了建議（ていれば+はず）
+アドバイスを聞いていれば	adobaisuwokiiteireba	adobaisuwokiiteireba
+こんなことにはならなかった	konnnakotonihanaranakatta	konnnakotonihanaranakatta
+# 句10：被派去出差（使役受身）
+会社に出張させられて	kaishanishucchousaserarete	kaishanishucchousaserarete
+あまり乗り気じゃない	amarinorikijanai	amarinorikijanai

@@ -1,0 +1,38 @@
+#!/bin/sh
+#
+# 把 AI 工具塞進 commit 訊息的協作者/工作階段標記剝掉。
+#
+# 為什麼需要它：CLAUDE.md 的 Git 慣例寫明「Commit 訊息中不要加入任何
+# 協作者/共同作者標記」，但助理端的系統規範會要求加上 Co-Authored-By
+# 與 Claude-Session。規範衝突時本機這一關說了算——訊息長什麼樣是這個
+# 專案的事，不是工具的事。
+#
+# 為什麼是剝掉而不是擋下來：擋下來會讓 commit 失敗，得手動重打一次
+# 訊息；剝掉是無痛的，而且剝了會在 stderr 講一聲，不會偷偷改。
+#
+# 要多擋幾種標記，在下面的 awk 加一條 /^.../ { drop=1; next } 就好。
+
+msg="$1"
+tmp="$msg.striphook"
+
+awk '
+    # 這兩種是目前會被塞進來的
+    /^[Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:/ { dropped = 1; next }
+    /^[Cc][Ll][Aa][Uu][Dd][Ee]-[Ss][Ee][Ss][Ss][Ii][Oo][Nn]:/ { dropped = 1; next }
+
+    # 剝掉之後訊息尾巴會留一串空行——先扣住，遇到下一個非空行才吐出去，
+    # 這樣結尾的空行自然就不見了（訊息中間的空行照樣保留）
+    /^[ \t]*$/ { held = held $0 "\n"; next }
+    { printf "%s", held; held = ""; print }
+
+    END { if (dropped) print "STRIPPED" > "/dev/stderr" }
+' "$msg" > "$tmp" 2> "$tmp.flag"
+
+if [ -s "$tmp.flag" ]; then
+    mv "$tmp" "$msg"
+    echo "commit-msg hook：已剝掉 Co-Authored-By / Claude-Session 標記（見 CLAUDE.md 的 Git 慣例）" >&2
+else
+    rm -f "$tmp"
+fi
+rm -f "$tmp.flag"
+exit 0

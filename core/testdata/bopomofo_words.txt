@@ -1,0 +1,125 @@
+# 注音常用詞（第十一組）：100 個日常與工作用詞
+#
+# 這一組**只有中文**，測的是選詞層而不是切點——「打得出這個詞嗎」。
+# 前十組都是混合語言，注音段多半只有一兩個字，量不到同音詞排序。
+#
+# 2026-09-01 加入。
+#
+# 【詞怎麼來的】人工寫的，依領域分佈：時間、招呼、工作、技術、
+# 生活、食物、交通、情緒、虛詞、名物。**不從詞庫抽樣**——抽樣只會
+# 抽到詞庫已經收好的東西，測不出真實使用的樣子（同 mixed_otaku 的
+# 說明）。刻意放了同音陷阱：一般／一班、測試／策士、東京／東經、
+# 休息／修習、這個、可以。
+#
+# 【按鍵怎麼來的】**程式產生，不手敲**——從 BPMFMappings.txt 的
+# 「詞層讀音」推導（`data/` 的詞庫檔＋ keymap.rs 的鍵位表）。
+# 逐字查會踩多音字：「下午」的「下」在別的詞裡是 ㄒㄧㄚˋ 也可能是
+# ㄒㄧㄚˊ，只有詞層讀音才知道這個詞裡讀哪個。之前的 100 組測資
+# 就是因為手敲注音而毀掉，不重蹈覆轍。
+#
+# 產生器：scratchpad 的 gen_words.py（詞 -> 詞層讀音 -> 鍵位）。
+# 產出後用 check_testdata 驗過，100 列全部文字與按鍵對得上。
+#
+# 格式：文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+#
+#   第二、三欄的空白是**真的空白**（注音的一聲），不是符號
+今天	rup wu0 	rup wu0 
+明天	au/6wu0 	au/6wu0 
+昨天	yji6wu0 	yji6wu0 
+下午	vu84j3	vu84j3
+週末	5. ai4	5. ai4
+現在	vu04y94	vu04y94
+以後	u3c.4	u3c.4
+剛才	e; h96	e; h96
+早安	yl30 	yl30 
+晚安	j030 	j030 
+謝謝	vu,4vu,4	vu,4vu,4
+對不起	2jo41j4fu3	2jo41j4fu3
+再見	y94ru04	y94ru04
+會議	cjo4u4	cjo4u4
+報告	1l4el4	1l4el4
+專案	5j0 04	5j0 04
+需求	vm fu.6	vm fu.6
+討論	wl3xjp4	wl3xjp4
+確認	fm,4bp4	fm,4bp4
+完成	j06t/6	j06t/6
+檔案	2;304	2;304
+系統	vu4wj/3	vu4wj/3
+問題	jp4wu6	jp4wu6
+解決	ru,3rm,6	ru,3rm,6
+主管	5j3ej03	5j3ej03
+同事	wj/6g4	wj/6g4
+加班	ru8 10 	ru8 10 
+出差	tj t9 	tj t9 
+上班	g;410 	g;410 
+下班	vu8410 	vu8410 
+測試	hk4g4	hk4g4
+開發	d9 z8 	d9 z8 
+網路	j;3xj4	j;3xj4
+伺服器	n4zj6fu4	n4zj6fu4
+版本	1031p3	1031p3
+設定	gk42u/4	gk42u/4
+更新	e/ vup 	e/ vup 
+錯誤	hji4j4	hji4j4
+功能	ej/ s/6	ej/ s/6
+介面	ru,4au04	ru,4au04
+密碼	au4a83	au4a83
+帳號	5;4cl4	5;4cl4
+登入	2/ bj4	2/ bj4
+搜尋	n. vmp6	n. vmp6
+吃飯	t z04	t z04
+睡覺	gjo4rul4	gjo4rul4
+運動	mp42j/4	mp42j/4
+洗澡	vu3yl3	vu3yl3
+打掃	283nl3	283nl3
+休息	vu. vu6	vu. vu6
+出門	tj ap6	tj ap6
+回家	cjo6ru8 	cjo6ru8 
+習慣	vu6ej04	vu6ej04
+早餐	yl3h0 	yl3h0 
+午餐	j3h0 	j3h0 
+晚餐	j03h0 	j03h0 
+便當	1u042; 	1u042; 
+水果	gjo3eji3	gjo3eji3
+蛋糕	204el 	204el 
+麵包	au041l 	au041l 
+捷運	ru,6mp4	ru,6mp4
+公車	ej/ tk 	ej/ tk 
+火車	cji3tk 	cji3tk 
+開車	d9 tk 	d9 tk 
+機場	ru t;3	ru t;3
+車站	tk 504	tk 504
+旅行	xm3vu/6	xm3vu/6
+開心	d9 vup 	d9 vup 
+生氣	g/ fu4	g/ fu4
+緊張	rup35; 	rup35; 
+放心	z;4vup 	z;4vup 
+辛苦	vup dj3	vup dj3
+希望	vu j;4	vu j;4
+擔心	20 vup 	20 vup 
+一般	u 10 	u 10 
+一起	u fu3	u fu3
+因為	up jo4	up jo4
+所以	nji3u3	nji3u3
+但是	204g4	204g4
+應該	u/ e9 	u/ e9 
+還是	c96g4	c96g4
+而且	-6fu,3	-6fu,3
+如果	bj6eji3	bj6eji3
+這個	5k4ek7	5k4ek7
+什麼	gk6ai7	gk6ai7
+怎麼	yk3ai7	yk3ai7
+電話	2u04cj84	2u04cj84
+手機	g.3ru 	g.3ru 
+網站	j;3504	j;3504
+照片	5l4qu04	5l4qu04
+影片	u/3qu04	u/3qu04
+音樂	up m,4	up m,4
+天氣	wu0 fu4	wu0 fu4
+環境	cj06ru/4	cj06ru/4
+朋友	q/6u.3	q/6u.3
+家人	ru8 bp6	ru8 bp6
+學生	vm,6g/ 	vm,6g/ 
+醫院	u m04	u m04
+銀行	up6c;6	up6c;6
+超市	tl g4	tl g4

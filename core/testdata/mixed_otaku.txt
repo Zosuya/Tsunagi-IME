@@ -1,0 +1,56 @@
+# 混合語言測資（第二組）：ACG／日本旅遊話題，中日英三語混合
+#
+# 【重要】同第一組，這份資料是人工寫的，**不從詞庫抽樣**。
+#
+# 為什麼要有這一組：第一組全是「中文＋英文」，日文引擎完全沒被測到。
+# 但本專案的核心賣點正是三語言同時處理，只測兩語言等於漏掉三分之一。
+#
+# 這一組的日文是**羅馬字輸入**（anime → アニメ），不是日文漢字。
+# 引擎要能在同一句裡分辨「這段是日文羅馬字」與「這段是英文」——
+# 兩者都是純字母、沒有聲調鍵，是最難分的一組。
+#
+# 注音按鍵同樣用 `mkkeys` 產生並驗證過。
+#
+# 格式：文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+#
+#   第一欄 文字期望：各段用 `|` 分隔，`_` = 分隔符空白自成一段
+#   第二欄 按鍵期望：**同樣的切法標在按鍵層級**，`|` 就是切點位置
+#   第三欄 按鍵序列：使用者實際按的鍵
+#
+#   第二欄是計分基準——它不需要任何推導，逐字元比對即可。
+#   按鍵序列裡的空白可能是「一聲」也可能是「分隔符」，正是要測的東西：
+#     `check| |u vu84`   第一個空白是分隔符（前後都切），第二個是「一」的一聲
+
+# ---- 中文 + 日文羅馬字 ----
+這部|_|anime|_|好看 || 這部|_|アニメ|_|好看	5k41j4| |anime| |cl3d04	5k41j4 anime cl3d04
+最新|_|一集	yjo4vup | |u4ru6	yjo4vup  u4ru6
+日本|_|旅行	b41p3| |xm3vu/6	b41p3 xm3vu/6
+東京|_|好玩	2j/ ru/ | |cl3j06	2j/ ru/  cl3j06
+推薦|_|這個|_|遊戲	wjo ru04| |5k4ek7| |u.6vu4	wjo ru04 5k4ek7 u.6vu4
+聲優|_|很好	g/ u. | |cp3cl3	g/ u.  cp3cl3
+主題|_|歌曲|_|好聽	5j3wu6| |ek fm3| |cl3wu/ 	5j3wu6 ek fm3 cl3wu/ 
+原作|_|小說	m06yji4| |vul3gji 	m06yji4 vul3gji 
+改編動畫	e931u0 2j/4cj84	e931u0 2j/4cj84
+
+# ---- 日文羅馬字（純日文段，不該被誤判成英文）----
+sushi || 寿司	sushi	sushi
+ramen	ramen	ramen
+sakura || 桜	sakura	sakura
+tsunami || 津波	tsunami	tsunami
+karaoke || カラオケ	karaoke	karaoke
+konnichiwa	konnichiwa	konnichiwa
+arigatou || ありがとう	arigatou	arigatou
+
+# ---- 英文（不該被誤判成日文）----
+computer	computer	computer
+password	password	password
+download	download	download
+
+# ---- 三語混一句 ----
+~明天|_|去|_|東京|_|看|_|anime || ~明天|_|去|_|東京|_|看|_|アニメ	au/6wu0 | |fm4| |2j/ ru/ | |d04| |anime	au/6wu0  fm4 2j/ ru/  d04 anime
+~這個|_|game|_|的|_|音樂	5k4ek7| |game| |2k7| |up m,4	5k4ek7 game 2k7 up m,4
+~日本|_|的|_|ramen|_|好吃	b41p3| |2k7| |ramen| |cl3t 	b41p3 2k7 ramen cl3t 
+
+# ---- 純注音（不該被誤切）----
+動畫漫畫遊戲	2j/4cj84a04cj84u.6vu4	2j/4cj84a04cj84u.6vu4
+~日本東京旅行	b41p32j/ ru/ xm3vu/6	b41p32j/ ru/ xm3vu/6

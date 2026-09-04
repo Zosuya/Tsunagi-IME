@@ -1,0 +1,12 @@
+// 圖示資源。
+//
+// **ID 1 必須是輸入法本身的圖示**——registration.rs 的
+// RegisterProfile 傳的索引是 0，指的就是第一個 ICON 資源。
+1 ICON "ime.ico"
+
+// 工作列狀態指示器用的模式圖示（GUID_LBI_INPUTMODE 那格）。
+// Win11 的輸入指示器**只畫圖不畫字**，所以每個模式各要一張圖。
+10 ICON "mode_auto.ico"
+11 ICON "mode_bopomofo.ico"
+12 ICON "mode_romaji.ico"
+13 ICON "mode_english.ico"

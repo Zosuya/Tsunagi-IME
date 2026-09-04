@@ -1,0 +1,52 @@
+[package]
+name = "ime-tip-windows"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ime_tip_windows"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# 故意 panic 的測試開關，**發布版絕不能開**。見 guard::maybe_panic。
+#
+# 為什麼不是 debug build：註冊表寫的是 target/release 的絕對路徑，
+# debug 版產在別的地方，要測得提權重新註冊——那樣沒人會用。
+panic-test = []
+
+[dependencies]
+ime-core = { path = "../../core" }
+windows-core = "0.62"
+# D2D 的幾何型別（Vector2、Matrix3x2）在這個 crate，不在 `windows` 裡。
+# 它本來就是 `windows` 0.62 的相依（已在 Cargo.lock），這裡只是顯式
+# 列出來讓程式碼引用得到。見開發文件 §4.10。
+windows-numerics = "0.3.1"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_UI_HiDpi",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_DirectWrite",
+    "Win32_System_Com",
+    "Win32_System_Variant",
+    "Win32_System_Ole",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_UI_TextServices",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Threading",
+    "Win32_Graphics_Gdi",
+    # 圖片背景要解碼 PNG/JPG。WIC 是 Windows 內建的，不必第三方套件
+    "Win32_Graphics_Imaging",
+    "Win32_Graphics_Imaging_D2D",
+    "Win32_Security",
+]

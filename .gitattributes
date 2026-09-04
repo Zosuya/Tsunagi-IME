@@ -1,0 +1,36 @@
+# 換行符號規則。
+#
+# # 為什麼要 text=auto
+#
+# git 內部原本混著 CRLF 與 LF，於是換一次寫檔工具就產生「整檔重寫」的
+# 假 diff——`d280694` 那次實際只加了 100 行，diff 卻顯示 11526 行變動，
+# **真正的改動被蓋掉了**。review 時那種 diff 很危險。
+#
+# `text=auto` 讓 git **內部一律存 LF**，checkout 時依各人的 core.autocrlf
+# 決定工作區的形式。Windows 上照樣是 CRLF，編輯器無感，但 diff 乾淨。
+#
+# > 這條原本被刻意排除，理由是「會重新正規化所有檔案、生出巨大的假 diff」。
+# > 2026-09-03 加上去之前先實測了 `git add --renormalize .`——**只影響
+# > .gitattributes 自己**，因為 git 內部此時已經全是 LF 了。當初那個顧慮
+# > 是對的，只是前提已經不成立。
+
+* text=auto
+
+# 二進位檔不要被當成文字——被換行轉換會直接損毀
+*.png    binary
+*.jpg    binary
+*.ico    binary
+*.bin    binary
+*.af     binary
+*.bundle binary
+*.zip    binary
+*.exe    binary
+*.dll    binary
+*.pdb    binary
+*.ttf    binary
+*.otf    binary
+
+# hook 是 shell script，在 Windows 上也是交給 Git for Windows 附的 sh 執行。
+# 換行符號若被轉成 CRLF，shebang 那行會變成 `#!/bin/sh\r`，sh 找不到直譯器
+# 而失敗。這裡釘死 LF——**放在最後面**，gitattributes 是後面的規則覆蓋前面的。
+.githooks/** text eol=lf

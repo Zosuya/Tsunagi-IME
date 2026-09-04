@@ -1,0 +1,60 @@
+# 混合語言測資（第三組）：保留驗證集（hold-out set）
+#
+# 【這一組的用途跟前兩組不同】
+#
+# 前兩組是「開發集」——我看著它們的失敗案例一路調規則，所以它們
+# 最後 100% 是必然的，**那個數字不能拿來證明規則有效**（等於拿考題
+# 當練習題，就是先前評分標準犯過的循環論證）。
+#
+# 這一組是**規則全部調完之後才寫的**，寫的時候不看引擎輸出，只憑
+# 「真實使用者會這樣打」來造句。它的分數才反映規則對沒見過的輸入
+# 有沒有效。
+#
+# 刻意包含前兩組沒有的情境：
+#   - 英文夾在句子中間（不是開頭或結尾）
+#   - 連續兩個英文詞
+#   - 大寫英文
+#   - 含數字的段落
+#
+# 注音按鍵一樣用 `mkkeys` 產生並驗證過。
+
+# ---- 英文在句子中間 ----
+資料|_|send|_|你	y xul4| |send| |su3	y xul4 send su3
+明天記得|bring|_|傘	au/6wu0 ru42k6|bring| |n03	au/6wu0 ru42k6bring n03
+影片|see|_|沒有	u/3qu04|see| |ao6u.3	u/3qu04see ao6u.3
+帳號|_|forget|密碼	5;4cl4| |forget|au4a83	5;4cl4 forgetau4a83
+
+# ---- 連續兩個英文詞 ----
+先|_|copy|_|paste	vu0 | |copy| |paste	vu0  copy paste
+用|_|git|_|push	m/4| |git| |push	m/4 git push
+開|_|new|_|tab	d9 | |new| |tab	d9  new tab
+
+# ---- 大寫英文 ----
+用|API|串接	m/4|API|tj04ru, 	m/4APItj04ru, 
+看|README	d04|README	d04README
+
+# ---- 含數字 ----
+# 原本有「下午 3 點」「第 3 版」，但這兩筆**測資本身是錯的**：
+下午|3|點 vu84j332u03
+第3|_|版 2u43 103
+# ---- 英文緊接注音----
+ok|走走	ok|y.3y.3	oky.3y.3
+no|問題	no|jp4wu6	nojp4wu6
+go|出去	go|tj fm4	gotj fm4
+
+# ---- 純英文（不該被切）----
+notebook	notebook	notebook
+javascript	javascript	javascript
+background	background	background
+performance	performance	performance
+
+# ---- 純注音（不該被切）----
+網路有點慢	j;3xj4u.32u03a04	j;3xj4u.32u03a04
+手機沒電了	g.3ru ao62u04xk7	g.3ru ao62u04xk7
+電腦當機了	2u04sl32;4ru xk7	2u04sl32;4ru xk7
+~咖啡好喝	d8 zo cl3ck 	d8 zo cl3ck 
+
+# ---- 純日文羅馬字（不該被切）----
+oyasumi || お休み	oyasumi	oyasumi
+itadakimasu || いただきます	itadakimasu	itadakimasu
+omoshiroi || 面白い	omoshiroi	omoshiroi

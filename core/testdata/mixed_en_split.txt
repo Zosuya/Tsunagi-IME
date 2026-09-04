@@ -1,0 +1,69 @@
+# 混合語言測資（第八組）：英文詞被切成兩半
+#
+# 這組測的是 `fewer_split_word` 針對的模式——英文詞的前綴剛好是
+# 合法日文，於是整個詞被攔腰切開：
+#
+#   file ＋ d9（開）  →  日:fi | 英:led | 注:9
+#                        `fi` 是ふぃ、`led` 是英文詞，兩段各自都說得通，
+#                        但合起來 `filed` 才是真正的那個詞
+#
+# 這是「英文段偷注音的頭」（fewer_stolen）被罰之後，排序會改走的
+# 迴避路線——罰了一種錯法，它就換另一種。所以兩條規則要一起測。
+#
+# 每一句都是「一個英文詞 ＋ 一個中文詞」，選詞標準是英文詞的前兩個
+# 字母構成合法日文。十個中文詞輪流配，每個各 5 句。
+#
+# 格式：文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+#
+#   第二、三欄的空白是**真的空白**（注音的一聲），不是符號
+
+test|開	test|d9 	testd9 
+report|你	report|su3	reportsu3
+server|好	server|cl3	servercl3
+output|早	output|yl3	outputyl3
+format|去	format|fm4	formatfm4
+result|上	result|g;4	resultg;4
+delete|用	delete|m/4	deletem/4
+select|成	select|t/6	selectt/6
+search|天	search|wu0 	searchwu0 
+record|認	record|bp4	recordbp4
+file|開	file|d9 	filed9 
+data|你	data|su3	datasu3
+login|好	login|cl3	logincl3
+logout|早	logout|yl3	logoutyl3
+submit|去	submit|fm4	submitfm4
+filter|上	filter|g;4	filterg;4
+target|用	target|m/4	targetm/4
+source|成	source|t/6	sourcet/6
+merge|天	merge|wu0 	mergewu0 
+deploy|認	deploy|bp4	deploybp4
+review|開	review|d9 	reviewd9 
+button|你	button|su3	buttonsu3
+header|好	header|cl3	headercl3
+footer|早	footer|yl3	footeryl3
+layout|去	layout|fm4	layoutfm4
+module|上	module|g;4	moduleg;4
+number|用	number|m/4	numberm/4
+value|成	value|t/6	valuet/6
+table|天	table|wu0 	tablewu0 
+field|認	field|bp4	fieldbp4
+token|開	token|d9 	tokend9 
+route|你	route|su3	routesu3
+render|好	render|cl3	rendercl3
+widget|早	widget|yl3	widgetyl3
+parser|去	parser|fm4	parserfm4
+logger|上	logger|g;4	loggerg;4
+worker|用	worker|m/4	workerm/4
+socket|成	socket|t/6	sockett/6
+buffer|天	buffer|wu0 	bufferwu0 
+packet|認	packet|bp4	packetbp4
+handler|開	handler|d9 	handlerd9 
+manager|你	manager|su3	managersu3
+service|好	service|cl3	servicecl3
+monitor|早	monitor|yl3	monitoryl3
+backup|去	backup|fm4	backupfm4
+restore|上	restore|g;4	restoreg;4
+migrate|用	migrate|m/4	migratem/4
+request|成	request|t/6	requestt/6
+respond|天	respond|wu0 	respondwu0 
+message|認	message|bp4	messagebp4

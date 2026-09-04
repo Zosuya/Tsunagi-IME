@@ -1,0 +1,60 @@
+# Rust
+target/
+# Cargo.lock 刻意進版控：本專案產出 DLL（等同執行檔），依 Rust 慣例應鎖定版本。
+# 尤其 windows crate 的版本跟 `#[implement]` 巨集行為相關（見開發文件.md §3.3），
+# 兩台電腦裝到不同版本會很難除錯。
+
+# Build outputs
+*.dll
+*.pdb
+*.exe
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+*.swp
+
+# 詞庫原始檔（約 119MB，不進版控，用 data/download.ps1 下載）
+#
+# 用 `目錄/*` 而非 `目錄/`：後者會讓 Git 直接跳過整個目錄、不再往裡
+# 面看，底下的 `!` 例外規則就永遠不會生效。
+data/bopomofo/*
+data/japanese/
+data/english/
+
+# priority.txt 例外：那是人工判斷寫出來的排序調整表，不是下載來的
+# 資料，重新下載不會產生它，必須進版控。
+!data/bopomofo/priority.txt
+
+# 除錯 log 的開關檔（見 platform/windows/src/debug_log.rs）
+data/debug.on
+
+# 圖片背景的測試圖（spike 用，不進版控）
+data/bg.png
+
+# 故意 panic 的觸發檔（見 platform/windows/src/guard.rs 的 maybe_panic）
+data/panic.on
+
+# 相容性測試的當次紀錄。清單本身（相容性測試清單.md）要進版控，
+# 逐次跑出來的結果不進——那是一次性的實測紀錄，會一直累積。
+#
+# **不要寫成 DOC/**：Windows 的 core.ignorecase 預設是 true，那會連
+# 設計稿的 doc/ 一起忽略掉（踩過，設計稿差點沒進版控）。
+test-runs/
+
+# Affinity 開檔時的鎖定檔
+*~lock~
+
+# 處理合併衝突時的暫存檔。**踩過**：git add -A 把它們一起 commit 進去了，
+# 而那個 json 含整份文件的內容。
+.merge_data.json
+.merge_state.py
+
+# 改寫 commit 歷史前的完整備份（git bundle）。
+#
+# **絕對不能進版控**——它含著改寫前的完整歷史，推上去等於前功盡棄。
+# 但要留在本機：發布時要再改寫一次，那時這份是唯一的退路。
+# 還原方式：git fetch <bundle> master:restored 然後 reset --hard restored
+doc/backup/

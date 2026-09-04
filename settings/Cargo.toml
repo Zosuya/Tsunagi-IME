@@ -1,0 +1,39 @@
+[package]
+name = "ime-settings"
+version = "0.1.0"
+edition = "2021"
+
+# 設定頁是**獨立執行檔**，不是 DLL 的一部分。
+#
+# 理由：
+# - 輸入法正在用的時候 DLL 會被鎖住，改設定頁不必碰它
+# - 設定頁崩潰只關掉自己的視窗，不會拖垮記事本或瀏覽器
+# - 介面程式碼不會永遠躺在 DLL 裡佔記憶體——只有開著時才存在
+# - 之後移植 macOS 時，設定的邏輯照用，只換 UI 層
+
+[dependencies]
+ime-core = { path = "../core" }
+eframe = "0.32"
+egui = "0.32"
+
+# 只為了叫系統的「選擇字型」對話框（ChooseFontW）。
+# 自己列幾百項字型再過濾符號字型太囉唆，系統對話框自帶清單與預覽。
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Controls_Dialogs",
+    # 「選擇資料夾」的系統對話框（IFileOpenDialog）。走系統 API 而不是
+    # 叫 PowerShell：現代樣式、立刻跳出來、不必開一個新行程
+    "Win32_UI_Shell",
+    # 預覽區要畫背景圖。**用跟實際繪製同一套 WIC 解碼**——換成別的
+    # 解碼器的話，同一張圖在兩邊可能長得不一樣（色彩管理、gamma）
+    "Win32_Graphics_Imaging",
+    "Win32_System_Com",
+]
+
+
+[[bin]]
+name = "ime_settings"
+path = "src/main.rs"

@@ -1,0 +1,57 @@
+# 混合語言測資（第一組）：日常對話混英文
+#
+# 【重要】這份資料是人工寫的，**不從詞庫抽樣**。
+#
+# 從詞庫抽詞來測詞庫等於拿考題當答案——抽到的必然都是引擎查得到的
+# 東西，測不出真實使用的樣子。真實輸入會有詞庫沒收的組合、專有名詞、
+# 口語說法，那些才是會出問題的地方。
+#
+# 注音按鍵序列**不是手敲的**：用 `mkkeys` 工具從 BPMFMappings 的注音
+# 自動產生，並當場驗證「這串按鍵打得出這個詞、而且排第一」。之前的
+# 100 組測資就是因為手敲注音而毀掉（多音字判讀錯誤），不重蹈覆轍。
+#
+# 格式：文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+#
+#   第一欄 文字期望：各段用 `|` 分隔，`_` = 分隔符空白自成一段
+#   第二欄 按鍵期望：**同樣的切法標在按鍵層級**，`|` 就是切點位置
+#   第三欄 按鍵序列：使用者實際按的鍵
+#
+#   第二欄是計分基準——它不需要任何推導，逐字元比對即可。
+#   按鍵序列裡的空白可能是「一聲」也可能是「分隔符」，正是要測的東西：
+#     `check| |u vu84`   第一個空白是分隔符（前後都切），第二個是「一」的一聲
+
+# ---- 空格分隔：英文在前 ----
+check|_|一下	check| |u vu84	check u vu84
+push|_|上去	push| |g;4fm4	push g;4fm4
+review|_|文件	review| |jp6ru04	review jp6ru04
+update|_|進度	update| |rup42j4	update rup42j4
+meeting|_|時間	meeting| |g6ru0 	meeting g6ru0 
+deadline|_|前|_|確認	deadline| |fu06| |fm,4bp4	deadline fu06 fm,4bp4
+
+# ---- 空格分隔：中文在前 ----
+記得|_|update	ru42k6| |update	ru42k6 update
+麻煩|_|review	a86z06| |review	a86z06 review
+需要|_|debug	vm ul4| |debug	vm ul4 debug
+已經|_|完成|_|test	u3ru/ | |j06t/6| |test	u3ru/  j06t/6 test
+明天|_|meeting|_|討論	au/6wu0 | |meeting| |wl3xjp4	au/6wu0  meeting wl3xjp4
+現在|_|可以|_|merge	vu04y94| |dk3u3| |merge	vu04y94 dk3u3 merge
+
+# ---- 中英中夾心 ----
+這個|_|bug|_|很好	5k4ek7| |bug| |cp3cl3	5k4ek7 bug cp3cl3
+先|_|check|_|沒問題	vu0 | |check| |ao6jp4wu6	vu0  check ao6jp4wu6
+把|_|feature|_|做完	183| |feature| |yji4j06	183 feature yji4j06
+
+# ---- 沒有空格：英文緊接注音 ----
+ok|沒問題	ok|ao6jp4wu6	okao6jp4wu6
+hi|今天	hi|rup wu0 	hirup wu0 
+bye|明天	bye|au/6wu0 	byeau/6wu0 
+
+# ---- 純注音（不該被誤切）----
+今天天氣不錯	rup wu0 wu0 fu41j6hji4	rup wu0 wu0 fu41j6hji4
+早上好好休息	yl3g;4cl3cl3vu. vu6	yl3g;4cl3cl3vu. vu6
+對不起麻煩你了	2jo41j4fu3a86z06su3xk7	2jo41j4fu3a86z06su3xk7
+
+# ---- 純英文（不該被誤切）----
+hello	hello	hello
+computer	computer	computer
+keyboard	keyboard	keyboard
