@@ -15,7 +15,7 @@
 
 #define AppName "通譯輸入法"
 #define Publisher "Zosuya"
-#define AppUrl "https://github.com/Zosuya/tsunagi-ime"
+#define AppUrl "https://github.com/Zosuya/Tsunagi-IME"
 
 ; 版本由建置腳本用 /DAppVersion=x.y.z 傳進來，沒傳就用這個
 #ifndef AppVersion
