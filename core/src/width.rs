@@ -143,16 +143,121 @@ fn to_cjk_punct(c: char, lang: Language) -> Option<char> {
 pub fn convert(c: char, mode: Width, prev_lang: Option<Language>) -> char {
     match mode {
         Width::Half => to_half(c),
-        Width::Full => to_full(c),
+        // **全形模式也要先查中日文標點表**。
+        //
+        // 原本直接 `to_full`，於是 `.` 變成 `．`（U+FF0E，全形的**英文**
+        // 句點）而不是句號 `。`——這一個檔案上面就寫著 `to_full` 給的是
+        // 英文標點，但 `Full` 那一支自己踩了進去。日文的 `,` 同理，
+        // 給了 `，` 而正確的是讀點 `、`。
+        //
+        // 語言不明時當中文——選了全形模式的人幾乎都在打中日文，而中日
+        // 兩者只有逗號不同，猜中文的期望損失最小。
+        Width::Full => {
+            let lang = cjk_lang(prev_lang).unwrap_or(Language::Bopomofo);
+            to_cjk_punct(to_half(c), lang).unwrap_or_else(|| to_full(c))
+        }
         // 空白是分隔不是標點，不跟著前文轉全形
         Width::Auto if c == ' ' || c == '\u{3000}' => ' ',
-        Width::Auto => match prev_lang {
-            // 中日文旁邊查中日文標點表，表外的維持半形
-            Some(lang @ (Language::Bopomofo | Language::Romaji)) => {
-                to_cjk_punct(to_half(c), lang).unwrap_or_else(|| to_half(c))
-            }
-            _ => to_half(c),
+        // 中日文旁邊查中日文標點表，表外的維持半形
+        Width::Auto => match cjk_lang(prev_lang) {
+            Some(lang) => to_cjk_punct(to_half(c), lang).unwrap_or_else(|| to_half(c)),
+            None => to_half(c),
         },
+    }
+}
+
+/// 這個標點有哪些**可以選的寫法**？第一個是預設，其餘依常用度排。
+///
+/// # 為什麼標點需要候選
+///
+/// `[` 在中日文裡有一整排對應：`「『【〔［《〈`。使用者想要哪一種
+/// 引擎猜不到，而**猜錯的代價是使用者得刪掉重打**——那正是選字要解決
+/// 的問題，只是以前沒把它用在標點上。
+///
+/// 選過兩次會被學習層記住（鍵是按鍵、值是文字，跟選字同一條路），
+/// 所以「記住你慣用的括號樣式」不必另外寫機制。
+///
+/// # 只給不用 Shift 的鍵
+///
+/// 使用者裁決（2026-09-04）：Shift 系列的符號是明確按出來的，意圖很
+/// 清楚（打 `!` 就是要驚嘆號），不需要再選。
+///
+/// # 一鍵兩用不是問題
+///
+/// `, . ; / -` 在大千配置上是ㄝㄡㄤㄥㄦ，但**那個歧義在切點階段就解決
+/// 完了**（`punct::is_punct` 會往後看聲調）。走到這裡代表引擎已經確定
+/// 它是標點，再給候選不會跟注音打架。
+///
+/// # 回傳空的代表「這個符號沒有選的必要」
+///
+/// `@`、`#`、`$` 那些中文排版沒有全形習慣，給候選只是干擾。
+pub fn variants(keys: &str, lang: Option<Language>) -> &'static [char] {
+    // 多字元的組合另外查（`...` → `…`）
+    if keys.chars().count() > 1 {
+        return combo_variants(keys);
+    }
+    let Some(c) = keys.chars().next() else {
+        return &[];
+    };
+    let ja = matches!(lang, Some(Language::Romaji));
+    match c {
+        '[' => &['「', '『', '【', '〔', '［', '《', '〈'],
+        ']' => &['」', '』', '】', '〕', '］', '》', '〉'],
+        '\'' => &['‘', '’', '『', '』'],
+        // 中日的第一個不同——逗號是讀點還是逗號，跟 `to_cjk_punct` 一致
+        ',' if ja => &['、', '，', '；'],
+        ',' => &['，', '、', '；'],
+        '.' => &['。', '…', '．', '‧'],
+        ';' => &['；', '：'],
+        // `？` 放進來，不按 Shift 也打得到問號
+        '/' => &['/', '／', '？', '・'],
+        '-' => &['-', '－', '—', '～', '‧'],
+        _ => &[],
+    }
+}
+
+/// 這個開括號配哪個收括號？不是成對的符號回 `None`。
+///
+/// # 為什麼要這張表
+///
+/// 使用者把 `[` 選成 `「` 之後，後面那個 `]` 還是 `]`——得再選一次，
+/// 而且**要記得自己剛才選了哪一種**。成對的東西本來就該一起變。
+///
+/// # 只做方括號
+///
+/// `'` 的開與收是同一個鍵，配不出來（`don't` 的撇號也走這裡）。
+/// 引號那類要記狀態才分得出開閉，那正是 `to_cjk_punct` 當初不收引號
+/// 的理由——這裡不重蹈覆轍。
+pub fn closing_for(open: char) -> Option<char> {
+    Some(match open {
+        '「' => '」',
+        '『' => '』',
+        '【' => '】',
+        '〔' => '〕',
+        '［' => '］',
+        '《' => '》',
+        '〈' => '〉',
+        '[' => ']',
+        _ => return None,
+    })
+}
+
+/// 多個標點連在一起時的寫法。`...` → `…` 是唯一一組。
+fn combo_variants(keys: &str) -> &'static [char] {
+    match keys {
+        // 中文的刪節號正式寫法是兩個六點省略號（`……`），但那要兩格；
+        // 這裡給一個，要兩個就打六個點
+        "..." => &['…', '⋯'],
+        "......" => &['…', '⋯'],
+        _ => &[],
+    }
+}
+
+/// 這個語言要用中日文標點嗎？是的話回傳它，英文回 `None`。
+fn cjk_lang(lang: Option<Language>) -> Option<Language> {
+    match lang {
+        Some(l @ (Language::Bopomofo | Language::Romaji)) => Some(l),
+        _ => None,
     }
 }
 
@@ -168,6 +273,33 @@ mod tests {
         assert_eq!(to_full('a'), 'ａ');
         assert_eq!(to_full('1'), '１');
         assert_eq!(to_full('@'), '＠');
+    }
+
+    /// **全形模式的句點是句號，不是全形英文句點**。
+    ///
+    /// `to_full('.')` 給的是 `．`（U+FF0E）——那是全形的**英文**句點。
+    /// 中日文要的是 `。`。修之前 `Full` 那一支直接走 `to_full`，
+    /// 所以全形模式下打句點會出 `．`。
+    #[test]
+    fn 全形模式要給中日文標點() {
+        use Language::{Bopomofo, English, Romaji};
+        let full = |c, lang| convert(c, Width::Full, lang);
+
+        assert_eq!(full('.', Some(Bopomofo)), '。', "中文句號");
+        assert_eq!(full('.', Some(Romaji)), '。', "日文句號");
+        // 語言不明時當中文——選全形的人幾乎都在打中日文
+        assert_eq!(full('.', None), '。');
+        assert_eq!(full('.', Some(English)), '。');
+
+        // 逗號是中日唯一不同的那個
+        assert_eq!(full(',', Some(Bopomofo)), '，', "中文逗號");
+        assert_eq!(full(',', Some(Romaji)), '、', "日文讀點");
+
+        // 表外的仍照 to_full 走——那才是「全部都要全形」的語意
+        assert_eq!(full('a', None), 'ａ');
+        assert_eq!(full('1', None), '１');
+        assert_eq!(full('@', None), '＠');
+        assert_eq!(full(' ', None), '\u{3000}');
     }
 
     #[test]

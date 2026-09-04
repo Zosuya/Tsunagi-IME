@@ -40,6 +40,18 @@ pub struct Slot {
     pub lang: Language,
     /// 這一格能不能選字？英文段原則上不能（日文詞典也收的除外）。
     pub selectable: bool,
+    /// 這一格是標點嗎？
+    ///
+    /// 標點格跟語言格的差別在**它不查詞庫**，但仍然可以有候選——
+    /// `[` 能選 `「『【〔`。`lang` 分不出這件事（標點的 lang 是英文），
+    /// 所以要獨立一欄。
+    pub is_mark: bool,
+    /// 這一格的候選是**算好的**嗎？
+    ///
+    /// 一般的格子靠 `keys` 去查（同音字、假名表記），但符號格
+    /// （`\星\` 合併成的那一格）的名字在合併時就沒了——`keys` 是
+    /// `u/␣\`，從那裡回推「星」要重跑一次選詞。算好放著最誠實。
+    pub cands: Option<Vec<String>>,
     /// 這個字是**使用者手動選的**嗎？
     ///
     /// 手動選過的字不可以被詞庫或重算覆蓋掉——使用者已經表態了，
@@ -85,21 +97,62 @@ pub fn compose_with_bounds(
     width: crate::width::Width,
     bounds: Option<&JpBounds>,
 ) -> Vec<Slot> {
+    compose_all(segs, width, bounds, None)
+}
+
+/// 全部的參數版本。`lock` 是使用者鎖定的語言（沒鎖就是 `None`）。
+///
+/// # 鎖定語言時標點跟著鎖走
+///
+/// 自動模式下標點看**前面那一段**的語言，但句首沒有前一段——原本一律
+/// 給半形（「打程式碼時不會突然冒出全形符號」，那個預設是對的）。
+///
+/// 使用者鎖定了語言之後就有依據了：鎖注音／日文時句首打句點應該是
+/// `。` 而不是 `.`。鎖英文則維持半形——那個模式的語意本來就是
+/// 「等同關掉輸入法」。
+pub fn compose_all(
+    segs: &[Segment],
+    width: crate::width::Width,
+    bounds: Option<&JpBounds>,
+    lock: Option<Language>,
+) -> Vec<Slot> {
     let mut out = Vec::new();
     // 前一段是什麼語言？標點自己不算——連續兩個標點時要看更前面
     let mut prev_lang: Option<Language> = None;
     for s in segs {
         if s.is_mark {
-            let text: String = s
+            // **鎖定的語言優先**：鎖住的時候每一段本來就都是那個語言，
+            // 而它還多涵蓋了「句首、前面沒東西」的情況
+            let lang = lock.or(prev_lang);
+            let converted: String = s
                 .keys
                 .chars()
-                .map(|c| crate::width::convert(c, width, prev_lang))
+                .map(|c| crate::width::convert(c, width, lang))
                 .collect();
+            // **有候選才開放選字**。沒有變體的符號（`@`、`#`）維持
+            // 不可選——那些格子按方向鍵移過去卻叫不出東西只是干擾。
+            let variants = crate::width::variants(&s.keys, lang);
+            let selectable = !variants.is_empty();
+            // **選過 `LEARNED` 次的寫法變成預設**。
+            //
+            // 跟選字走同一條路（鍵是按鍵、值是文字），所以「記住你慣用
+            // 的括號樣式」不必另外寫機制。
+            //
+            // **只接受候選清單裡的值**——學習檔是使用者可以手改的，
+            // 而這一格的文字會直接進文件。收窄成「表裡有的那幾個」，
+            // 比信任檔案內容安全。
+            let text = crate::learn::any()
+                .then(|| crate::learn::index().best(&s.keys).map(str::to_string))
+                .flatten()
+                .filter(|t| variants.iter().any(|v| v.to_string() == *t))
+                .unwrap_or(converted);
             out.push(Slot {
                 keys: s.keys.clone(),
                 text,
                 lang: s.lang,
-                selectable: false,
+                selectable,
+                is_mark: true,
+                cands: None,
                 picked: false,
             });
             continue;
@@ -117,6 +170,8 @@ pub fn compose_with_bounds(
                                 text,
                                 lang: Language::Bopomofo,
                                 selectable: true,
+                                is_mark: false,
+                                cands: None,
                                 picked: false,
                             });
                         }
@@ -127,6 +182,8 @@ pub fn compose_with_bounds(
                         text: s.keys.clone(),
                         lang: Language::Bopomofo,
                         selectable: false,
+                        is_mark: false,
+                        cands: None,
                         picked: false,
                     }),
                 }
@@ -152,6 +209,8 @@ pub fn compose_with_bounds(
                         text: best_japanese(&kana),
                         lang: Language::Romaji,
                         selectable: true,
+                        is_mark: false,
+                        cands: None,
                         picked: false,
                     });
                 } else {
@@ -189,6 +248,8 @@ pub fn compose_with_bounds(
                             text: w.surface.clone(),
                             lang: Language::Romaji,
                             selectable: true,
+                            is_mark: false,
+                            cands: None,
                             picked: false,
                         });
                     }
@@ -218,14 +279,161 @@ pub fn compose_with_bounds(
                     text,
                     lang: Language::English,
                     selectable: jp,
+                    is_mark: false,
+                    cands: None,
                     picked: false,
                 });
             }
         }
     }
+    // `\名字\` 換成符號。**要在標點合併之前**——連續的 `\` 不該先被
+    // 當成標點組合吃掉
+    merge_symbols(&mut out);
+    // 連續的標點可能是一個組合（`...` → `…`）
+    merge_mark_runs(&mut out, lock);
     // 組好之後用詞庫修一次——單看每個字的字頻常常是錯的
     apply_word_context(&mut out);
     out
+}
+
+/// 把 `\名字\` 換成符號。
+///
+/// # 為什麼名字用「文字」不用「按鍵」
+///
+/// 三種語言天然共用同一份表——注音組出的「星」與日文組出的「星」是
+/// 同一個字串，英文的 `star` 是另一個名字指向同一組符號。用按鍵的話
+/// 中文會變成 `\vu/␣\` 那種沒人記得住的東西。
+///
+/// # 收尾的 `\` 一打完就換掉
+///
+/// 使用者裁決（2026-09-04）：不必再選一次。所以預設文字是**第一個
+/// 符號**，字面原樣放在候選的最後當退路。
+///
+/// **代價**：路徑裡剛好有同名資料夾時會被換掉（`C:\check\`）。判斷過
+/// 值不值得——符號名撞到資料夾名的機率低，而且候選裡有原樣可以救。
+///
+/// # 為什麼要 `cands`
+///
+/// 合併之後這一格的 `keys` 是 `\vu/␣\`，名字（星）沒了。要從 keys 回推
+/// 得重跑一次選詞，所以候選在這裡算好、存進 `Slot::cands`。
+fn merge_symbols(slots: &mut Vec<Slot>) {
+    let mut i = 0;
+    while i < slots.len() {
+        if !(slots[i].is_mark && slots[i].keys == "\\") {
+            i += 1;
+            continue;
+        }
+        // 往後找收尾的 `\`
+        let Some(end) = (i + 1..slots.len()).find(|&j| slots[j].is_mark && slots[j].keys == "\\")
+        else {
+            // 沒有收尾就不是符號，維持現狀
+            i += 1;
+            continue;
+        };
+        if end == i + 1 {
+            // `\` 中間沒東西
+            i = end;
+            continue;
+        }
+        let name: String = slots[i + 1..end].iter().map(|s| s.text.as_str()).collect();
+        let syms = crate::symbol::lookup(&name);
+        if syms.is_empty() {
+            // 查不到就當普通的反斜線。**從收尾那個重新找起**——
+            // `\a\b\` 的第二個 `\` 可能是下一組的開頭
+            i = end;
+            continue;
+        }
+        let keys: String = slots[i..=end].iter().map(|s| s.keys.as_str()).collect();
+        let literal: String = slots[i..=end].iter().map(|s| s.text.as_str()).collect();
+        // 候選：符號在前，字面原樣在最後當退路
+        let mut cands = syms.clone();
+        cands.push(literal);
+        // 選過 `LEARNED` 次的那個變預設，跟選字同一條路
+        let text = crate::learn::any()
+            .then(|| crate::learn::index().best(&keys).map(str::to_string))
+            .flatten()
+            .filter(|t| cands.contains(t))
+            .unwrap_or_else(|| syms[0].clone());
+        slots.splice(
+            i..=end,
+            [Slot {
+                keys,
+                text,
+                lang: Language::English,
+                selectable: true,
+                is_mark: true,
+                cands: Some(cands),
+                picked: false,
+            }],
+        );
+        i += 1;
+    }
+}
+
+/// 把連續的標點格合併成一格——如果那個組合有自己的寫法。
+///
+/// # 為什麼在這一層做，不動切點引擎
+///
+/// 切點引擎的標點格**一格就是一個字元**（`to_segments` 寫死
+/// `end == begin + 1`）。要讓 `...` 成為一格，改切點引擎是一種做法，
+/// 但那會動到三支計分器量的東西；在 `compose` 合併則完全碰不到切點。
+///
+/// 合併後 `keys` 仍然接得回原字串（`...` 三個字元變成一格的 `keys`），
+/// 那是 `check_rewrite`、倒退鍵刪格、學習都靠的性質。
+fn merge_mark_runs(slots: &mut Vec<Slot>, lock: Option<Language>) {
+    let mut i = 0;
+    // 前面那一格是什麼語言——判準跟標點的全半形轉換一致
+    let mut prev_lang: Option<Language> = None;
+    while i < slots.len() {
+        if !slots[i].is_mark {
+            prev_lang = Some(slots[i].lang);
+            i += 1;
+            continue;
+        }
+        // **只在中日文脈絡下合併**。
+        //
+        // `hello...` 不該變成 `hello…`——那跟「打程式碼時不會突然冒出
+        // 全形符號」是同一條原則，而且英文的刪節號本來就常寫三個點。
+        // 測資的 `hello|.|.|.` 期望的正是三個點。
+        let lang = lock.or(prev_lang);
+        if !matches!(lang, Some(Language::Bopomofo | Language::Romaji)) {
+            i += 1;
+            continue;
+        }
+        // 這一串連續的標點有多長
+        let mut end = i;
+        while end < slots.len() && slots[end].is_mark {
+            end += 1;
+        }
+        // **從最長的開始試**——`......` 要優先於 `...`
+        let mut merged = false;
+        for stop in ((i + 2)..=end).rev() {
+            let keys: String = slots[i..stop].iter().map(|s| s.keys.as_str()).collect();
+            let variants = crate::width::variants(&keys, lock);
+            if variants.is_empty() {
+                continue;
+            }
+            let text = variants[0].to_string();
+            slots.splice(
+                i..stop,
+                [Slot {
+                    keys,
+                    text,
+                    lang: Language::English,
+                    selectable: true,
+                    is_mark: true,
+                    cands: None,
+                    picked: false,
+                }],
+            );
+            i += 1;
+            merged = true;
+            break;
+        }
+        if !merged {
+            i = end;
+        }
+    }
 }
 
 /// 這個注音音節最可能是哪個字？
@@ -301,9 +509,63 @@ pub fn pick(slots: &mut [Slot], idx: usize, choice: &str) {
     }
     slots[idx].text = choice.to_string();
     slots[idx].picked = true;
+    if slots[idx].is_mark {
+        pair_closing(slots, idx, choice);
+        return;
+    }
     // 從選中的那格開始往後找詞。`picked` 的格子不會被覆蓋，
     // 所以這裡不必再把使用者選的字寫回去一次。
     apply_word_context(&mut slots[idx..]);
+}
+
+/// 選了開括號之後，把配對的收括號一起改掉。
+///
+/// # 為什麼需要
+///
+/// 把 `[` 選成 `「` 之後，後面那個 `]` 還是 `]`——使用者得再選一次，
+/// 而且**要記得自己剛才選了哪一種**。成對的東西本來就該一起變。
+///
+/// # 配對怎麼找
+///
+/// 往後找**第一個沒被巢狀吃掉的 `]`**。中間再遇到 `[` 就加一層深度，
+/// 這樣 `[a[b]c]` 的外層才配得到外層。
+///
+/// **手動選過的不覆蓋**——跟 `apply_word_context` 同一條原則，使用者
+/// 已經表態的地方引擎不再自作主張。
+fn pair_closing(slots: &mut [Slot], idx: usize, choice: &str) {
+    let Some(open_char) = choice.chars().next() else {
+        return;
+    };
+    if choice.chars().count() != 1 {
+        return;
+    }
+    let Some(close_char) = crate::width::closing_for(open_char) else {
+        return;
+    };
+    // 用**按鍵**認配對，不是用文字——那一格顯示什麼還沒定，
+    // 但它是使用者按的哪個鍵是確定的
+    let open_key = slots[idx].keys.clone();
+    let close_key = match open_key.as_str() {
+        "[" => "]",
+        _ => return,
+    };
+    let mut depth = 0usize;
+    for slot in &mut slots[idx + 1..] {
+        if !slot.is_mark {
+            continue;
+        }
+        if slot.keys == open_key {
+            depth += 1;
+        } else if slot.keys == close_key {
+            if depth == 0 {
+                if !slot.picked {
+                    slot.text = close_char.to_string();
+                }
+                return;
+            }
+            depth -= 1;
+        }
+    }
 }
 
 /// 日文的候選：**三種假名 + 詞庫的漢字轉換**。
@@ -372,7 +634,27 @@ pub fn candidates_for(slot: &Slot) -> Vec<String> {
     if !slot.selectable {
         return Vec::new();
     }
-    let mut out = candidates_raw(slot);
+    // 算好的優先——符號格的名字在合併時就沒了，回不去
+    if let Some(c) = &slot.cands {
+        let mut out = c.clone();
+        if let Some(i) = out.iter().position(|x| *x == slot.text) {
+            let cur = out.remove(i);
+            out.insert(0, cur);
+        }
+        return out;
+    }
+    let mut out = if slot.is_mark {
+        // **標點格不查詞庫**，它的候選是「同一個符號的不同寫法」。
+        // 語言傳 `None`——那一格已經算好文字了，`variants` 只有逗號
+        // 需要語言，而那個差別已經反映在 `slot.text` 上，下面「把目前
+        // 的字提到最前面」會處理
+        crate::width::variants(&slot.keys, None)
+            .iter()
+            .map(|c| c.to_string())
+            .collect()
+    } else {
+        candidates_raw(slot)
+    };
     // **清單的第一個永遠是這一格現在顯示的字。**
     //
     // 候選本身是依字頻排的，但那一格顯示的未必是字頻第一名——手動選過
@@ -515,6 +797,119 @@ mod tests {
         assert_eq!(slots.len(), 1);
         assert!(!slots[0].selectable);
         assert_eq!(slots[0].text, "check");
+    }
+
+    /// **標點也能選寫法**。
+    #[test]
+    fn 標點有候選() {
+        if !load() {
+            return;
+        }
+        // `[` → 中日文的各種括號，第一個是目前顯示的字
+        let slots = slots_of("su3cl3[");
+        let br = slots.last().expect("該有一格 [");
+        assert!(br.is_mark);
+        assert!(br.selectable, "有候選就要能選");
+        let c = candidates_for(br);
+        assert_eq!(c.first().map(String::as_str), Some("["), "第一個是現在的字");
+        assert!(c.iter().any(|x| x == "「"), "要有中文引號：{c:?}");
+
+        // 逗號看語言——日文旁邊第一個是讀點
+        let ja = slots_of("sushi,");
+        let comma = ja.last().unwrap();
+        assert_eq!(comma.text, "、");
+        assert_eq!(
+            candidates_for(comma).first().map(String::as_str),
+            Some("、")
+        );
+
+        // 沒有變體的符號維持不可選，不然按方向鍵移過去卻叫不出東西
+        let at = slots_of("su3cl3@");
+        assert!(!at.last().unwrap().selectable, "@ 沒有變體");
+    }
+
+    /// **`\名字\` 換成符號**，三種語言共用同一份表。
+    #[test]
+    fn 符號用反斜線包起來() {
+        if !load() {
+            return;
+        }
+        // 注音組出「星」
+        let s = slots_of(r"\vu/ \");
+        assert_eq!(text_of(&s), "★", "打完收尾的反斜線就換掉，不必再選");
+        assert_eq!(s.len(), 1, "三格合併成一格");
+        assert_eq!(s[0].keys, r"\vu/ \", "按鍵要接得回原字串");
+
+        // 英文名指向同一組符號
+        assert_eq!(text_of(&slots_of(r"\star\")), "★");
+        // 夾在句子中間
+        assert_eq!(text_of(&slots_of(r"su3cl3\vu/ \cl3")), "你好★好");
+
+        // 候選：符號在前，字面原樣在最後當退路
+        let c = candidates_for(&s[0]);
+        assert_eq!(c.first().map(String::as_str), Some("★"));
+        assert_eq!(c.last().map(String::as_str), Some(r"\星\"), "原樣是退路");
+    }
+
+    /// **查不到的名字不動**——路徑不能被弄壞。
+    #[test]
+    fn 不是符號的反斜線維持原樣() {
+        if !load() {
+            return;
+        }
+        let path = r"C:\Users\test";
+        assert_eq!(text_of(&slots_of(path)), path);
+        // 沒有收尾的反斜線
+        assert_eq!(text_of(&slots_of(r"\star")), r"\star");
+        // 中間沒東西
+        assert_eq!(text_of(&slots_of(r"\\")), r"\\");
+    }
+
+    /// **選了開括號，配對的收括號要跟著變**。
+    #[test]
+    fn 括號成對連動() {
+        if !load() {
+            return;
+        }
+        // su3cl3[su3cl3] → 你好[你好]
+        let mut s = slots_of("su3cl3[su3cl3]");
+        let open = s.iter().position(|x| x.keys == "[").expect("該有 [");
+        pick(&mut s, open, "「");
+        assert_eq!(text_of(&s), "你好「你好」", "收括號要跟著變");
+
+        // **手動選過的不覆蓋**
+        let mut s = slots_of("su3cl3[su3cl3]");
+        let close = s.iter().position(|x| x.keys == "]").unwrap();
+        pick(&mut s, close, "】");
+        let open = s.iter().position(|x| x.keys == "[").unwrap();
+        pick(&mut s, open, "「");
+        assert!(text_of(&s).ends_with('】'), "使用者選過的收括號不該被蓋掉");
+
+        // **巢狀要配對到自己那一層**
+        let mut s = slots_of("[su3[cl3]su3]");
+        let outer = s.iter().position(|x| x.keys == "[").unwrap();
+        pick(&mut s, outer, "「");
+        let t = text_of(&s);
+        assert!(t.starts_with('「') && t.ends_with('」'), "外層配外層：{t}");
+    }
+
+    /// **`...` 在中日文脈絡下合併成一格**，英文脈絡不動。
+    #[test]
+    fn 三個點合併成刪節號() {
+        if !load() {
+            return;
+        }
+        assert_eq!(text_of(&slots_of("su3cl3...")), "你好…");
+        // **英文脈絡不合併**——跟「打程式碼不會冒出全形符號」同一條原則
+        assert_eq!(text_of(&slots_of("hello...")), "hello...");
+        // 兩個點不是組合，維持兩格
+        assert_eq!(text_of(&slots_of("su3cl3..")), "你好。。");
+
+        // 合併後 keys 仍然接得回原字串——check_rewrite、倒退鍵刪格、
+        // 學習都靠這個性質
+        let s = slots_of("su3cl3...");
+        let joined: String = s.iter().map(|x| x.keys.as_str()).collect();
+        assert_eq!(joined, "su3cl3...");
     }
 
     /// **候選清單的第一個永遠是這一格現在顯示的字**。

@@ -438,6 +438,10 @@ fn details(info: &ime_core::pack::Info) -> String {
     }
     lines.push(format!("檔名：{}.txt", info.file));
     lines.push(format!("內容：{}", breakdown(info)));
+    if info.sym > 0 {
+        lines.push(String::new());
+        lines.push(r"符號打法：\名字".to_string());
+    }
     for (label, value) in [
         ("作者", &info.meta.author),
         ("授權", &info.meta.license),
@@ -454,9 +458,29 @@ fn details(info: &ime_core::pack::Info) -> String {
     )
 }
 
-/// 一個包的語言分佈，寫成「英 62・日 38・中 12」。
+/// 這個包是哪一種：〔詞〕〔符號〕〔詞＋符號〕。空包沒有標籤。
+///
+/// # 為什麼不讓包自己在檔頭宣告
+///
+/// 檔頭是手寫的，會跟內容不一致——寫「符號包」卻裝滿詞的話該信哪個？
+/// 而且舊包沒有那一行，一樣得從內容推。內容本來就數得出來，
+/// **推導出來的事實不會說謊**，多一個可以矛盾的欄位只是多一個 bug 的來源。
+fn kind_tag(info: &ime_core::pack::Info) -> &'static str {
+    let 有詞 = info.en + info.ja + info.zh > 0;
+    match (有詞, info.sym > 0) {
+        (true, true) => "詞＋符號",
+        (true, false) => "詞",
+        (false, true) => "符號",
+        (false, false) => "",
+    }
+}
+
+/// 一個包裝了什麼，寫成「英 62・日 38・中 12・符號 5 組」。
 ///
 /// 零的那一項不顯示——大部分包只有一兩種語言，把零列出來只是雜訊。
+///
+/// 符號**標單位**（「5 組」而不是「符號 5」）：一組是一整排候選，
+/// 跟一條詞不是同一種東西，不標的話會被當成「只收了 5 個符號」。
 fn breakdown(info: &ime_core::pack::Info) -> String {
     let mut parts: Vec<String> = Vec::new();
     if info.en > 0 {
@@ -468,15 +492,12 @@ fn breakdown(info: &ime_core::pack::Info) -> String {
     if info.zh > 0 {
         parts.push(format!("中 {}", info.zh));
     }
+    if info.sym > 0 {
+        parts.push(format!("符號 {} 組", info.sym));
+    }
     parts.join("・")
 }
 
-/// 擴充包分頁。
-///
-/// # 為什麼順序不能調
-///
-/// 清單依檔名排序，衝突時誰贏就照這個順序。使用者定的（2026-09-01）：
-/// 先不做上下移動，包不多的時候夠用，真的撞到衝突再說。
 /// 選字分頁：選字的行為 ＋ 智慧學習。
 ///
 /// **獨立成一頁而不是掛在「行為」底下**——學習是選字的直接結果
@@ -614,13 +635,19 @@ fn learn_stats(
     }
 }
 
+/// 擴充包分頁。
+///
+/// # 為什麼順序不能調
+///
+/// 清單依檔名排序，衝突時誰贏就照這個順序。使用者定的（2026-09-01）：
+/// 先不做上下移動，包不多的時候夠用，真的撞到衝突再說。
 fn packs_page(ui: &mut egui::Ui, cfg: &mut Config, cache: &mut Option<Vec<ime_core::pack::Info>>) {
     ui.add_space(8.0);
     ui.heading("擴充包");
     ui.add_space(6.0);
     ui.label(
         egui::RichText::new(
-            "擴充包是你自己加的詞表——遊戲名、專有名詞、常打的英文詞。加進來之後不只選字會有，連「這串按鍵是不是英文」的判斷都會跟著改。",
+            r"擴充包是你自己加的詞表——遊戲名、專有名詞、常打的英文詞。加進來之後不只選字會有，連「這串按鍵是不是英文」的判斷都會跟著改。也可以加符號：打「\名字\」就叫得出你自己那一排。",
         )
         .weak(),
     );
@@ -756,6 +783,13 @@ fn packs_page(ui: &mut egui::Ui, cfg: &mut Config, cache: &mut Option<Vec<ime_co
                         }
                     });
                     ui.horizontal(|ui| {
+                        // **型別標在名字前面**，因為「內容」那一欄有寫
+                        // 描述的話會被描述佔走——只放符號的包在清單上
+                        // 就看不出它是符號包了。兩件事分開放，不互相擠掉。
+                        let kind = kind_tag(info);
+                        if !kind.is_empty() {
+                            ui.label(egui::RichText::new(format!("〔{kind}〕")).weak().small());
+                        }
                         // 顯示名來自檔頭的 `# name:`，沒寫就是檔名
                         ui.label(info.title()).on_hover_text(details(info));
                         if let Some(v) = &info.meta.version {

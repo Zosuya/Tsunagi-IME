@@ -58,3 +58,7 @@ test-runs/
 # 但要留在本機：發布時要再改寫一次，那時這份是唯一的退路。
 # 還原方式：git fetch <bundle> master:restored 然後 reset --hard restored
 doc/backup/
+
+# 編輯器的本機工作區狀態。Obsidian 把「開了哪些分頁、面板怎麼排」寫在
+# 這裡，每動一下就變——進版控只會製造雜訊，而且那是每個人各自的東西。
+.obsidian/

@@ -1160,6 +1160,74 @@ mod 一般 {
         assert_eq!(s2.text(), "議事", "跳到另一個同音詞");
     }
 
+    /// **鎖定語言時標點跟著鎖走**。
+    ///
+    /// 自動模式下標點看前面那一段的語言，但句首沒有前一段，原本一律
+    /// 給半形。鎖定之後就有依據了。
+    #[test]
+    fn 鎖定語言時標點跟著鎖走() {
+        use crate::language::Language;
+        // 沒鎖、句首單打句點 → 半形（既有行為，不能變）
+        let mut s = Session::new();
+        s.push('.');
+        assert_eq!(s.text(), ".", "沒鎖時句首維持半形");
+
+        // 鎖注音 → 中文句號
+        let mut s = Session::new();
+        s.set_lock(Some(Language::Bopomofo));
+        s.push('.');
+        assert_eq!(s.text(), "。");
+
+        // 鎖日文 → 逗號是讀點
+        let mut s = Session::new();
+        s.set_lock(Some(Language::Romaji));
+        s.push(',');
+        assert_eq!(s.text(), "、");
+
+        // 鎖英文 → 維持半形，那個模式等同關掉輸入法
+        let mut s = Session::new();
+        s.set_lock(Some(Language::English));
+        s.push('.');
+        assert_eq!(s.text(), ".");
+    }
+
+    /// **鎖定日文時標點不可以消失**。
+    ///
+    /// `RomajiInput` 把湊不成假名的字元堆在 `pending` 裡等後續，而標點
+    /// 永遠湊不成——於是它卡在那裡，切不出段落，送出時整個不見：
+    /// `sushi,` 出來的是「すし」。那是資料遺失。
+    ///
+    /// §2.19 修過鎖定注音那條路，日文這條一直漏著。
+    #[test]
+    fn 鎖定日文時標點不會消失() {
+        use crate::language::Language;
+        let jp = |keys: &str| {
+            let mut s = Session::new();
+            s.set_lock(Some(Language::Romaji));
+            for c in keys.chars() {
+                s.push(c);
+            }
+            s.text()
+        };
+        // **只驗標點，不驗漢字**——`sushi` 轉成「すし」還是「寿司」要看
+        // 詞庫載了沒，而詞庫是不是載入取決於同一輪跑了哪些測試。
+        // 綁上去的話這個測試會時好時壞（單獨跑過、跑全套掛）。
+        let comma = jp("sushi,");
+        assert!(comma.ends_with('、'), "逗號要留著，而且是讀點：{comma}");
+        assert!(!comma.contains(','), "不該留下半形逗號：{comma}");
+        assert!(jp("sushi.").ends_with('。'), "句點同理");
+        // **`-` 是長音不是標點**——判準要跟 single_language_segments 一致
+        // 同理不驗字形（けーき／ケーキ 看詞庫），只驗長音沒被當成標點
+        let ki = jp("ke-ki");
+        assert!(!ki.contains('-'), "長音不該原樣留著：{ki}");
+        assert!(ki.chars().count() == 3, "該是三拍、沒有被切成兩段：{ki}");
+        // 殘留的半個 mora 也不能丟——`sh` 是使用者打過的
+        // 半個 mora（`sh`）湊不成假名，但那是使用者打過的字元，不能丟
+        let half = jp("sush,");
+        assert!(half.contains('、'), "標點要在：{half}");
+        assert!(half.contains("sh"), "殘留的半個 mora 也要在：{half}");
+    }
+
     #[test]
     fn 手動選的字不被詞庫改掉() {
         if !load() {

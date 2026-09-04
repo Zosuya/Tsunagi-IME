@@ -53,12 +53,17 @@ pub struct Packs {
     pub ja: Vec<(String, String)>,
     /// 注音符號 → 詞。**還沒轉成按鍵**，見模組說明
     pub zh: Vec<(String, String)>,
+    /// 符號名 → 一組符號（`\星\` 那條路，見 `crate::symbol`）。
+    ///
+    /// **不分語言**——名字是「組出來的文字」，中文的「星」與日文的
+    /// 「星」本來就是同一個字串。
+    pub sym: Vec<(String, String)>,
 }
 
 impl Packs {
     /// 三種語言加起來幾條。
     pub fn len(&self) -> usize {
-        self.en.len() + self.ja.len() + self.zh.len()
+        self.en.len() + self.ja.len() + self.zh.len() + self.sym.len()
     }
 
     /// 一條都沒有？
@@ -150,6 +155,12 @@ fn parse(content: &str, into: &mut Packs) {
                     into.zh.push((input.to_string(), o.to_string()));
                 }
             }
+            // 符號：第二欄是名字、第三欄是一串符號（`星` → `★☆✦`）
+            "sym" => {
+                if let Some(o) = output {
+                    into.sym.push((input.to_string(), o.to_string()));
+                }
+            }
             _ => {}
         }
     }
@@ -170,12 +181,14 @@ pub struct Index {
     pub ja: HashMap<String, String>,
     /// 按鍵 → 詞
     pub zh: HashMap<String, String>,
+    /// 符號名 → 一組符號
+    pub sym: HashMap<String, String>,
 }
 
 impl Index {
     /// 一條都沒有？**熱路徑靠這個短路**——沒啟用包的人一次查詢都不多做。
     pub fn is_empty(&self) -> bool {
-        self.en.is_empty() && self.ja.is_empty() && self.zh.is_empty()
+        self.en.is_empty() && self.ja.is_empty() && self.zh.is_empty() && self.sym.is_empty()
     }
 }
 
@@ -277,6 +290,9 @@ fn build_index(packs: &Packs) -> Index {
             continue;
         }
         out.zh.entry(keys).or_insert_with(|| word.clone());
+    }
+    for (name, syms) in &packs.sym {
+        out.sym.entry(name.clone()).or_insert_with(|| syms.clone());
     }
     out
 }
@@ -402,6 +418,8 @@ pub struct Info {
     pub en: usize,
     pub ja: usize,
     pub zh: usize,
+    /// 符號組數
+    pub sym: usize,
 }
 
 impl Info {
@@ -410,8 +428,13 @@ impl Info {
         self.meta.name.as_deref().unwrap_or(&self.file)
     }
 
+    /// 這個包一共幾條。
+    ///
+    /// **符號也要算**——設定頁用這個數字判斷「空包不給勾」，
+    /// 漏掉的話只放符號的包會顯示 0 條、勾選框被停用，
+    /// 等於**符號包裝不進去**。
     pub fn total(&self) -> usize {
-        self.en + self.ja + self.zh
+        self.en + self.ja + self.zh + self.sym
     }
 }
 
@@ -437,6 +460,7 @@ pub fn info(custom: &str, file: &str) -> Info {
         en: packs.en.len(),
         ja: packs.ja.len(),
         zh: packs.zh.len(),
+        sym: packs.sym.len(),
     }
 }
 
@@ -450,6 +474,19 @@ mod tests {
             .join("packs")
             .to_string_lossy()
             .into_owned()
+    }
+
+    /// 只放符號的包**不是空包**。
+    ///
+    /// `total()` 漏算 `sym` 的話設定頁會顯示「0 條」，而「空包不給勾」
+    /// 那條規則會把勾選框停用——**純符號包整個裝不進去**。
+    /// 兩個各自都對的規則撞在一起，症狀是功能不可用而不是報錯。
+    #[test]
+    fn 只放符號的包不是空包() {
+        let i = info(&testdata(), "sym_only_pack");
+        assert_eq!((i.en, i.ja, i.zh), (0, 0, 0), "這個包只有符號");
+        assert_eq!(i.sym, 1);
+        assert!(i.total() > 0, "純符號包被當成空包了，設定頁會不給勾");
     }
 
     /// **這是選這套設計的理由**：換設定就換索引，不必重建詞庫。
@@ -545,6 +582,7 @@ en	word
             ),
             en: 1,
             ja: 0,
+            sym: 0,
             zh: 0,
         };
         assert_eq!(info.title(), "我的包");

@@ -162,6 +162,8 @@ fn main() {
                     lang: sl.lang,
                     selectable: sl.selectable,
                     // **只有真的改過的才算表態**——沒改的格子沒有新資訊
+                    is_mark: false,
+                    cands: None,
                     picked: changed && sl.selectable,
                 });
             }

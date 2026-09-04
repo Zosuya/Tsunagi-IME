@@ -36,6 +36,7 @@ pub mod render;
 pub mod romaji;
 pub mod sanitize;
 pub mod session;
+pub mod symbol;
 #[cfg(feature = "config")]
 pub mod theme_preset;
 pub mod width;

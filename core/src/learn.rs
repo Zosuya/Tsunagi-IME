@@ -398,8 +398,17 @@ pub fn record(slots: &[crate::compose::Slot]) -> usize {
             continue;
         }
         let lang = slots[start].lang;
+        // **標點自成一段**，不跟旁邊的語言段黏在一起。
+        //
+        // 標點的 `lang` 是英文，不分開的話 `check[` 會被當成同一段，
+        // 學到「check「」這種沒有意義的子段。
+        let mark = slots[start].is_mark;
         let mut end = start;
-        while end < slots.len() && slots[end].selectable && slots[end].lang == lang {
+        while end < slots.len()
+            && slots[end].selectable
+            && slots[end].lang == lang
+            && slots[end].is_mark == mark
+        {
             end += 1;
         }
         n += record_run(&mut idx, &slots[start..end]);
@@ -811,6 +820,8 @@ mod tests {
             text: text.into(),
             lang: Language::Bopomofo,
             selectable: true,
+            is_mark: false,
+            cands: None,
             picked,
         }
     }
@@ -854,6 +865,8 @@ mod tests {
             text: "鮨".into(),
             lang: Language::Romaji,
             selectable: true,
+            is_mark: false,
+            cands: None,
             picked: true,
         }];
         record_run(&mut idx, &run);
@@ -941,6 +954,8 @@ mod tests {
             text: "いい".into(),
             lang: Language::English,
             selectable: true,
+            is_mark: false,
+            cands: None,
             picked: true,
         }];
         record_run(&mut idx, &run);

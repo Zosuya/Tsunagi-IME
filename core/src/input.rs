@@ -485,6 +485,23 @@ pub struct RomajiInput {
 
 impl RomajiInput {
     fn push(&mut self, ch: char) -> Changed {
+        // **標點永遠湊不成假名**，不先接住的話它會一直堆在 `pending` 裡
+        // ——那一格切不出任何段落，送出時整個消失：鎖定日文打 `sushi,`
+        // 出來的是「すし」，逗號不見了。**那是資料遺失**。
+        //
+        // §2.19 修過「鎖定注音打得出標點」，但只修了注音那條路；
+        // 日文這條一直漏著。
+        //
+        // `-` 例外——鎖定日文時它是長音（`ke-ki` ＝ ケーキ），判準跟
+        // `single_language_segments` 的 `dash_is_chouon` 一致。
+        if ch != '-' && ch.is_ascii_punctuation() {
+            // 殘留的半個 mora 也一起收進去。那是使用者打過的字元，
+            // 不能因為湊不成假名就丟掉——顯示成原樣的字母是誠實的
+            self.keys.push_str(&std::mem::take(&mut self.pending));
+            self.keys.push(ch);
+            self.recompute();
+            return Changed::Segments;
+        }
         // **轉換要帶上前文**。
         //
         // 長音 `-` 單獨轉不出來（引擎不接受「開頭就是長音」，那確實

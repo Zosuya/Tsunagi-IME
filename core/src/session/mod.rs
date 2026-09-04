@@ -791,6 +791,8 @@ impl Session {
                 text,
                 lang: crate::language::Language::Bopomofo,
                 selectable: false,
+                is_mark: false,
+                cands: None,
                 picked: false,
             }];
             return;
@@ -799,7 +801,13 @@ impl Session {
             .cut_at(self.cutting_idx)
             .and_then(|i| self.cuttings.get(i))
         {
-            Some(c) => compose::compose_with_bounds(c, self.width, self.jp_bounds.as_ref()),
+            Some(c) => compose::compose_all(
+                c,
+                self.width,
+                self.jp_bounds.as_ref(),
+                // 鎖定語言時標點跟著鎖走——句首也才有依據
+                self.lock(),
+            ),
             None => Vec::new(),
         };
         self.reapply_picks();

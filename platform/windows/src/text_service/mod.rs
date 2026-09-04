@@ -698,7 +698,25 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     // 才送得出去——多兩道手續換不到任何好處。
                     // 判準見 `passthrough_alone`（要排除注音鍵，`,.;/-`
                     // 那幾個是ㄝㄡㄤㄥㄦ）。
-                    if state.session.is_empty() && ime_core::input::passthrough_alone(ch) {
+                    // **有候選的符號要進組字區**，不然選不到寫法。
+                    //
+                    // 「直接送出」那條規則的理由是「只想打一個驚嘆號
+                    // 卻要按 Enter，多兩道手續換不到任何好處」——那在
+                    // 標點沒有候選的前提下成立。現在 `[` 能選
+                    // 「『【〔，前提沒了。
+                    //
+                    // 沒候選的符號（`@` `#` `$`）維持直送，打驚嘆號
+                    // 仍然是一鍵的事。
+                    //
+                    // 符號的前綴同理——它沒有標點變體，不特別放行的話
+                    // 開頭打的那個 `\` 會直接送出去，`\星\` 永遠起不了頭。
+                    let has_variants = ime_core::symbol::is_prefix(ch)
+                        || !ime_core::width::variants(&ch.to_string(), state.session.lock())
+                            .is_empty();
+                    if state.session.is_empty()
+                        && !has_variants
+                        && ime_core::input::passthrough_alone(ch)
+                    {
                         // 全形模式下標點也要跟著變全形，跟組字那條路一致
                         let ch = ime_core::width::convert(ch, state.session.width(), None);
                         insert_directly(context, &mut state, ch)?;
