@@ -18,8 +18,8 @@
 | `su3cl3`                                   | 你好                   |
 | `gohannwotabemasu`                         | ご飯を食べます              |
 | `hello`                                    | hello                |
-| ul41j6ul4fm4t lunch                        | 要不要去吃lunch           |
-| rup wu0 g4uutennkikaraul41j6ul4tj fm4play? | 今天是いい天気から、要不要出去play? |
+| `ul41j6ul4fm4t lunch`                        | 要不要去吃lunch           |
+| `rup wu0 g4uutennkikaraul41j6ul4tj fm4play?` | 今天是いい天気から、要不要出去play? |
 
 會依按鍵內容判斷語言。判斷錯了也有辦法救——**候選不是唯一的答案，是可以換的**。
 
