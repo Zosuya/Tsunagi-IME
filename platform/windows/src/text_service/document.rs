@@ -153,7 +153,6 @@ pub(crate) fn refresh_password(context: &ITfContext, state: &mut State) {
         return;
     }
     // **兩種訊號都要看**，應用程式各用各的——見兩個函式的說明
-    // **兩種訊號都要看**，應用程式各用各的——見兩個函式的說明
     let now = keyboard_disabled(context, state.thread_mgr.as_ref())
         || is_password_field(context, state.client_id);
     // 只在**變了**的時候記一筆——每一鍵都記會把 log 洗掉

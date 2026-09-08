@@ -67,10 +67,56 @@ struct Node {
     cost: u32,
     /// 從哪一個位置接過來
     from: usize,
+    /// 從 `best[from]` 的第幾個節點接過來——**回溯要跟著同一條路**
+    from_k: usize,
     /// 這一段選的表記
     surface: String,
     /// 這一段的右 id——下一段要用它算接續
     rid: u16,
+}
+
+/// 一個位置最多留幾個節點（beam）。
+///
+/// 留一批是為了保住「中途比較貴、但接得下去」的路，但同一個位置的
+/// 候選可能有幾十個（`なけれ` 就有 7 個），全留會讓 DP 從 O(n·len)
+/// 變成 O(n·len·beam)。
+///
+/// # 為什麼是 8
+///
+/// | BEAM | 超長句耗時 | 漏斗 | 改寫 |
+/// |---|---|---|---|
+/// | 4 | 353.8 µs | 1246 | 208 |
+/// | **8** | **380.1 µs** | **1245** | **197** |
+/// | 16 | 389.7 µs | 1245 | 191 |
+///
+/// **耗時對這個值幾乎不敏感**（4→16 只差 10%）——同 rid 去重之後實際
+/// 留下來的節點本來就沒幾個，很少撞到上限。所以取捨不在效能，在品質：
+/// 4 多賺 1 句但改寫更多，16 改寫最少卻沒多賺。8 是「再大也不會更好」
+/// 的最小值。
+const BEAM: usize = 8;
+
+/// 把節點放進某個位置的候選堆，**同 rid 只留最便宜的**，並限制 beam。
+///
+/// 同 rid 的節點對後面完全等價（接續成本只看 rid），留多個是白費。
+fn push_node(slot: &mut Vec<Node>, node: Node) {
+    if let Some(old) = slot.iter_mut().find(|x| x.rid == node.rid) {
+        if node.cost < old.cost {
+            *old = node;
+        }
+        return;
+    }
+    slot.push(node);
+    if slot.len() > BEAM {
+        // 最貴的那個出局
+        if let Some(worst) = slot
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, x)| x.cost)
+            .map(|(i, _)| i)
+        {
+            slot.swap_remove(worst);
+        }
+    }
 }
 
 /// 把一串假名轉成詞。**分詞與選字一起決定**。
@@ -105,71 +151,106 @@ pub fn convert(kana: &str) -> Vec<Word> {
             surface: kana.to_string(),
         }];
     };
-    let mut best: Vec<Option<Node>> = vec![None; n + 1];
-    best[0] = Some(Node {
+    // **每個位置留一批節點，不是只留最便宜的那一個**。
+    //
+    // 接續成本是 `cost(前一段的 rid, 這一段的 lid)`，所以「走到位置 i
+    // 最便宜的那條路」不足以決定後面——rid 不同，後面的接續成本就不同。
+    // 只留一個的話會這樣：
+    //
+    // ```text
+    // なければ 單獨   → なければ            ✓（假名整串最便宜）
+    // しなければ      → し | 泣けれ | ば    ✗
+    // ```
+    //
+    // 「泣けれ」在 `なけれ` 這個位置比「なけれ」便宜（動詞詞成本低），
+    // 於是整串假名那條路在中途就被丟掉，後面再也接不回來。留一批就
+    // 保得住——`ば` 接在助動詞後面很便宜、接在動詞仮定形後面很貴，
+    // 到終點自然分得出高下。
+    let mut best: Vec<Vec<Node>> = vec![Vec::new(); n + 1];
+    best[0].push(Node {
         cost: 0,
         from: 0,
+        from_k: 0,
         surface: String::new(),
         rid: BOS_EOS,
     });
 
     for i in 0..n {
-        let Some(prev) = best[i].clone() else {
+        if best[i].is_empty() {
             continue;
-        };
+        }
+        let prevs = best[i].clone();
         for len in 1..=MAX_WORD_KANA.min(n - i) {
             let j = i + len;
             let part = &kana[offs[i]..offs[j]];
             let cands = dict::cands_for_kana(part);
 
-            // 詞典查得到：每個候選各試一次
+            // 詞典查得到：每個候選 × 每個前驅各試一次
             for c in cands.iter() {
-                let trans = conn.cost(prev.rid, c.lid) as u32;
-                let cost = prev.cost + trans + c.cost as u32;
-                let better = best[j].as_ref().is_none_or(|b| cost < b.cost);
-                if better {
-                    best[j] = Some(Node {
+                let Some((k, cost)) = prevs
+                    .iter()
+                    .enumerate()
+                    .map(|(k, p)| (k, p.cost + conn.cost(p.rid, c.lid) as u32 + c.cost as u32))
+                    .min_by_key(|(_, cost)| *cost)
+                else {
+                    continue;
+                };
+                push_node(
+                    &mut best[j],
+                    Node {
                         cost,
                         from: i,
+                        from_k: k,
                         surface: c.surface.to_string(),
                         rid: c.rid,
-                    });
-                }
+                    },
+                );
             }
 
             // 查不到就當「原樣的一段」。**只試長度 1**——多長的未知段
             // 都可以由一串長度 1 疊出來，試每種長度是白花的。
             if len == 1 {
-                let cost = prev.cost + UNKNOWN_PER_KANA;
-                let better = best[j].as_ref().is_none_or(|b| cost < b.cost);
-                if better {
-                    best[j] = Some(Node {
+                let (k, cost) = prevs
+                    .iter()
+                    .enumerate()
+                    .map(|(k, p)| (k, p.cost + UNKNOWN_PER_KANA))
+                    .min_by_key(|(_, cost)| *cost)
+                    .unwrap_or((0, UNKNOWN_PER_KANA));
+                push_node(
+                    &mut best[j],
+                    Node {
                         cost,
                         from: i,
+                        from_k: k,
                         surface: part.to_string(),
                         // 未知詞的 id 不知道，用 BOS/EOS——它對任何東西
                         // 的接續成本都是中性的
                         rid: BOS_EOS,
-                    });
-                }
+                    },
+                );
             }
         }
     }
 
-    // 句尾接續：走到終點的那條路要再加 EOS
-    let Some(end) = best[n].clone() else {
+    // **句尾接續在這裡才算**——終點有一批節點，加上各自的 EOS 成本
+    // 才知道誰真的最好。這是留一批的另一半：`ば` 結尾接得漂亮的那條
+    // 路，要到這一步才贏得了中途比較便宜的那條。
+    let Some(k_end) = (0..best[n].len()).min_by_key(|&k| {
+        let node = &best[n][k];
+        node.cost + conn.cost(node.rid, BOS_EOS) as u32
+    }) else {
         return vec![Word {
             kana: kana.to_string(),
             surface: kana.to_string(),
         }];
     };
-    let _ = conn.cost(end.rid, BOS_EOS);
 
-    // 回溯
+    // 回溯——**跟著 `from_k` 走同一條路**
     let mut out: Vec<Word> = Vec::new();
     let mut j = n;
+    let mut k = k_end;
     while j > 0 {
-        let Some(node) = best[j].clone() else { break };
+        let node = best[j][k].clone();
         let i = node.from;
         out.push(Word {
             kana: kana[offs[i]..offs[j]].to_string(),
@@ -179,6 +260,7 @@ pub fn convert(kana: &str) -> Vec<Word> {
             break;
         }
         j = i;
+        k = node.from_k;
     }
     out.reverse();
     // **相鄰的未知段併回去**：`ぷ` `ろ` `ぐ` 三個各自一格沒有意義，
@@ -271,6 +353,28 @@ mod tests {
 
     fn text(kana: &str) -> String {
         convert(kana).iter().map(|w| w.surface.as_str()).collect()
+    }
+
+    /// **付属語不可以被切成自立語漢字詞**。
+    ///
+    /// 這些串單獨轉都是對的，接成長鏈才錯——每個位置只留一個節點時，
+    /// 「泣けれ」在 `なけれ` 那一格比「なけれ」便宜，整串假名那條路
+    /// 中途就被丟掉，後面的「ば」再也接不回來。留一批才保得住。
+    #[test]
+    fn 否定形不會被切成漢字詞() {
+        if !load() {
+            return;
+        }
+        assert_eq!(
+            text("きんようびまでにていしゅつしなければ"),
+            "金曜日までに提出師なければ",
+            "なければ 不可以變成 泣けれ｜ば"
+        );
+        assert_eq!(
+            text("いかなければならない"),
+            "いかなければ鳴らない",
+            "いか 不可以變成 以下、ない 不可以變成 無い"
+        );
     }
 
     #[test]

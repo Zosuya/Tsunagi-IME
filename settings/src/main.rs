@@ -31,6 +31,10 @@ use eframe::egui;
 use ime_core::config::{Colors, Config, EnterInSelect, Font, Metrics};
 
 fn main() -> eframe::Result<()> {
+    // 預載包（內建符號）跟使用者自己的包一起列在「擴充包」分頁裡，
+    // 所以設定頁也要知道它在哪。位置在行程的一生裡不會變，設一次就好。
+    ime_core::pack::set_bundled_dir(bundled_packs_dir());
+
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             // **尺寸要跟著 `enlarge_ui` 的縮放一起放大**——只放大字級不放大
@@ -475,12 +479,14 @@ fn kind_tag(info: &ime_core::pack::Info) -> &'static str {
     }
 }
 
-/// 一個包裝了什麼，寫成「英 62・日 38・中 12・符號 5 組」。
+/// 一個包裝了什麼，寫成「英 62・日 38・中 12・符號 5 個名字」。
 ///
 /// 零的那一項不顯示——大部分包只有一兩種語言，把零列出來只是雜訊。
 ///
-/// 符號**標單位**（「5 組」而不是「符號 5」）：一組是一整排候選，
-/// 跟一條詞不是同一種東西，不標的話會被當成「只收了 5 個符號」。
+/// 符號**標單位**（「5 個名字」而不是「符號 5」）：一個名字叫出一整排
+/// 候選，跟一條詞不是同一種東西，不標的話會被當成「只收了 5 個符號」。
+/// 數的是名字不是組——同一組符號常常中日英各有一個名字（包裡寫成
+/// `星,ほし,star`），數組的話跟使用者「能叫出幾個」對不上。
 fn breakdown(info: &ime_core::pack::Info) -> String {
     let mut parts: Vec<String> = Vec::new();
     if info.en > 0 {
@@ -493,7 +499,7 @@ fn breakdown(info: &ime_core::pack::Info) -> String {
         parts.push(format!("中 {}", info.zh));
     }
     if info.sym > 0 {
-        parts.push(format!("符號 {} 組", info.sym));
+        parts.push(format!("符號 {} 個名字", info.sym));
     }
     parts.join("・")
 }
@@ -807,6 +813,18 @@ fn packs_page(ui: &mut egui::Ui, cfg: &mut Config, cache: &mut Option<Vec<ime_co
                             .unwrap_or_else(|| breakdown(info));
                         ui.label(egui::RichText::new(text).weak())
                             .on_hover_text(details(info));
+                    } else if info.error == Some(ime_core::pack::PackReadError::NotUtf8) {
+                        // **編碼不對跟「沒有詞」是兩回事**（§2.49.3）。
+                        //
+                        // Big5（記事本的「ANSI」）存的包格式完全正確，
+                        // 使用者照「格式不對」那句話去檢查格式**永遠查
+                        // 不出來**。要直接講編碼，還要講怎麼修。
+                        ui.label(egui::RichText::new("—").weak());
+                        ui.label(
+                            egui::RichText::new("編碼不是 UTF-8（用記事本另存為 UTF-8）")
+                                .color(egui::Color32::from_rgb(200, 80, 60))
+                                .italics(),
+                        );
                     } else {
                         ui.label(egui::RichText::new("0").weak());
                         ui.label(
@@ -1230,15 +1248,26 @@ fn color_row(ui: &mut egui::Ui, label: &str, hex: &mut String) {
 ///
 /// 找不到就回 `None`，那代表只讀使用者目錄的設定。
 fn project_data_dir() -> Option<std::path::PathBuf> {
+    shipped_dir("data")
+}
+
+/// 預載包（內建符號）在哪。設定頁要列得出它，才勾得到。
+fn bundled_packs_dir() -> Option<std::path::PathBuf> {
+    shipped_dir("packs")
+}
+
+/// 隨程式一起裝的某個資料夾：先看 exe 旁邊（安裝後），再往上兩層
+/// （開發環境的專案根）。
+fn shipped_dir(name: &str) -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let here = exe.parent()?;
 
-    let installed = here.join("data");
+    let installed = here.join(name);
     if installed.is_dir() {
         return Some(installed);
     }
 
-    let d = here.parent()?.parent()?.join("data");
+    let d = here.parent()?.parent()?.join(name);
     d.is_dir().then_some(d)
 }
 

@@ -1,0 +1,24 @@
+[package]
+name = "ime-tip-macos"
+version = "0.3.0"
+edition = "2021"
+
+# macOS 的輸入法是**獨立的 .app 行程**服務所有 App，不是像 Windows 那樣
+# 把 DLL 載進每個宿主行程。所以這裡是執行檔，不是動態庫。見 §2.52.3。
+[[bin]]
+name = "tsunagi_ime"
+path = "src/main.rs"
+
+# 安裝程式：**前景** GUI app，只負責呼叫 TISRegisterInputSource。
+# 跟輸入法本體分開是刻意的，見 src/installer.rs 的說明。
+[[bin]]
+name = "tsunagi_installer"
+path = "src/installer.rs"
+
+# Apple 框架只在 macOS 上拉。Windows 上 cargo 根本不會看這一段，
+# 加上程式碼本體整個 cfg 掉，根目錄的 cargo build/test 不受影響。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+objc2-input-method-kit = "0.3.2"

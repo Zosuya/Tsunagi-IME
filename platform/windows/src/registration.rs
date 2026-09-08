@@ -82,20 +82,34 @@ pub fn sibling_path(name: &str) -> Option<std::path::PathBuf> {
 /// `Program Files` 之後會算出 `C:\data`——詞庫永遠找不到，而且不會報錯，
 /// 只是所有候選都變空的。
 pub fn data_dir() -> Option<std::path::PathBuf> {
+    shipped_dir("data")
+}
+
+/// 預載包在哪——隨程式一起裝的那份（內建符號）。
+///
+/// 佈局與找法跟 `data_dir()` 完全一樣，所以共用 `shipped_dir()`。
+/// 使用者自己的包不在這裡，那是 `%APPDATA%` 或設定裡指定的路徑。
+pub fn bundled_packs_dir() -> Option<std::path::PathBuf> {
+    shipped_dir("packs")
+}
+
+/// 隨程式一起裝的某個資料夾：先看 DLL 旁邊（安裝後），再往上兩層
+/// （開發環境的專案根）。找不到就是 `None`。
+fn shipped_dir(name: &str) -> Option<std::path::PathBuf> {
     let raw = dll_path().ok()?;
     let s = String::from_utf16_lossy(&raw);
     let s = s.trim_end_matches('\0');
     let dll = std::path::Path::new(s);
     let here = dll.parent()?;
 
-    let installed = here.join("data");
+    let installed = here.join(name);
     if installed.is_dir() {
         return Some(installed);
     }
 
     // target/release → target → 專案根
-    let data = here.parent()?.parent()?.join("data");
-    data.is_dir().then_some(data)
+    let dev = here.parent()?.parent()?.join(name);
+    dev.is_dir().then_some(dev)
 }
 
 /// 取得「這顆 DLL 自己」的 module handle。
@@ -255,6 +269,14 @@ fn unregister_com_server() {
 /// `AddItem` 回 `S_OK`、Windows 也照樣反覆呼叫 `GetInfo`／`GetIcon`，
 /// 但工作列就是不畫——因為那個宿主根本沒把這個 TIP 登記進去。
 /// 見開發文件 §3.7。
+///
+/// **⚠ `UIELEMENTENABLED` 目前是沒有實作支撐的宣告。** 這個類別的官方
+/// 語意是「本 TIP 的所有 UI 都經由 `ITfUIElementMgr` 呈現」——顯示任何
+/// UI 之前要先呼叫 `BeginUIElement` 問宿主要不要自己畫。我們**沒有**
+/// 做那套，卻宣告了；用 `TF_TMAE_UIELEMENTENABLEDONLY` 啟用執行緒的
+/// 宿主（全螢幕遊戲、自繪 UI 的軟體）因此會把我們啟用起來，然後等一個
+/// 永遠不會來的 `BeginUIElement`。兩條修法（實作 UI-less／拿掉這一項）
+/// 與量測計畫見開發文件 §2.58。
 const TSF_CATEGORIES: [GUID; 8] = [
     GUID_TFCAT_TIP_KEYBOARD,
     GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,

@@ -48,9 +48,9 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Bitmap1, ID2D1Brush, ID2D1DeviceContext, ID2D1Factory1,
     D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
     D2D1_BUFFER_PRECISION_8BPC_UNORM, D2D1_COLOR_INTERPOLATION_MODE_PREMULTIPLIED,
-    D2D1_COLOR_SPACE_SRGB, D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_DRAW_TEXT_OPTIONS_NONE,
-    D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_ROUNDED_RECT,
+    D2D1_COLOR_SPACE_SRGB, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, D2D1_EXTEND_MODE_CLAMP,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
@@ -61,9 +61,9 @@ use windows::Win32::Graphics::DirectComposition::{
     IDCompositionVisual,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED,
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, DWRITE_CLUSTER_METRICS,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS, DWRITE_WORD_WRAPPING_NO_WRAP,
     DWRITE_WORD_WRAPPING_WRAP,
 };
@@ -138,6 +138,13 @@ impl TextMeasurer {
     /// 量一段文字在限定寬度內要佔多寬多高。
     pub fn measure(&self, text: &str, fmt: &IDWriteTextFormat, max_width: f32) -> (f32, f32) {
         measure_with(&self.write, text, fmt, max_width)
+    }
+
+    /// 這段文字有幾個「使用者眼裡的一個字」。見 `Renderer::clusters`。
+    ///
+    /// 算視窗寬度要用這個——格數必須跟 `layout_preview` 排出來的一致。
+    pub fn clusters(&self, text: &str, fmt: &IDWriteTextFormat) -> Vec<(usize, usize)> {
+        clusters_with(&self.write, text, fmt)
     }
 }
 
@@ -255,6 +262,77 @@ fn measure_advance_with(write: &IDWriteFactory, text: &str, fmt: &IDWriteTextFor
             return 0.0;
         }
         m.widthIncludingTrailingWhitespace
+    }
+}
+
+/// 照 DirectWrite 的叢集切。見 `Renderer::clusters`。
+///
+/// 叢集度量給的是**每一份佔幾個 UTF-16 單位**，而我們對外用位元組
+/// 位置（`&str` 的切片單位），所以要一路換算回去。
+fn clusters_with(
+    write: &IDWriteFactory,
+    text: &str,
+    fmt: &IDWriteTextFormat,
+) -> Vec<(usize, usize)> {
+    // 退路：逐字元。量不出來時至少畫得出東西（單碼位的字全都正確，
+    // 只有組合字會被拆散）
+    let fallback = || {
+        text.char_indices()
+            .map(|(i, c)| (i, i + c.len_utf8()))
+            .collect()
+    };
+    unsafe {
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        if wide.is_empty() {
+            return Vec::new();
+        }
+        let Ok(layout) = write.CreateTextLayout(&wide, fmt, f32::MAX / 2.0, f32::MAX / 2.0) else {
+            return fallback();
+        };
+        // 第一次呼叫是問「要多大的緩衝區」，回傳的 Err 是預期的。
+        //
+        // **`count` 是緩衝區大小，不是叢集數**——第二次填回來的
+        // `actual` 才是。這兩個在多數字串上相等，但 keycap（`1️⃣`＝
+        // 數字＋變體選擇符＋圍框，三個 UTF-16 單位）會不一樣，用錯
+        // 的話那個圍框會變成孤兒的一格。
+        let mut count = 0u32;
+        let _ = layout.GetClusterMetrics(None, &mut count);
+        if count == 0 {
+            return fallback();
+        }
+        let mut metrics = vec![DWRITE_CLUSTER_METRICS::default(); count as usize];
+        let mut actual = 0u32;
+        if layout
+            .GetClusterMetrics(Some(&mut metrics), &mut actual)
+            .is_err()
+            || actual == 0
+        {
+            return fallback();
+        }
+        // UTF-16 單位數 → 位元組位置。兩邊都從頭往前推，一次掃完。
+        //
+        // `length` 是那一份佔幾個 UTF-16 單位，而 `&str` 切片要位元組
+        // ——BMP 外的字元一個佔兩個 UTF-16 單位、四個位元組，兩邊的
+        // 步長不同，所以得逐字元換算而不能直接相加。
+        let mut out = Vec::with_capacity(actual as usize);
+        let mut byte = 0usize;
+        let mut chars = text.chars();
+        for m in metrics.iter().take(actual as usize) {
+            let start = byte;
+            let mut units = m.length as usize;
+            while units > 0 {
+                let Some(c) = chars.next() else { break };
+                units = units.saturating_sub(c.len_utf16());
+                byte += c.len_utf8();
+            }
+            if byte > start {
+                out.push((start, byte));
+            }
+        }
+        if out.is_empty() {
+            return fallback();
+        }
+        out
     }
 }
 
@@ -493,6 +571,24 @@ impl Renderer {
         measure_advance_with(&self.write, text, fmt)
     }
 
+    /// 這段文字有哪些「使用者眼裡的一個字」？回傳每一份的位元組範圍。
+    ///
+    /// # 為什麼不能用 `chars()`
+    ///
+    /// 逐字元排版會把多碼位的圖拆散：`👩‍💻` 是 👩＋零寬連接符＋💻
+    /// 三個字元，分開畫就變成兩個人像中間一個空隙；`👍🏽` 是手加色票，
+    /// 拆開變成沒有膚色的手加一塊色磚。
+    ///
+    /// DirectWrite 的**叢集**（cluster）才是使用者眼裡的一個字。它自己
+    /// 就知道邊界在哪——ZWJ 組合、膚色、變體選擇符、注音的聲調符號，
+    /// 全都算過。實測見開發文件 §2.51。
+    ///
+    /// 回傳的是位元組範圍（`&text[a..b]`），跟原本 `char_indices` 的
+    /// 用法對得上。量不出來時退回逐字元，至少畫得出東西。
+    pub fn clusters(&self, text: &str, fmt: &IDWriteTextFormat) -> Vec<(usize, usize)> {
+        clusters_with(&self.write, text, fmt)
+    }
+
     /// 量一段文字在**限定寬度內**要佔多寬多高。
     ///
     /// 回傳 `(寬, 高)`。文字超過 `max_width` 時 DirectWrite 會自動
@@ -566,21 +662,42 @@ impl Frame<'_> {
     /// 縮放與位移靠筆刷的變換矩陣：取寬高比例較大的那個當縮放倍率
     /// （這樣一定填滿），再把多出來的部分置中裁掉。
     pub fn fill_round_image(&self, rc: Rect, radius: f32, img: &ID2D1Bitmap1, alpha: f32) {
+        self.fill_round_image_at(rc, rc, radius, img, alpha);
+    }
+
+    /// 跟 `fill_round_image` 一樣，但**貼圖的縮放與置中照 `fit` 算**、
+    /// 形狀畫在 `rc`。兩者相同時就是 `fill_round_image`。
+    ///
+    /// 分開的理由見 `fill_bottom_round_image`：圓角被推到裁切範圍外
+    /// 的時候，形狀變高了但圖不該跟著位移。
+    fn fill_round_image_at(
+        &self,
+        rc: Rect,
+        fit: Rect,
+        radius: f32,
+        img: &ID2D1Bitmap1,
+        alpha: f32,
+    ) {
         unsafe {
             let size = img.GetSize();
             if size.width <= 0.0 || size.height <= 0.0 {
                 return;
             }
             let dst = self.rect(rc);
+            let fit = self.rect(fit);
             let (dw, dh) = (dst.right - dst.left, dst.bottom - dst.top);
             if dw <= 0.0 || dh <= 0.0 {
                 return;
             }
+            let (fw, fh) = (fit.right - fit.left, fit.bottom - fit.top);
+            if fw <= 0.0 || fh <= 0.0 {
+                return;
+            }
             // 等比填滿的倍率跟設定頁的預覽共用同一份，不然預覽會騙人
-            let scale = ime_core::render::cover_scale(dw, dh, size.width, size.height);
+            let scale = ime_core::render::cover_scale(fw, fh, size.width, size.height);
             // 多出來的部分置中裁掉
-            let ox = dst.left + (dw - size.width * scale) / 2.0;
-            let oy = dst.top + (dh - size.height * scale) / 2.0;
+            let ox = fit.left + (fw - size.width * scale) / 2.0;
+            let oy = fit.top + (fh - size.height * scale) / 2.0;
 
             let Ok(brush) = self.r.dc.CreateBitmapBrush(img, None, None) else {
                 return;
@@ -889,7 +1006,11 @@ impl Frame<'_> {
                 fmt,
                 &self.rect(rc),
                 &brush as &ID2D1Brush,
-                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                // **彩色 emoji 要明講**（2026-09-07 加的）。不開的話
+                // Segoe UI Emoji 走的是單色字形，😂 畫出來是黑白線條。
+                // 實測過對一般文字與單色符號（★♥→※）沒有任何影響——
+                // 那些字型本來就沒有彩色字形表。
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
                 DWRITE_MEASURING_MODE_NATURAL,
             );
         }
@@ -932,6 +1053,58 @@ impl Frame<'_> {
             ..rc
         };
         self.fill_round_gradient(pushed, radius, top, bottom, alpha);
+        unsafe {
+            self.r.dc.PopAxisAlignedClip();
+        }
+    }
+
+    /// 只有**下緣**圓角的矩形（上緣是直角）。
+    ///
+    /// 候選清單那塊要用這個：它上面接著預覽列，接縫處要直角才貼得
+    /// 起來，只有視窗底部那兩個角要圓。做法跟
+    /// `fill_top_round_gradient` 對稱——把上緣推到 `rc` 之外，
+    /// 上面那兩個圓角就落在看不見的地方。同樣**一定要先裁切**。
+    pub fn fill_bottom_round_gradient(
+        &self,
+        rc: Rect,
+        radius: f32,
+        top: Color,
+        bottom: Color,
+        alpha: f32,
+    ) {
+        unsafe {
+            self.r.dc.PushAxisAlignedClip(
+                &self.rect(rc),
+                windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED,
+            );
+        }
+        let pushed = Rect {
+            top: rc.top - radius * 2.0,
+            ..rc
+        };
+        self.fill_round_gradient(pushed, radius, top, bottom, alpha);
+        unsafe {
+            self.r.dc.PopAxisAlignedClip();
+        }
+    }
+
+    /// 只有**下緣**圓角的圖片填充。跟 `fill_bottom_round_gradient`
+    /// 同一個手法，給有背景圖時的候選清單用。
+    ///
+    /// **貼圖的縮放與置中照 `rc` 算**（推出去的那一段不算進去），
+    /// 不然圖會被往上擠、看起來跟沒接預覽列時不一樣。
+    pub fn fill_bottom_round_image(&self, rc: Rect, radius: f32, img: &ID2D1Bitmap1, alpha: f32) {
+        unsafe {
+            self.r.dc.PushAxisAlignedClip(
+                &self.rect(rc),
+                windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED,
+            );
+        }
+        let pushed = Rect {
+            top: rc.top - radius * 2.0,
+            ..rc
+        };
+        self.fill_round_image_at(pushed, rc, radius, img, alpha);
         unsafe {
             self.r.dc.PopAxisAlignedClip();
         }

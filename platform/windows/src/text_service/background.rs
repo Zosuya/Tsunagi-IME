@@ -76,6 +76,13 @@ pub(crate) fn open_settings() {
 /// 比對檔案時間戳便宜得多，代價只是**要打下一個字才生效**——
 /// 使用者按了儲存、切回文件打第一個字，中間那零點幾秒感覺不到。
 pub(crate) fn refresh_config(state: &mut State) {
+    // 預載包的位置只算一次——DLL 路徑在行程的一生裡不會變。
+    // 放在節流之前，因為它必須在第一次 `pack::stamp` 之前就設好。
+    static BUNDLED: std::sync::Once = std::sync::Once::new();
+    BUNDLED.call_once(|| {
+        ime_core::pack::set_bundled_dir(crate::registration::bundled_packs_dir());
+    });
+
     // **節流**：每開始組字都問檔案系統太浪費。設定不會一秒改好幾次，
     // 隔一段時間看一次就夠了。
     let now = std::time::Instant::now();
@@ -129,7 +136,11 @@ fn apply_config(state: &mut State) {
         .session
         .set_lock_punct(state.config.behavior.lock_punct);
     // 外觀立刻套用到候選視窗
-    crate::candidate_window::set_theme(crate::theme::Theme::from_config(&state.config));
+    let theme = crate::theme::Theme::from_config(&state.config);
+    // **兩個視窗各有一份主題**（預覽列與候選清單是分開的視窗），
+    // 換的時候兩邊都要換，不然只有一半會變色
+    crate::candidate_window::set_theme(theme.clone());
+    crate::preview_window::set_theme(theme);
 }
 
 /// 把詞庫丟到背景載，`Activate` 就不必等。

@@ -3,5 +3,9 @@ resolver = "2"
 members = [
     "core",
     "platform/windows",
+    # macOS 的 IMK 整合層。Apple 框架的依賴掛在 target 區段，
+    # 在 Windows 上 cargo 不會去拉；程式碼本體也整個 cfg 掉，
+    # 只留一支會印訊息的 main。見開發文件 §2.52。
+    "platform/macos",
     "settings",
 ]

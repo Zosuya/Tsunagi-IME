@@ -16,6 +16,28 @@
 | 中英詞頻<br>`zh_tw_50k.txt`／`en_50k.txt` | [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords) | MIT |
 | 通用詞頻表 | [國家教育研究院](https://coct.naer.edu.tw/) | 開放資料（可改作、可再授權，須標示出處） |
 | 常用字頻表 | [教育部](https://language.moe.gov.tw/) | CC BY-ND 3.0 TW |
+| 中文字級 bigram<br>`zh_bigram.gram` | [RIME 八股文](https://github.com/lotem/rime-octagram-data)（`zh-hant-t-essay-bgc.gram`） | LGPL-3.0 |
+
+## 台語擴充包
+
+`packs/台語.txt` 是**安裝時可勾選的元件**（沒勾就不會裝）。它跟上面的詞庫
+不同——**原始資料的內容直接在裡面**，不是編譯後的二進位檔。
+
+| 資料 | 來源 | 授權 |
+|---|---|---|
+| 華語↔台語對照<br>`packs/台語.txt` | [ChhoeTaigi 找台語](https://github.com/ChhoeTaigi/ChhoeTaigiDatabase)｜2002+ 台文華文線頂辭典<br>基礎資料：鄭良偉 教授；增補校訂：楊允言 教授與眾義工 | CC BY-SA 4.0 |
+
+CC BY-SA 4.0 是「姓名標示-相同方式分享」，兩個條件都要照做：
+
+- **姓名標示**：上表的作者，以及包檔頭那幾行——**那是授權義務的一部分，
+  不是說明文字，重產包或再散布時不可以拿掉**
+- **相同方式分享**：這份包本身依 CC BY-SA 4.0 散布。**包的授權是資料的
+  授權，跟程式的 GPL-3.0 各自獨立**，兩者相容
+
+建包過程（挑欄位、轉注音、篩選、重排）見 [tools/取台語資料.md](tools/取台語資料.md)。
+**教育部台語辭典不能用**——CC BY-ND 禁止改作，而建包的每一步都是改作。
+
+## 詞庫的其他說明
 
 **教育部字頻的說明**：該授權禁止散布改作版本。本專案**不散布這份資料**
 ——它只在開發階段參與 `dict_zh.bin` 的排序計算，原表不在安裝包裡，也
@@ -48,6 +70,10 @@
 
 - **程式碼**（`core/`、`platform/`、`settings/`）：GPL-3.0-or-later，見 [LICENSE](LICENSE)
 - **詞庫二進位檔**：依上表各原始來源的授權
+
+LGPL-3 與本專案的 GPL-3 相容（GPL 可以吸收 LGPL）。八股文的檔案
+**原樣使用、沒有修改**——`為`／`線` 這些字形差異在查詢時用共存處理
+（見 `core/src/lm.rs`），不動原始資料。
 
 程式碼與資料分開標示是刻意的——把資料檔一併宣告成 GPL-3 等於替它加上
 原始授權沒有給的權利，那個宣告站不住。

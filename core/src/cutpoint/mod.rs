@@ -69,6 +69,36 @@ pub const SEPARATOR: &str = " ";
 /// 裡有 30 句是這樣被誤判的（86.8% vs 93.6%）。
 ///
 /// 標記段（標點、分隔符）一律自成一段，不參與合併。
+/// 跟 `normalize` 一樣，但**前 `keep` 段原樣保留、不參與合併**。
+///
+/// # 為什麼需要
+///
+/// 段選單的「選了就凍」讓使用者定案某幾段。那些段**不能再被合併**
+/// ——他明講了 `,` 自成一段，`normalize` 卻因為後面的 `data` 也是
+/// 英文而把兩者黏成 `,data`，使用者就再也沒機會單獨選 `data`。
+///
+/// 實測回報「走到 data daijoubu 切不出來」就是這個：定案逗號之後
+/// 下一段直接變成 `,data`。
+pub fn normalize_after(segs: &[Segment], keep: usize) -> Vec<Segment> {
+    if keep == 0 {
+        return normalize(segs);
+    }
+    let mut out: Vec<Segment> = segs[..keep.min(segs.len())].to_vec();
+    for s in segs.iter().skip(keep) {
+        // **只合併 `keep` 以後的段**，而且不能往回黏到定案區
+        let can_merge = out.len() > keep
+            && out
+                .last()
+                .is_some_and(|l| l.lang == s.lang && !l.is_mark && !s.is_mark);
+        if can_merge {
+            out.last_mut().unwrap().keys.push_str(&s.keys);
+        } else {
+            out.push(s.clone());
+        }
+    }
+    out
+}
+
 pub fn normalize(segs: &[Segment]) -> Vec<Segment> {
     let mut out: Vec<Segment> = Vec::new();
     for s in segs {

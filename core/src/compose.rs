@@ -104,12 +104,71 @@ pub fn compose_with_bounds(
 ///
 /// # 鎖定語言時標點跟著鎖走
 ///
-/// 自動模式下標點看**前面那一段**的語言，但句首沒有前一段——原本一律
-/// 給半形（「打程式碼時不會突然冒出全形符號」，那個預設是對的）。
+/// 自動模式下標點看**這句話用什麼文字寫的**，句首沒有中日文可看時
+/// 一律給半形（「打程式碼時不會突然冒出全形符號」，那個預設是對的）。
 ///
 /// 使用者鎖定了語言之後就有依據了：鎖注音／日文時句首打句點應該是
 /// `。` 而不是 `.`。鎖英文則維持半形——那個模式的語意本來就是
 /// 「等同關掉輸入法」。
+///
+/// # 標點的全半形看整句，不看緊鄰的那一段
+///
+/// 全形標點屬於**句子的書寫系統**，不屬於相鄰的詞。中文文章裡夾用
+/// 英文詞（「用 server 傳，很快」）時逗號仍然是全形——決定它的是
+/// 這句話用中文寫，而不是它左邊剛好是英文。
+///
+/// 所以主導語言掃的是整句：句子裡出現過中日文就用該語言的標點，
+/// 英文段沒有發言權（英文沒有自己的全形標點體系）。純英文的句子
+/// 整句都掃不到中日文，維持半形，打程式碼的情境行為不變。
+///
+/// 中日並存時**先出現的那個**說了算——句子的書寫系統由它開頭定調，
+/// 後面夾用的另一種語言是客人。
+/// 這串段落**用什麼文字寫的**？決定標點要用哪一國的全形寫法。
+///
+/// # 為什麼看整句而不是看標點左邊那一段
+///
+/// 全形標點屬於句子的書寫系統，不屬於相鄰的詞。中文文章裡夾用英文詞
+/// （「用 server 傳，很快」）時逗號仍然是全形——決定它的是這句話用
+/// 中文寫，而不是它左邊剛好是英文。英文段因此沒有發言權（英文沒有
+/// 自己的全形標點體系）；純英文的句子整句掃不到中日文，回 `None`
+/// 維持半形，打程式碼的情境行為不變。
+///
+/// # 中日並存時看誰的段多
+///
+/// 中日只有逗號不同（`，` 對 `、`）。混語言長句即使開頭是日文，主體
+/// 是中文時仍該用中文逗號——決定書寫系統的是**整句的重心**，不是誰
+/// 先出現。平手時給中文：那是使用者更可能在寫的東西。
+///
+/// # `\名字\` 裡面的段不算
+///
+/// 符號名稱是查表的鍵，不是使用者寫下的句子內容。`e:\ㄒㄧㄥ\`（e:★）
+/// 的「星」只是拿來查符號的，那句話本身是英文，冒號該維持半形。
+fn dominant_cjk<'a>(segs: impl Iterator<Item = (bool, &'a String, Language)>) -> Option<Language> {
+    let (mut zh, mut ja, mut in_symbol) = (0usize, 0usize, false);
+    for (is_mark, keys, lang) in segs {
+        if is_mark {
+            if keys == "\\" {
+                in_symbol = !in_symbol;
+            }
+            continue;
+        }
+        if in_symbol {
+            continue;
+        }
+        match lang {
+            Language::Bopomofo => zh += 1,
+            Language::Romaji => ja += 1,
+            Language::English => {}
+        }
+    }
+    match (zh, ja) {
+        (0, 0) => None,
+        // 平手給中文，理由見上面
+        (z, j) if z >= j => Some(Language::Bopomofo),
+        _ => Some(Language::Romaji),
+    }
+}
+
 pub fn compose_all(
     segs: &[Segment],
     width: crate::width::Width,
@@ -117,10 +176,18 @@ pub fn compose_all(
     lock: Option<Language>,
 ) -> Vec<Slot> {
     let mut out = Vec::new();
-    // 前一段是什麼語言？標點自己不算——連續兩個標點時要看更前面
-    let mut prev_lang: Option<Language> = None;
-    for s in segs {
+    // 這個標點該用什麼文字的寫法？理由見 `dominant_cjk`。
+    //
+    // **只看它前面的段，不看後面**——往後看的話，句子後半打出中文
+    // 會回頭把前面已經上畫面的半形標點改成全形，使用者會看到游標
+    // 很遠的地方字在跳。已經定案的標點不該再變，所以每個標點用
+    // 「打到它為止」的統計決定，後面再打什麼都不動它。
+    //
+    // 代價是句首的標點（`hello，電車`）拿不到脈絡、維持半形——那要
+    // 往前看才救得到，而回頭改寫的代價更高。
+    for (i, s) in segs.iter().enumerate() {
         if s.is_mark {
+            let prev_lang = dominant_cjk(segs[..i].iter().map(|x| (x.is_mark, &x.keys, x.lang)));
             // **鎖定的語言優先**：鎖住的時候每一段本來就都是那個語言，
             // 而它還多涵蓋了「句首、前面沒東西」的情況
             let lang = lock.or(prev_lang);
@@ -129,6 +196,20 @@ pub fn compose_all(
                 .chars()
                 .map(|c| crate::width::convert(c, width, lang))
                 .collect();
+            // **`;//` 的分號當成冒號**——那是漏按 Shift 打錯的網址。
+            //
+            // `:` 與 `;` 是同一個實體鍵（差在 Shift），而 `https://`
+            // 是極高頻的輸入，漏按很自然。`;//` 這個組合在中文、日文、
+            // 英文、程式碼裡都沒有意義，所以**不是歧義，是純粹的打錯**
+            // ——沒有歧義就不該讓使用者再選一次去確認雙方都知道的事。
+            //
+            // 判準要求後面**兩格都是 `/`**：`;/` 兩個字元還可能是別的
+            // 東西（分號後面接路徑），兩條斜線才是網址的樣子。
+            let converted = if s.keys == ";" && next_two_slashes(segs, i) {
+                ":".to_string()
+            } else {
+                converted
+            };
             // **有候選才開放選字**。沒有變體的符號（`@`、`#`）維持
             // 不可選——那些格子按方向鍵移過去卻叫不出東西只是干擾。
             let variants = crate::width::variants(&s.keys, lang);
@@ -157,7 +238,6 @@ pub fn compose_all(
             });
             continue;
         }
-        prev_lang = Some(s.lang);
         match s.lang {
             Language::Bopomofo => {
                 // 注音再切成音節，每個音節一格
@@ -202,11 +282,31 @@ pub fn compose_all(
                     }
                     _ => crate::romaji::convert::convert(&kana),
                 };
-                if words.len() <= 1 {
+                // **整段就是一個動詞的活用形時，不該被切成詞**。
+                //
+                // mozc 只收辭書形，所以活用形查不到，Viterbi 只好硬湊：
+                // `よんだ` 被切成「4」＋「だ」、`いそいでいる` 切成
+                // 「急いで」＋「イル」。那不是分詞問題——整串本來就是
+                // 一個詞（読んだ／急いでいる），只是詞典裡沒有。
+                //
+                // `inflect::漢字表記` 組得出來就代表它是活用形，直接用
+                // 組出來的結果，不進分詞。
+                let 活用 = crate::romaji::inflect::漢字表記(&s.keys);
+                if let Some(w) = 活用 {
+                    out.push(Slot {
+                        keys: s.keys.clone(),
+                        text: w,
+                        lang: Language::Romaji,
+                        selectable: true,
+                        is_mark: false,
+                        cands: None,
+                        picked: false,
+                    });
+                } else if words.len() <= 1 {
                     // 只有一個詞（或轉不出來）就維持原本的一格
                     out.push(Slot {
                         keys: s.keys.clone(),
-                        text: best_japanese(&kana),
+                        text: best_japanese(&s.keys, &kana),
                         lang: Language::Romaji,
                         selectable: true,
                         is_mark: false,
@@ -286,23 +386,53 @@ pub fn compose_all(
             }
         }
     }
+    // 用詞庫修一次——單看每個字的字頻常常是錯的。
+    //
+    // **一定要排在 `merge_symbols` 之前**：符號名字比對的是「組出來的
+    // 文字」，而詞庫修正之前每一格還是逐字的字頻第一名。`\音樂\` 那時
+    // 是「因月」（ㄧㄣ 的第一名是「因」、ㄩㄝˋ 是「月」），查不到符號，
+    // 而畫面上早已顯示成「音樂」——症狀是「字明明對卻不會變成符號」。
+    // 它只碰連續的注音格，跟下面兩個合併的對象不重疊，提前是安全的。
+    let by_word = apply_word_context(&mut out);
+    // 再用中文字級 bigram 看前後文重算一次。**一定要排在
+    // `apply_word_context` 之後**——詞層是強證據（查得到的詞就是詞），
+    // 語言模型是統計傾向，讓統計覆蓋詞層會把 `這個`、`需求` 這種本來
+    // 就對的字改壞。這裡只處理詞層管不到的位置（詞庫沒收的組合、
+    // 單字連著單字）。
+    apply_lm(&mut out, &by_word);
+    // 數字後面的量詞。**排在語言模型之後**——「數字接量詞」是中文的
+    // 結構而不是統計傾向，而且 bigram 在這個位置沒有資料可用（數字
+    // 不是漢字）。
+    apply_number_units(&mut out);
     // `\名字\` 換成符號。**要在標點合併之前**——連續的 `\` 不該先被
     // 當成標點組合吃掉
     merge_symbols(&mut out);
     // 連續的標點可能是一個組合（`...` → `…`）
     merge_mark_runs(&mut out, lock);
-    // 組好之後用詞庫修一次——單看每個字的字頻常常是錯的
-    apply_word_context(&mut out);
     out
+}
+
+/// 後面緊接著兩個 `/` 嗎？——`;//` 判定用，見呼叫處。
+fn next_two_slashes(segs: &[Segment], i: usize) -> bool {
+    segs.get(i + 1).is_some_and(|s| s.keys == "/") && segs.get(i + 2).is_some_and(|s| s.keys == "/")
 }
 
 /// 把 `\名字\` 換成符號。
 ///
-/// # 為什麼名字用「文字」不用「按鍵」
+/// # 名字查兩次：先文字、再按鍵
 ///
-/// 三種語言天然共用同一份表——注音組出的「星」與日文組出的「星」是
-/// 同一個字串，英文的 `star` 是另一個名字指向同一組符號。用按鍵的話
-/// 中文會變成 `\vu/␣\` 那種沒人記得住的東西。
+/// **中文只能用文字**——按鍵是 `\vu/␣\` 那種沒人記得住的東西，所以
+/// 注音組出的「星」就是名字本身。
+///
+/// **日文只能用按鍵**。羅馬字要先過語言判斷、再過整句轉換，組出來的
+/// 東西不可預期：`tougou` 變成漢字「統合」、`sekibun` 前半被判成中文
+/// 成了「席bun」、`mugen` 尾巴的 `n` 遇到收尾的 `\` 還沒收成「ん」。
+/// 2026-09-05 實測 29 個日文名字有 12 個這樣叫不出來，**連按 Tab 都
+/// 沒有那個選項**——切法分支裡根本沒生出「整段當日文」那條。
+///
+/// 按鍵原文不經過任何判斷，打什麼就是什麼，所以日文名字在表裡列羅馬字
+/// （`積分,sekibun,integral`）。英文名字兩條路都會中（它本來就是
+/// passthrough），順序上先文字後按鍵，中文那條的行為完全不變。
 ///
 /// # 收尾的 `\` 一打完就換掉
 ///
@@ -336,7 +466,12 @@ fn merge_symbols(slots: &mut Vec<Slot>) {
             continue;
         }
         let name: String = slots[i + 1..end].iter().map(|s| s.text.as_str()).collect();
-        let syms = crate::symbol::lookup(&name);
+        let mut syms = crate::symbol::lookup(&name);
+        // 文字查不到就用**按鍵原文**再查一次，日文名字靠這條（見上面的說明）
+        if syms.is_empty() {
+            let typed: String = slots[i + 1..end].iter().map(|s| s.keys.as_str()).collect();
+            syms = crate::symbol::lookup(&typed);
+        }
         if syms.is_empty() {
             // 查不到就當普通的反斜線。**從收尾那個重新找起**——
             // `\a\b\` 的第二個 `\` 可能是下一組的開頭
@@ -382,11 +517,8 @@ fn merge_symbols(slots: &mut Vec<Slot>) {
 /// 那是 `check_rewrite`、倒退鍵刪格、學習都靠的性質。
 fn merge_mark_runs(slots: &mut Vec<Slot>, lock: Option<Language>) {
     let mut i = 0;
-    // 前面那一格是什麼語言——判準跟標點的全半形轉換一致
-    let mut prev_lang: Option<Language> = None;
     while i < slots.len() {
         if !slots[i].is_mark {
-            prev_lang = Some(slots[i].lang);
             i += 1;
             continue;
         }
@@ -395,6 +527,10 @@ fn merge_mark_runs(slots: &mut Vec<Slot>, lock: Option<Language>) {
         // `hello...` 不該變成 `hello…`——那跟「打程式碼時不會突然冒出
         // 全形符號」是同一條原則，而且英文的刪節號本來就常寫三個點。
         // 測資的 `hello|.|.|.` 期望的正是三個點。
+        //
+        // 判準跟標點的全半形轉換共用（見 `dominant_cjk`），同樣**只看
+        // 前面**——已經合併定案的標點不該因為後面又打了字而拆開。
+        let prev_lang = dominant_cjk(slots[..i].iter().map(|s| (s.is_mark, &s.keys, s.lang)));
         let lang = lock.or(prev_lang);
         if !matches!(lang, Some(Language::Bopomofo | Language::Romaji)) {
             i += 1;
@@ -453,8 +589,100 @@ fn best_char(syllable: &str) -> String {
 ///
 /// **從長到短**是因為長詞的資訊量大：`5k4ek7` 是「這個」而不是
 /// 「這」＋「個」各自的第一名。
-fn apply_word_context(slots: &mut [Slot]) {
+/// `lm_pick_word` 裡「靜態詞頻名次」的權重。
+///
+/// 掃過 0 到 10：0～0.5 是 747、1 是 748、2 是 749、**2.5～3.5 是 750**、
+/// 4 以上回落。取穩定區中間。
+///
+/// 太小的話**沒有左鄰的詞**會被詞內部那一對 bigram 帶走——`剛才`→`鋼材`、
+/// `小明`→`曉明`、`計畫`→`計劃`，實測弄壞 5 句全是這型（單獨出現的詞
+/// 只有一對字可看，那一對分不出高下）。太大則語言模型永遠推翻不了詞頻，
+/// 等於沒接。
+///
+/// 兩端各有一個失敗模式。太小的話**沒有左鄰的詞**會被詞內部那一對
+/// bigram 帶走——`剛才`→`鋼材`、`小明`→`曉明`、`計畫`→`計劃`，實測
+/// 弄壞 5 句全是這型（單獨出現的詞只有一對字可看，而那一對分不出高下）。
+/// 太大則語言模型永遠推翻不了詞頻，等於沒接。
+const LM_PICK_W_RANK: f32 = 3.0;
+
+/// 同讀音有好幾個詞時，用語言模型挑一個。
+///
+/// # 為什麼需要它
+///
+/// 詞層原本取 `words_for` 的第一個，而那個順序是**靜態詞頻**排的
+/// ——它不知道這句話在講什麼。`救回來`／`就回來` 讀音完全相同，詞頻
+/// 永遠讓「救回來」贏，於是「他今天就回來」打不出來。實測 790 句測資
+/// 裡有 201 個位置存在這種競爭，**16 次挑錯**。
+///
+/// 這些候選**全部都是合法的詞**（`記得`／`寄的`、`曉得`／`小的`、
+/// `深得`／`深的`），不是詞庫收錯——差別只在上下文。詞頻分不開，
+/// 但「我不曉得」與「小的東西」前後文完全不同，bigram 分得出來。
+///
+/// # 分數怎麼算
+///
+/// 兩個部分相加：
+///
+/// - **詞內部的接續**：詞裡每一對相鄰的字算一次 bigram。`就回來` 的
+///   `就回`＋`回來` 對上 `救回來` 的 `救回`＋`回來`——差別在第一對。
+/// - **跟左鄰的接續**：詞的第一個字接前一格最後一個字。`他今天|就回來`
+///   的 `天就` 對 `天救`，這一項常常是決定性的。
+///
+/// 不看右鄰是刻意的：**詞層是從長到短掃的**，右邊那格還沒定案
+/// （可能被更長的詞吃掉），拿未定的東西當證據會不穩。左鄰已經處理完
+/// 所以可靠。
+///
+/// # 沒有模型或分數相同時
+///
+/// 回 `None`，呼叫端退回原本的「取第一個」。這是刻意的保守——語言模型
+/// 是加分項，它沒意見的時候不該改變既有行為。
+fn lm_pick_word<'a>(
+    words: &'a [std::borrow::Cow<'static, str>],
+    left: Option<char>,
+) -> Option<&'a str> {
+    let lm = crate::lm::get()?;
+    if words.len() < 2 {
+        return None;
+    }
+    let score_of = |rank: usize, w: &str| -> f32 {
+        // **靜態詞頻的名次先驗**。`words_for` 已經依詞頻排好，那份順序
+        // 大多數時候是對的——語言模型只該在證據夠強時推翻它。
+        //
+        // 少了這一項會壞在**沒有左鄰的詞**上：`剛才`／`鋼材`、`小明`／
+        // `曉明`、`計畫`／`計劃` 單獨出現時只剩詞內部一對 bigram 可看，
+        // 而那一對分不出高下（甚至指向錯的）。實測弄壞 5 句全是這型。
+        let mut s = -LM_PICK_W_RANK * rank as f32;
+        let cs: Vec<char> = w.chars().collect();
+        // 詞內部：每一對相鄰的字
+        for pair in cs.windows(2) {
+            if is_han(pair[0]) && is_han(pair[1]) {
+                s += lm.score(pair[0], pair[1]).unwrap_or(LM_MISS);
+            }
+        }
+        // 跟左鄰的接續
+        if let (Some(l), Some(&f)) = (left, cs.first()) {
+            if is_han(l) && is_han(f) {
+                s += lm.score(l, f).unwrap_or(LM_MISS);
+            }
+        }
+        s
+    };
+    let mut best: Option<(&str, f32)> = None;
+    for (rank, w) in words.iter().enumerate() {
+        let s = score_of(rank, w);
+        match best {
+            Some((_, bs)) if s <= bs => {}
+            _ => best = Some((w.as_ref(), s)),
+        }
+    }
+    best.map(|(w, _)| w)
+}
+
+fn apply_word_context(slots: &mut [Slot]) -> Vec<(usize, usize)> {
     let n = slots.len();
+    // 哪些格是詞層決定的？回報給 `apply_lm`——**詞是強證據**（查得到
+    // 的詞就是那個詞），統計傾向不該覆蓋它。實測沒有這道保護時
+    // 「各位」會被 bigram 改成「個為」。
+    let mut by_word = vec![(0usize, 0usize); n];
     let mut i = 0;
     while i < n {
         if !slots[i].selectable || slots[i].lang != Language::Bopomofo {
@@ -473,20 +701,35 @@ fn apply_word_context(slots: &mut [Slot]) {
             // 那一個。「城市」與「程式」讀音相同，選了「程」就該挑到
             // 「程式」，「市」才會跟著變「式」——挑不到相容的就用第一個
             // （預設值），行為跟只有一個詞的時候一樣。
-            let chosen = crate::dict::words_for(&keys).into_iter().find(|w| {
+            let all = crate::dict::words_for(&keys);
+            // **同讀音有幾個詞**？只有一個時詞層說了算（那是強證據）；
+            // 有競爭者時它只是「第一個」，該讓語言模型從中挑
+            // ——`救回來`／`就回來` 同鍵，詞層取第一個永遠是「救回來」。
+            let n_words = all.len();
+            // 字數要跟格數對得上（才填得回去），而且不能跟使用者
+            // 手動選過的字衝突
+            let fits = |w: &str| {
                 let cs: Vec<char> = w.chars().collect();
-                // 詞的字數要跟格數對得上才能一格一格填回去
                 cs.len() == stop - i
                     && (i..stop).all(|j| {
                         !slots[j].picked || slots[j].text.chars().eq(std::iter::once(cs[j - i]))
                     })
-            });
+            };
+            let usable: Vec<_> = all.into_iter().filter(|w| fits(w)).collect();
+            // **同讀音有好幾個詞時讓語言模型挑**，而不是取靜態詞頻的
+            // 第一個——`救回來`／`就回來` 讀音相同，詞頻永遠讓前者贏。
+            // 挑不出來（沒有模型、或分數相同）就退回第一個。
+            let left = i.checked_sub(1).and_then(|j| slots[j].text.chars().last());
+            let chosen = lm_pick_word(&usable, left)
+                .map(|w| w.to_string())
+                .or_else(|| usable.first().map(|w| w.to_string()));
             if let Some(word) = chosen {
                 for (k, c) in word.chars().enumerate() {
                     // **手動選過的字不覆蓋**——使用者已經表態了
                     if !slots[i + k].picked {
                         slots[i + k].text = c.to_string();
                     }
+                    by_word[i + k] = (word.chars().count(), n_words);
                 }
                 i = stop;
                 matched = true;
@@ -497,6 +740,317 @@ fn apply_word_context(slots: &mut [Slot]) {
             i += 1;
         }
     }
+    by_word
+}
+
+/// **維特比的寬度**：每一格只考慮前幾個候選。
+///
+/// 這是效能守門員，不是品質取捨。不限制的話最壞一句要 49,275 次字對
+/// 查詢（`昨天的會議記錄已經寄給大家`），Rust 就算比 Python 快 30 倍
+/// 也要 14ms，而按鍵預算只有 16ms、現況已經用掉 11.2ms。
+///
+/// **限到 5 個之後最壞降到 320 次（1/154），命中一句都沒少**（790 句
+/// 實測 754 對 754）。很合理——正解幾乎都在前幾名，第 20 個同音字不
+/// 可能是答案。3 個也是 754，留 5 是給罕見情況一點餘裕。
+const LM_WIDTH: usize = 5;
+
+/// bigram 分數的權重。
+///
+/// 掃描過 0.25 到 3.0，0.5 到 1.0 之間都落在 750 到 754，**不敏感**。
+/// 太大會壓過詞層修正的結果，太小則吃不到收益。
+const LM_W_BIGRAM: f32 = 0.5;
+
+/// 候選名次的權重：清單裡越後面的字，先驗越差。
+///
+/// 候選本來就依「字頻 × 讀音佔比」排好，這個權重保留那份排序的話語權
+/// ——語言模型只有在證據夠強時才該推翻它。
+const LM_W_RANK: f32 = 1.0;
+
+/// **台灣常用字先驗**：我們自己的字頻（教育部字頻表）的權重。
+///
+/// 這一條是「常用字優先」——語料是簡體轉繁體來的，對台灣用語的覆蓋偏弱，
+/// 而教育部字頻正好代表台灣的用字習慣。實測它擋掉了 `剛纔`、`界面`
+/// 這類偏好，也讓資料稀疏時安全地退回我們自己的排序。
+const LM_W_OWN: f32 = 0.1;
+
+/// 兩個字在模型裡查不到時的罰分。
+///
+/// 不能給 0——那等於「查不到」跟「關聯強度剛好是 0」沒有差別。給負值
+/// 代表「沒有證據支持這兩個字連在一起」。掃描過 0 到 -2，差別很小。
+const LM_MISS: f32 = -1.0;
+
+/// 用**中文字級 bigram** 把整句的選字重算一次。
+///
+/// # 為什麼是整句，不是逐格挑
+///
+/// §2.53.5 量到「只看左鄰 77%、只看右鄰 71%、兩邊都看 85%」——
+/// `將來再說` 的線索在右邊（`再說`），逐格往前看永遠分不開。而要
+/// 「看兩邊」就必須在整句上找總分最高的路徑，因為每一格的最佳選擇
+/// 取決於鄰居，鄰居又取決於它。這跟日文整句轉換是同一個結構（§2.23）。
+///
+/// # 只碰「可選字的中文單字格」
+///
+/// 英文段、日文段、標點、符號格全部固定不動——它們的正確性由別的機制
+/// 決定（日文有自己的 Viterbi、英文是原文照抄），中文 bigram 對它們
+/// 沒有話語權。**手動選過的字（`picked`）也不動**，跟
+/// `apply_word_context` 同一條原則：使用者已經表態了。
+///
+/// # 分數的組成
+///
+/// 每一格的分數是「名次先驗 ＋ 台灣字頻先驗」，格與格之間再加
+/// 「bigram 關聯強度」。四個權重的來歷各見它們自己的常數說明。
+/// 語言模型能不能動這一格？`(詞長, 同讀音競爭者數)` 由
+/// `apply_word_context` 回報，`(0, 0)` 代表詞層沒碰過。
+///
+/// # 為什麼詞層碰過就一律不動
+///
+/// **詞是強證據、統計是傾向**。掃描過四種放行策略，全部拿詞層的錯誤
+/// 換語言模型的收益，換不划算：
+///
+/// | 策略 | 文字命中 | `各位` |
+/// |---|---|---|
+/// | **全保護（這個）** | **748** | **✓** |
+/// | 有競爭者就放行 | 751 | ✗ 變「個為」 |
+/// | 長詞且有競爭者才放行 | 749 | ✓ |
+/// | 完全不保護 | 754 | ✗ |
+///
+/// 完全不保護多的那 6 句幾乎都是 §2.45 那個「同讀音存得下多個詞、
+/// 詞層取第一個」的延伸（`救回來`／`就回來` 同鍵），**那是詞層自己
+/// 該修的**——讓統計去繞過它會連 `各位` 這種詞層明明給對的也一起賠掉。
+///
+/// `個為` 的 bigram 是 12.6、`各位` 只有 7.7，而且那不是資料錯誤
+/// ——「一個為了…」在語料裡真的比「各位」常見。單字 bigram 分不出
+/// 「這兩個字是一個詞」與「這兩個字常常相鄰」，那正是詞層存在的理由。
+fn lm_movable((len, _n): (usize, usize)) -> bool {
+    len == 0
+}
+
+/// **數字後面的量詞／單位**。
+///
+/// # 為什麼需要這張表
+///
+/// 數字段跟中文之間沒有語言模型可用——bigram 的鍵是漢字對，而 `3` 不是
+/// 漢字，`3` 與 `個` 之間沒有任何統計資料。於是「數字＋量詞」全部退回
+/// 純字頻決定，而同音的非量詞字常常字頻更高：
+///
+/// ```text
+/// 3個bug  → 3各bug     各 比 個 常用
+/// 100元   → 100原      原 比 元 常用
+/// 第2季   → 第2記      記 比 季 常用
+/// 第3章   → 第3張      張 比 章 常用
+/// ```
+///
+/// # 判準：數字的右鄰是單一個中文字時，優先挑量詞
+///
+/// 測資裡 78 個數字段有 **70 個右鄰是單一個中文字**，而那 16 個選錯的
+/// 正解**全部**在這張表裡（涵蓋 16/16、漏 0）。正解幾乎都排第 2～4 名，
+/// 不是排在很後面——這是「加一條判準就拿得到」的距離。
+///
+/// **只在右鄰是單字時生效**。`5|分鐘`、`50|公斤` 那種多字的右鄰本來就
+/// 由詞層決定（`分鐘` 是詞），不需要也不該被這條插手。
+const NUMBER_UNITS: &[char] = &[
+    // 通用量詞
+    '個', '位', '名', '件', '份', '樣', '種', '類', '組', '批', '對', '雙', // 時間
+    '年', '月', '日', '天', '時', '點', '分', '秒', '週', '季', '期', '屆', '次', '回',
+    // 貨幣與度量
+    '元', '塊', '角', '斤', '兩', '克', '噸', '尺', '寸', '里', '坪', '畝',
+    // 出版與編號
+    '版', '章', '節', '頁', '段', '句', '字', '行', '列', '課', '篇', '卷', '冊', '本', '號',
+    // 容器與器物
+    '杯', '碗', '盤', '碟', '瓶', '罐', '包', '盒', '箱', '袋', '張', '片', '塊',
+    // 建築與空間
+    '層', '樓', '間', '棟', '戶', '室', '排', '格', '欄', // 人與動物
+    '人', '口', '隻', '頭', '匹', '尾', '條', // 交通與器材
+    '台', '輛', '架', '艘', '部', '具', '支', '把', '面', '塊', // 折扣與比例
+    '折', '成', '倍', '級', '等', '階',
+];
+
+/// **序數（`第 N ○`）後面的單位**，比一般量詞優先。
+///
+/// `第3章` 的 `章` 與 `張` 同音，而 `張`（一張紙）也是量詞、字頻更高，
+/// 所以一般量詞表會先挑到它。序數的脈絡下該是章節單位。
+const ORDINAL_UNITS: &[char] = &[
+    '章', '節', '課', '篇', '卷', '冊', '版', '題', '頁', '段', '句', '行', '列', '名', '位', '屆',
+    '期', '季', '級', '等', '階', '層', '樓', '號', '次', '回', '年', '月', '日', '天', '週', '個',
+    '件', '組', '批',
+];
+
+/// 數字後面那一格，優先挑量詞。
+///
+/// # 為什麼是獨立的一條，不併進語言模型
+///
+/// `apply_lm` 做的是「整句找最佳路徑」，而它的證據是**漢字對的 bigram**
+/// ——數字不是漢字，那條路徑上根本沒有分數可算。這裡補的是語言模型
+/// 涵蓋不到的那個位置。
+///
+/// # 為什麼放在 `apply_lm` 之後
+///
+/// 這一條的證據比統計強：「數字後面接量詞」是中文的結構，不是傾向。
+/// 讓它有最後的話語權。
+///
+/// **手動選過的字（`picked`）不動**，跟其他所有改字的地方同一條原則。
+fn apply_number_units(slots: &mut [Slot]) {
+    for i in 1..slots.len() {
+        // 前一格是純數字嗎？
+        let prev_is_number =
+            !slots[i - 1].text.is_empty() && slots[i - 1].text.chars().all(|c| c.is_ascii_digit());
+        if !prev_is_number {
+            continue;
+        }
+        let s = &slots[i];
+        // 只碰「可選字、注音、單一個字、沒被手動選過」的格。
+        //
+        // **日文格不管，試過了**：`5sai`（5歳）、`4kai`（4階）的量詞確實
+        // 在候選裡（`歳` 第 5、`階` 第 7），但日文的量詞多義比中文嚴重
+        // ——`回` 也是量詞而且排第一，`側`／`代` 同理。中文能用「第」的
+        // 脈絡把 `張`／`章` 分開，日文沒有對應的線索。實測放進來是
+        // 1139 → 1138，救 `2台` 一句卻弄壞 `1番`。
+        if !s.selectable || s.lang != Language::Bopomofo || s.picked || s.is_mark {
+            continue;
+        }
+        if s.text.chars().count() != 1 {
+            continue;
+        }
+        // **序數的脈絡優先**：`第 N ○` 的 ○ 是章節單位，不是一般量詞。
+        //
+        // 沒有這一條的話 `第3章` 會變 `第3張`——`張` 也在量詞表裡（一張紙）
+        // 而且字頻更高，先命中。`第4題` 對 `第4提` 同理。
+        let ordinal = i >= 2 && slots[i - 2].text == "第";
+        let table: &[char] = if ordinal { ORDINAL_UNITS } else { NUMBER_UNITS };
+        // 目前顯示的已經是（這個脈絡下的）量詞就不必動。
+        //
+        // **這道早退要在 `table` 決定之後**——放前面的話 `第3張` 會因為
+        // `張` 在一般量詞表裡（一張紙）就直接跳過，序數表根本沒機會發言。
+        if s.text.chars().next().is_some_and(|c| table.contains(&c)) {
+            continue;
+        }
+        let pick = candidates_for(s)
+            .into_iter()
+            .find(|cand| {
+                let mut it = cand.chars();
+                matches!((it.next(), it.next()), (Some(c), None) if table.contains(&c))
+            })
+            // 序數表沒中就退回一般量詞表
+            .or_else(|| {
+                if !ordinal {
+                    return None;
+                }
+                candidates_for(s).into_iter().find(|cand| {
+                    let mut it = cand.chars();
+                    matches!((it.next(), it.next()), (Some(c), None) if NUMBER_UNITS.contains(&c))
+                })
+            });
+        if let Some(p) = pick {
+            slots[i].text = p;
+        }
+    }
+}
+
+fn apply_lm(slots: &mut [Slot], by_word: &[(usize, usize)]) {
+    let Some(lm) = crate::lm::get() else { return };
+
+    // 每一格的候選集合。不可動的格子只有一個選項（現在的字）
+    let mut opts: Vec<Vec<char>> = Vec::with_capacity(slots.len());
+    let mut any = false;
+    for (idx, s) in slots.iter().enumerate() {
+        // 只動「可選字、注音、單一個中文字、沒被手動選過」的格
+        let movable = s.selectable
+            && s.lang == Language::Bopomofo
+            && !s.picked
+            && !s.is_mark
+            && lm_movable(by_word.get(idx).copied().unwrap_or((0, 0)))
+            && s.text.chars().count() == 1;
+        let cur: Vec<char> = s.text.chars().take(1).collect();
+        if !movable {
+            opts.push(cur);
+            continue;
+        }
+        let mut v: Vec<char> = Vec::with_capacity(LM_WIDTH);
+        for cand in candidates_for(s) {
+            let mut it = cand.chars();
+            let (Some(c), None) = (it.next(), it.next()) else {
+                continue;
+            };
+            if !is_han(c) || v.contains(&c) {
+                continue;
+            }
+            v.push(c);
+            if v.len() >= LM_WIDTH {
+                break;
+            }
+        }
+        if v.len() > 1 {
+            any = true;
+        }
+        opts.push(if v.is_empty() { cur } else { v });
+    }
+    // 沒有任何一格有得選就不必跑——中英日混打時這是常態
+    if !any {
+        return;
+    }
+    // **有格子完全沒候選就不能跑維特比**：那一列的 `score` 是空的，
+    // 回溯時 `score[n-1][best]` 直接越界 panic。
+    //
+    // 段選單踩到過：使用者定案的段送進來時，某一格可能查不到任何字
+    // （非法組合、或詞庫還沒載完）。這是 `compose` 本來就有的邊界情況，
+    // **不管誰呼叫都不該 panic**，所以修在這裡而不是呼叫端。
+    if opts.iter().any(|v| v.is_empty()) {
+        return;
+    }
+
+    // 維特比：狀態是「這一格選了哪個候選」，記最佳前驅回溯
+    let n = opts.len();
+    let mut score: Vec<Vec<f32>> = Vec::with_capacity(n);
+    let mut back: Vec<Vec<usize>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let m = opts[i].len();
+        let mut sc = vec![f32::NEG_INFINITY; m];
+        let mut bk = vec![0usize; m];
+        for (ci, &c) in opts[i].iter().enumerate() {
+            let prior = -LM_W_RANK * ci as f32 + LM_W_OWN * lm.log_freq(c);
+            if i == 0 {
+                sc[ci] = prior;
+                continue;
+            }
+            for (pi, &pc) in opts[i - 1].iter().enumerate() {
+                let mut v = score[i - 1][pi] + prior;
+                // 只有相鄰兩邊都是漢字時才有 bigram 可算
+                if is_han(pc) && is_han(c) {
+                    v += LM_W_BIGRAM * lm.score(pc, c).unwrap_or(LM_MISS);
+                }
+                if v > sc[ci] {
+                    sc[ci] = v;
+                    bk[ci] = pi;
+                }
+            }
+        }
+        score.push(sc);
+        back.push(bk);
+    }
+
+    // 回溯最佳路徑
+    let mut best = 0usize;
+    for (i, &v) in score[n - 1].iter().enumerate() {
+        if v > score[n - 1][best] {
+            best = i;
+        }
+    }
+    let mut path = vec![0usize; n];
+    path[n - 1] = best;
+    for i in (1..n).rev() {
+        path[i - 1] = back[i][path[i]];
+    }
+    for (i, p) in path.iter().enumerate() {
+        if opts[i].len() > 1 {
+            slots[i].text = opts[i][*p].to_string();
+        }
+    }
+}
+
+/// 是不是中日韓統一表意文字（漢字）。
+#[inline]
+fn is_han(c: char) -> bool {
+    ('\u{4e00}'..='\u{9fff}').contains(&c)
 }
 
 /// 使用者在第 `idx` 格選了 `choice` 這個字之後，重算後面的格子。
@@ -515,7 +1069,7 @@ pub fn pick(slots: &mut [Slot], idx: usize, choice: &str) {
     }
     // 從選中的那格開始往後找詞。`picked` 的格子不會被覆蓋，
     // 所以這裡不必再把使用者選的字寫回去一次。
-    apply_word_context(&mut slots[idx..]);
+    let _ = apply_word_context(&mut slots[idx..]);
 }
 
 /// 選了開括號之後，把配對的收括號一起改掉。
@@ -622,11 +1176,18 @@ fn romaji_candidates(kana: &str) -> Vec<String> {
 /// 好處是**平假名該贏的時候會自己贏**：`ありがとう`、`おはよう` 查出來
 /// 的第一名就是平假名，不必為它們另外維護例外表。
 ///
-/// 詞典查不到就用假名——活用形句子（mozc 只收辭書形）都走這條。
-fn best_japanese(kana: &str) -> String {
-    crate::dict::best_kana_word(kana)
-        .map(|w| w.into_owned())
-        .unwrap_or_else(|| kana.to_string())
+/// # 查不到就試著**組**出來
+///
+/// mozc 只收辭書形，所以活用形一律查不到，本來只能原樣顯示假名——
+/// 打「おきた」出來就是「おきた」。但漢字推得出來：還原成辭書形
+/// 「おきる」查到「起きる」，取語幹「起」接回語尾「きた」→「起きた」。
+///
+/// 見 `romaji::inflect::漢字表記`。組不出來才回到假名。
+fn best_japanese(keys: &str, kana: &str) -> String {
+    if let Some(w) = crate::dict::best_kana_word(kana) {
+        return w.into_owned();
+    }
+    crate::romaji::inflect::漢字表記(keys).unwrap_or_else(|| kana.to_string())
 }
 
 /// 某一格的候選字，依字頻排序。
@@ -719,6 +1280,29 @@ fn candidates_raw(slot: &Slot) -> Vec<String> {
             let kana =
                 crate::romaji::kana::to_kana(&slot.keys).unwrap_or_else(|| slot.text.clone());
             let mut out = romaji_candidates(&kana);
+            // **活用形組出來的漢字要進候選**。
+            //
+            // 詞典沒有活用形，所以 `romaji_candidates` 給不出「読んだ」，
+            // 使用者選不回來。而同一個活用形常常對應好幾個動詞——
+            // `よんだ` 可以是 読んだ／呼んだ／詠んだ——全部都要在清單裡，
+            // 不然排序猜錯就沒救。
+            //
+            // 插在假名寫法後面：假名一定正確（漢字是猜的），要讓使用者
+            // 一兩下就回得到假名，這是 `romaji_candidates` 的既有規矩。
+            for (i, w) in crate::romaji::inflect::漢字候選(&slot.keys)
+                .into_iter()
+                .enumerate()
+            {
+                if out.contains(&w) {
+                    continue;
+                }
+                // 第一個（最可能的）擺到最前面，其餘接在假名之後
+                if i == 0 && !out.is_empty() {
+                    out.insert(0, w);
+                } else {
+                    out.push(w);
+                }
+            }
             if crate::english::is_common_word(&slot.keys) && !out.contains(&slot.keys) {
                 out.push(slot.keys.clone());
             }
@@ -753,11 +1337,17 @@ mod tests {
     use crate::cutpoint::{normalize, rank};
 
     fn load() -> bool {
-        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .unwrap()
-            .join("data");
-        crate::preload(&data, crate::config::Engines::default());
+            .unwrap();
+        crate::preload(&root.join("data"), crate::config::Engines::default());
+        // 符號現在全在預載包裡（`packs/內建符號.txt`），不載就查不到。
+        // 使用者目錄指向一個不存在的路徑，測試才不會被本機的包影響。
+        crate::pack::set_bundled_dir(Some(root.join("packs")));
+        crate::pack::load(
+            "__測試用_不存在的資料夾__",
+            &[crate::pack::BUNDLED_SYMBOLS.to_string()],
+        );
         crate::dict::bopomofo_loaded()
     }
 
@@ -786,6 +1376,81 @@ mod tests {
         // su3 的字頻第一名不是「你」，但「你好」是詞
         let slots = slots_of("su3cl3");
         assert_eq!(text_of(&slots), "你好");
+    }
+
+    /// 不同的東西各有各的名字，不必在一排符號裡數格子。
+    ///
+    /// 2026-09-05 重排：＋－×÷ 這種**根本是不同東西**的從群組裡拆出來
+    /// 各給一列（群組那列留著當瀏覽入口），★☆✦✧ 那種**同一個東西的
+    /// 不同寫法**才留在一起。這條守住拆出來的那些真的叫得到。
+    #[test]
+    fn 拆開的符號各叫各的() {
+        if !load() {
+            return;
+        }
+        for (keys, want) in [
+            (r"\plus\", "＋"),
+            (r"\times\", "×"),
+            (r"\sun\", "☀"),
+            (r"\yen\", "￥"),
+            (r"\male\", "♂"),
+            (r"\celsius\", "℃"),
+            // 群組還在，第一個符號直接出來
+            (r"\math\", "＋"),
+            (r"\weather\", "☀"),
+        ] {
+            assert_eq!(text_of(&slots_of(keys)), want, "{keys} 叫不出符號");
+        }
+    }
+
+    /// 日文名字靠**按鍵原文**這條路，不靠組出來的文字。
+    ///
+    /// **這幾個是實測選出來的**（2026-09-05 掃過 29 個日文名字）：
+    /// `sekibun` 組出來是「席bun」（前半被判成中文）、`mugen` 是「無gen」
+    /// （尾巴的 n 遇到收尾的 `\` 還沒收成ん）、`tougou` 直接轉成漢字
+    /// 「統合」。三個都跟表裡的名字對不上，而且**連按 Tab 都沒有那個
+    /// 選項**——切法裡根本沒生出「整段當日文」那條。
+    ///
+    /// 哪天有人把查詢改回只看文字，這條會紅。
+    #[test]
+    fn 日文名字用按鍵查得到() {
+        if !load() {
+            return;
+        }
+        for (keys, want) in [
+            (r"\sekibun\", "∫"),
+            (r"\mugen\", "∞"),
+            (r"\tougou\", "＝"),
+            (r"\hoshi\", "★"),
+        ] {
+            assert_eq!(text_of(&slots_of(keys)), want, "{keys} 叫不出符號");
+        }
+    }
+
+    #[test]
+    fn 符號名字看的是詞庫修正後的文字() {
+        if !load() {
+            return;
+        }
+        // ㄧㄣ 的字頻第一名是「因」、ㄩㄝˋ 是「月」，所以逐字組出來是
+        // 「因月」——拿它查符號表當然查不到，而畫面上顯示的早已是詞庫
+        // 修正過的「音樂」，症狀是「字明明對卻不會變成符號」。
+        //
+        // 這條守住 `apply_word_context` 排在 `merge_symbols` 前面。
+        assert_eq!(text_of(&slots_of(r"\up m,4\")), "♪", "音樂 → ♪");
+        // 同樣要靠詞庫才組得出來：ㄐㄧㄢˋㄊㄡˊ 逐字不是「箭頭」
+        assert_eq!(text_of(&slots_of(r"\ru04w.6\")), "→", "箭頭 → →");
+    }
+
+    #[test]
+    fn 符號的英文名與單字名不受影響() {
+        if !load() {
+            return;
+        }
+        // 英文段是 passthrough，文字永遠等於按鍵，本來就不受詞庫修正影響
+        assert_eq!(text_of(&slots_of(r"\star\")), "★");
+        // 單字名字逐字第一名就對，改順序之後也要照舊
+        assert_eq!(text_of(&slots_of(r"\vu/ \")), "★", "星 → ★");
     }
 
     #[test]
@@ -912,6 +1577,53 @@ mod tests {
         assert_eq!(joined, "su3cl3...");
     }
 
+    /// **標點的全半形看整句，不看緊鄰那一段**。
+    ///
+    /// 中文句子裡夾一個英文詞，逗號仍該是全形——決定它的是這句話用
+    /// 中文寫，不是它左邊剛好是英文。見 `dominant_cjk`。
+    #[test]
+    fn 標點看整句不看緊鄰那段() {
+        if !load() {
+            return;
+        }
+        // 夾在中文句子裡的英文詞不該把標點拉成半形
+        assert_eq!(text_of(&slots_of("tj06server,su3cl3")), "傳server，你好");
+        // 純英文整句掃不到中日文，維持半形（打程式碼的情境不變）
+        assert_eq!(text_of(&slots_of("server,client")), "server,client");
+        // 中文緊鄰時本來就對，不能改壞
+        assert_eq!(text_of(&slots_of("su3cl3,su3cl3")), "你好，你好");
+    }
+
+    /// **只往回看，不往前看**——已經上畫面的標點不因後面打的字而變。
+    ///
+    /// 往前看會讓「句子後半打出中文」回頭改前面的半形標點，使用者
+    /// 看到游標很遠的地方字在跳（漏斗的改寫硬指標）。
+    #[test]
+    fn 標點只看前面不因後文改變() {
+        if !load() {
+            return;
+        }
+        // 逗號前面只有英文 → 半形；後面接了中文也不該回頭改它
+        let 前段 = text_of(&slots_of("server,"));
+        assert!(前段.ends_with(','), "前面沒有中日文時是半形：{前段}");
+        let 全句 = text_of(&slots_of("server,su3cl3"));
+        assert!(
+            全句.starts_with("server,"),
+            "後面打了中文也不回頭改前面的標點：{全句}"
+        );
+    }
+
+    /// **`\名字\` 裡面的段不算脈絡**——符號名稱是查表的鍵，不是句子內容。
+    #[test]
+    fn 符號名稱不算句子的文字() {
+        if !load() {
+            return;
+        }
+        // `e:★` 的「星」只是拿來查符號的，那句話本身是英文 → 冒號半形
+        let t = text_of(&slots_of("e:\\vu/ \\"));
+        assert!(t.starts_with("e:"), "符號名稱不該讓冒號變全形：{t}");
+    }
+
     /// **候選清單的第一個永遠是這一格現在顯示的字**。
     ///
     /// 反白進選字時停在第 0 個，清單第一個不是現在的字的話，方向鍵
@@ -959,6 +1671,50 @@ mod tests {
             "「程式」讀音相同，也要在清單裡：{ws:?}"
         );
         // `word_for` 只回第一個，那是「直接送出」要的預設值
+        assert_eq!(crate::dict::word_for("t/6g4").as_deref(), Some("城市"));
+    }
+
+    /// **數字後面優先挑量詞**——那個位置語言模型幫不上忙。
+    ///
+    /// bigram 的鍵是漢字對，而數字不是漢字，`3` 與 `個` 之間沒有任何
+    /// 統計資料，於是全部退回純字頻，而同音的非量詞字常常字頻更高
+    /// （`各` 比 `個` 常用、`原` 比 `元` 常用）。
+    #[test]
+    fn 數字後面優先量詞() {
+        if !load() {
+            return;
+        }
+        // 3個：「各」字頻比「個」高
+        assert_eq!(text_of(&slots_of("3ek4")), "3個");
+        // 100元：「原」字頻比「元」高
+        assert_eq!(text_of(&slots_of("100m06")), "100元");
+        // **序數的脈絡優先**：第3章 的「章」與「張」同音，而「張」也是
+        // 量詞（一張紙）、字頻更高
+        assert_eq!(text_of(&slots_of("2u435; ")), "第3章");
+    }
+
+    /// **同讀音的詞靠上下文挑**，不是永遠取詞頻第一個。
+    ///
+    /// `救回來`／`就回來` 讀音完全相同，靜態詞頻永遠讓「救回來」贏。
+    /// 接上語言模型之後，「他今天—」這個左鄰讓「就回來」勝出。
+    ///
+    /// **沒有語言模型時要退回原本的行為**（取第一個），所以這條測試
+    /// 在模型載不到時直接跳過——那不是失敗，是設計。
+    #[test]
+    fn 同讀音的詞靠上下文挑() {
+        if !load() {
+            return;
+        }
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("data");
+        if crate::lm::load(&data, crate::dict::char_freq_map(&data)).is_none() {
+            return; // 沒有語言模型，這條沒有意義
+        }
+        // 「他今天就回來」——左鄰是「天」
+        assert_eq!(text_of(&slots_of("w8 rup wu0 ru.4cjo6x96")), "他今天就回來");
+        // 單獨打仍然是詞頻第一個（沒有上下文就不該推翻既有順序）
         assert_eq!(crate::dict::word_for("t/6g4").as_deref(), Some("城市"));
     }
 
@@ -1166,5 +1922,36 @@ mod tests {
         let c = romaji_candidates("こんにちは");
         let n = c.iter().filter(|x| *x == "こんにちは").count();
         assert_eq!(n, 1, "重複的要去掉：{c:?}");
+    }
+
+    /// `;//` 的分號當成冒號——漏按 Shift 打錯的網址。
+    ///
+    /// `:` 與 `;` 是同一個實體鍵，而 `;//` 這個組合在中文、日文、英文、
+    /// 程式碼裡都沒有意義，所以不是歧義是打錯。
+    #[test]
+    fn 網址的分號當成冒號() {
+        if !load() {
+            return;
+        }
+        for keys in ["https;//google.com", "http;//a.com", "x;//y"] {
+            let got = text_of(&slots_of(keys));
+            assert!(
+                got.contains("://"),
+                "`{keys}` 的分號該當成冒號：得到「{got}」"
+            );
+            assert!(!got.contains(";//"), "不該還留著分號：「{got}」");
+        }
+    }
+
+    #[test]
+    fn 只有一條斜線不算網址() {
+        if !load() {
+            return;
+        }
+        // `;/` 還可能是別的東西（分號後面接路徑），兩條斜線才是網址
+        for keys in ["a;/b", "a;b", "test;"] {
+            let got = text_of(&slots_of(keys));
+            assert!(!got.contains(':'), "`{keys}` 不該被當成網址：得到「{got}」");
+        }
     }
 }

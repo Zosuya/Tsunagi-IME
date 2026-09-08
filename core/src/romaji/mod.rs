@@ -8,6 +8,7 @@
 //! - `字元規則/通用日文例外規則.canvas`（`c`+母音、`wu`/`yi`/`yyyi`）
 
 pub mod convert;
+pub mod inflect;
 pub mod kana;
 pub mod keymap;
 pub mod mora;

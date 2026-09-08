@@ -41,8 +41,44 @@ pub fn keep(keys: &str, chars: &[char], start: usize, end: usize) -> bool {
     if seg == super::SEPARATOR {
         return true;
     }
+    // **純數字段自成一段**，跟標點同類：它不查詞典、也不該被「單字母
+    // 殘渣」那條規則殺掉。
+    //
+    // 主鍵盤的數字鍵同時是注音的聲調鍵（`3` 是ˇ、`4` 是ˋ），所以
+    // `vu84j3` ＋ `3` ＋ `2u03`（下午3點）的中間那個 `3` 兩邊都是
+    // 字母／數字，`single_letter_ok` 判它是殘渣；而 `3` 也不是英文詞，
+    // `english_word_ok` 同樣不放行。**兩條規則各自都對，合起來讓
+    // 「數字自成一段」這條切法在生成階段就死了**——實測 number 節
+    // 101 句有 74 句正解切不出來，Tab 也救不回來。
+    //
+    // 判準只要求「整段都是數字」，不看前後文——數字夾在中文裡
+    // （`第3版`）或英文裡（`mp3`）都該切得出來，要不要那樣切是排序的事。
+    //
+    // **數字包夾的小數點也算**（`0.49`、`2.64`）：`.` 在鍵盤上是注音的ㄥ，
+    // 不放行的話 `0.49` 不是英文詞、不是合法注音、也不在結尾，會被
+    // `english_word_ok` 判死，於是「整段是 0.49」這條切法生不出來，
+    // 只剩 `英:0 | 注:.4 | 英:9`（打出「0噢9」）。兩側都要是數字，
+    // 所以 `5.␣`（第 7 週，`.` 是注音的一部分）不受影響。見 §2.66。
+    if numeric_segment(&seg) {
+        return true;
+    }
 
     single_letter_ok(keys, chars, start, end) && english_word_ok(chars, start, end, &seg)
+}
+
+/// 整段就是一個數字嗎（`264`、`0.49`、`2.64`）？
+///
+/// 小數點只認**兩側都是數字**的，所以 `5.␣` 這種「`.` 是注音的一部分」
+/// 不算數字段。
+fn numeric_segment(seg: &str) -> bool {
+    let b = seg.as_bytes();
+    !b.is_empty()
+        && b[0].is_ascii_digit()
+        && b[b.len() - 1].is_ascii_digit()
+        && seg.char_indices().all(|(i, c)| {
+            c.is_ascii_digit()
+                || (c == '.' && b[i - 1].is_ascii_digit() && b[i + 1].is_ascii_digit())
+        })
 }
 
 /// 規則一：單字母段，前後皆為邊界時保留，否則丟棄。
@@ -125,6 +161,11 @@ fn english_word_ok(chars: &[char], start: usize, end: usize, seg: &str) -> bool 
 /// 候選數中位（36 → 38／39／43）。常見縮寫幾乎都在三個字母以內
 /// （yt、fb、ig、tw、ytb、nba），4 多付 7 個候選卻只多收 asap 那類，
 /// 所以停在 3。
+///
+/// **2026-09-07 重掃，放寬只會更差**：`endpoint`、`queuer` 這些詞典沒收
+/// 的英文詞切不出來，看起來像是這條上限擋的，但放寬實測是
+/// 3→1148、4→1146、6→1145、8 以上→1144（漏斗，1343 句）。多出來的
+/// 候選是雜訊，把正解擠掉了。**那些詞要的是補詞典，不是放寬規則。**
 const ACRONYM_MAX: usize = 3;
 
 /// 規則二的例外：**邊界上的短縮寫**。
@@ -203,6 +244,22 @@ mod tests {
             .unwrap()
             .join("data");
         !crate::english::load(&data).is_empty()
+    }
+
+    /// **純數字段自成一段**——夾在中文或英文中間也要切得出來。
+    ///
+    /// 主鍵盤的數字鍵同時是注音聲調鍵，所以 `vu84j3` ＋ `3` ＋ `2u03`
+    /// （下午3點）中間那個 `3` 兩邊都不是邊界。少了這條放行的話，
+    /// 「數字自成一段」在生成階段就死了，Tab 也救不回來——實測 number
+    /// 節 101 句有 74 句正解切不出來。
+    #[test]
+    fn 純數字段一律保留() {
+        // 下午3點：中間的 3 前後都是字母／數字，不是邊界
+        assert!(keep_seg("vu84j332u03", 6, 7), "夾在中文中間的數字要留");
+        // 多位數同理
+        assert!(keep_seg("2u4320263104", 3, 7), "多位數要留");
+        // mp3：夾在英文裡
+        assert!(keep_seg("mp3check", 2, 3), "夾在英文裡的數字要留");
     }
 
     #[test]
@@ -340,5 +397,23 @@ mod tests {
     fn 標點與分隔符不受管() {
         assert!(keep_seg("hello,world", 5, 6), "逗號自成一段");
         assert!(keep_seg("a banana", 1, 2), "分隔符空白");
+    }
+
+    #[test]
+    fn 小數點的數字段生得出來() {
+        assert!(numeric_segment("264"));
+        assert!(numeric_segment("0.49"));
+        assert!(numeric_segment("2.64"));
+        // 兩側都要是數字——`5. ` 的 `.` 是注音的一部分
+        assert!(!numeric_segment("5. "));
+        assert!(!numeric_segment(".49"));
+        assert!(!numeric_segment("2."));
+        assert!(!numeric_segment("v2.0"));
+        assert!(!numeric_segment(""));
+
+        // 不放行的話「整段是 0.49」這條切法在生成階段就死了
+        let keys = "0.49";
+        let chars: Vec<char> = keys.chars().collect();
+        assert!(keep(keys, &chars, 0, 4), "0.49 整段要留得住");
     }
 }

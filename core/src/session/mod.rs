@@ -22,6 +22,9 @@
 //! 切法換了，選字要重來——那是不同的分段，格子數都可能不一樣。
 
 mod cutting;
+mod segmenu;
+// 段選單的東西給 TSF 層用（候選清單、一次列幾個）
+pub use segmenu::{SegCand, SEG_PAGE};
 mod select;
 #[cfg(test)]
 mod tests;
@@ -54,8 +57,12 @@ pub const CHAR_COLUMN: usize = 9;
 ///
 /// **候選數沒有上限**——ㄧˋ 有 340 個字，全部攤開是 38 欄，
 /// 橫向長度遠超過任何螢幕，右邊會直接被切掉看不到。
-/// 所以只畫十欄，反白移出可見範圍時整片跟著捲（見 `scroll_cand_into_view`）。
-pub const MAX_COLUMNS: usize = 10;
+/// 所以只畫這麼多欄，反白移出可見範圍時整片跟著捲
+/// （見 `scroll_cand_into_view`）。
+///
+/// **七欄**（使用者定，2026-09-08）。原本是十欄，實測太寬——
+/// 一次看七欄六十三個字已經夠找，再寬只是讓眼睛橫向掃得更累。
+pub const MAX_COLUMNS: usize = 7;
 
 /// `bool`，但**預設是 `true`**。
 ///
@@ -121,6 +128,13 @@ pub struct Session {
     /// 文字而是符號本身。塞進 `cuttings` 就得讓 `compose` 認得一種
     /// 「不要選字」的假語言，那是為了省一個欄位去弄髒整條管線。
     symbol_pos: Option<usize>,
+    /// 切法選單展開全部了嗎？
+    ///
+    /// 跟選字的 `cand_expanded` 同一個道理、同一種手勢：一般狀態只列
+    /// 前 `CUTTING_PAGE` 列，反白走到最後一列再往下就自動展開到
+    /// `CUTTING_PAGE_ALL` 列。切法每一列是一整句，所以展開之後**仍然
+    /// 是一直排**，不像候選字那樣分欄。
+    cutting_expanded: bool,
     /// 使用者**主動選過**符號那一列嗎？
     ///
     /// 跟 `chosen_cut` 同一個道理：每打一鍵選單都會重排，不記著的話
@@ -204,6 +218,89 @@ pub struct Session {
     /// 原本那個字。按鍵（`su3`）是跟著那個音節走的，切法怎麼換，
     /// 「使用者在 `su3` 這個音節選了『妳』」都成立。
     picks: Vec<(String, String)>,
+    /// **段選單**：前面幾段是使用者定案的。
+    ///
+    /// # 只存一個數字
+    ///
+    /// 定案的段本身**存在輸入層的凍結區裡**（`Incremental::frozen`），
+    /// 這裡不另存一份——存兩份就要應付「輸入層帶不帶前區」兩種情況，
+    /// 只能比長度去猜，猜錯就少一截或多一截（實測正確率從 71 句掉到
+    /// 38 句）。**一份資料一個主人。**
+    ///
+    /// 這個數字的用途只有一個：**擋反白往左走進定案區**。
+    ///
+    /// # 跟 `chosen_cut` 的差別
+    ///
+    /// `chosen_cut` 是個**提示**——重算之後去新清單裡找前綴相符的，
+    /// 找不到就算了。這個是**定案**：使用者說第一段是 `logger`（英文），
+    /// 那它就是，引擎不准再有意見。
+    ///
+    /// # 為什麼這比「在既有清單裡篩」強
+    ///
+    /// 整句切法要活到最後，得每一段都好**而且整句排名夠前**——長句的
+    /// 正解常常在 `ALIVE_LIMIT` 就被砍掉了（實測 `long` 那節 57 句，
+    /// 「在既有清單裡篩」一句都救不回，逐段定案救回 37 句）。
+    ///
+    /// **這跟 `incremental` 的分區凍結是同一招**，差別只在觸發者：
+    /// 那個是引擎自己判斷離游標夠遠，這個是使用者說了算。
+    seg_locked: usize,
+    /// 段選單反白第幾段（含前區，從 0 起算）。
+    seg_idx: usize,
+    /// 段選單那一段的候選裡反白第幾個。
+    seg_cand: usize,
+    /// 段選單的候選清單捲到第幾個了。
+    ///
+    /// **一段常有二三十個候選**（長度 × 語言的組合），一次只列
+    /// `SEG_PAGE` 個。沒有捲動的話反白走到第 10 個就消失在畫面外，
+    /// 看起來像「反白條不會動」——實測回報過。
+    ///
+    /// 跟選字的 `cand_col_first` 同一個道理，只是段選單是一直排的
+    /// （不分欄），所以這裡記的是「第一個可見候選的索引」。
+    seg_first: usize,
+    /// **使用者用 `Shift+←→` 推出來的額外候選**。
+    ///
+    /// 候選清單為了不被灌爆有過濾（含數字的段不當英文列出來，見
+    /// `looks_english`），但推邊界是使用者**明確的意圖**——他就是要
+    /// 「這一段再長一個字」，不必先問那看起來像不像英文。
+    ///
+    /// 這救回 `usb3`／`sha256`／`2fa`／`step3` 這類技術詞含數字的
+    /// 情況：清單只給得出 `usb`，推一格就到 `usb3`。
+    ///
+    /// **換段時清掉**——它只屬於當下那一段。
+    seg_extra: Vec<segmenu::SegCand>,
+    /// 使用者在段選單挑過的**台語詞**：`(那一段的按鍵, 台語詞)`。
+    ///
+    /// # 為什麼不能走 `picks`
+    ///
+    /// `picks` 是**逐格**套的（`apply_picks`：一格填一個字），而台語詞
+    /// 與華語詞**35.5% 字數不同**（「他們→𪜶」兩字換一字，實測見
+    /// §2.64）。填不進去。
+    ///
+    /// 段選單反白的是整段，所以這裡也用整段：定案之後 `compose` 算完
+    /// 再把整段的文字換掉。
+    ///
+    /// # 為什麼不能進學習層
+    ///
+    /// `learn::record` 拿 `(keys, text)` 去記，記進去就變成
+    /// 「`vu,4vu,4` → 感恩」，選幾次之後打「謝謝」的注音永遠出「感恩」
+    /// ——**關掉台語包也救不回來**（污染寫進學習檔了）。實測見 §2.64.13。
+    /// 所以 `learn_on_commit` 要跳過這些格。
+    seg_taigi: Vec<(String, String)>,
+
+    /// 台語模式：反白從第幾**格**開始（一格一個字）。
+    ///
+    /// 鎖定注音時整串是一段，`seg_idx` 永遠 0——台語的反白單位是
+    /// **詞**不是段，所以另外記。見 `segmenu` 的「台語：反白單位是詞」。
+    seg_tw_at: usize,
+    /// 台語模式：反白幾格。**0 代表「用斷詞算的長度」**，
+    /// 使用者按過 `Shift+←→` 之後才有值。
+    seg_tw_len: usize,
+    /// 台語模式：最後一個詞定案了嗎？TSF 靠它決定要不要關掉選單。
+    ///
+    /// **在定案的當下記，不事後推論**——「還有沒有詞可挑」永遠是有
+    /// （定案過的詞也留在斷詞裡，才回得去改），「反白在不在最後一個」
+    /// 也不行（`tw_next` 走到底會繞回開頭）。
+    seg_tw_done: bool,
 }
 
 impl Session {
@@ -420,7 +517,38 @@ impl Session {
                 n += crate::learn::record_cutting(self.input.keys(), chosen, default);
             }
         }
+        // **段選單定案過的也要學**。
+        //
+        // 那是比 Tab 更明確的訊號：使用者不只挑了一種切法，還逐段確認
+        // 過。不學的話同一個 `logoute93` 每次都要重選一遍。
+        //
+        // **記的是切詞不是選字**（`record_cutting` 那一層），跟詞層的
+        // `record` 分開——使用者說「logout 是一個英文段」，那是切法的
+        // 知識，不該影響「這個注音該選哪個字」。
+        n += self.learn_seg_choice();
         n
+    }
+
+    /// 段選單定案過的分段，記進切詞學習層。回傳記了幾條。
+    ///
+    /// 跟 Tab 那條走同一個 `record_cutting`——它已經會**只記跟引擎
+    /// 第一名不同的段落**，所以使用者只是照著確認一遍的話不會佔額度。
+    fn learn_seg_choice(&self) -> usize {
+        if self.seg_locked == 0 {
+            return 0;
+        }
+        let chosen = self.seg_segments();
+        if chosen.is_empty() {
+            return 0;
+        }
+        // 引擎原本會給什麼？拿整串按鍵重算一次——`cuttings` 現在只剩
+        // 後區（前區已經凍進輸入層），拿它當對照組會少一截。
+        let all = self.input.keys().to_string();
+        let baseline = crate::input::Input::from_keys_with(&all, self.lock, self.engines);
+        let Some(default) = baseline.cuttings().first() else {
+            return 0;
+        };
+        crate::learn::record_cutting(&all, &chosen, default)
     }
 
     /// **使用者明講這是標點**（Ctrl+`,` 之類）。
@@ -608,13 +736,16 @@ impl Session {
         // 繼續打字之後它就過期了，留著會在組字區留下一個沒人管的框。
         self.last_select = None;
         self.cand_idx = 0;
+        // 又打字了就把展開收回來：選單整個重排過，維持展開只會讓
+        // 使用者盯著一份跟剛才不一樣的長清單。跟候選字同一個道理。
+        self.cutting_expanded = false;
         self.cand_expanded = false;
         self.cand_col_first = 0;
         self.cands_open = false;
         self.rebuild_slots();
     }
 
-    /// 讓切法選單的 **4～6 名固定是三種語言各自的代表**。
+    /// 確保三種語言各自的代表都**進得了選單第一頁**。
     ///
     /// # 解決什麼
     ///
@@ -629,18 +760,27 @@ impl Session {
     /// | 英文 | **整串 passthrough**——英文收任何字元，所以直接造一個， |
     /// |  | 不從清單裡找（它常常根本進不了前段） |
     ///
-    /// # 前三名一動也不動
+    /// # 排名照引擎的，只保底不提前
     ///
-    /// 那是引擎算出來的，第一名就是預設會送出的東西。代表一律排在
-    /// 它們**後面**，而且已經出現在前三名的就不再重複列一次。
+    /// 代表**排在哪就是哪**，不硬塞到固定位置——引擎把它排第 2 就是
+    /// 第 2。只有掉出第一頁（`PAGE`）的才搬到頁尾救回來。
     ///
-    /// 這是跟「整體偏好某語言」的關鍵差別：偏好會把正解擠掉（實測
-    /// `su3cl3` 偏日文之後「你好」掉到第三名），這個不會動到任何
-    /// 已經排在前面的東西。
+    /// 原本的規則是「前三名不動、代表一律接在第 4 名之後」，結果三個
+    /// 代表永遠卡在 4、5、6：**明明引擎自己就把日文排第 2，卻硬被降到
+    /// 第 5**，每次都要多按幾下 TAB。（使用者回報。）
+    ///
+    /// 這跟「整體偏好某語言」仍然是兩回事：偏好會把正解擠掉（實測
+    /// `su3cl3` 偏日文之後「你好」掉到第三名），這裡不動引擎的相對
+    /// 順序，只把落榜的補進第一頁的尾巴。第一名仍然是引擎算的第一名
+    /// ——除非引擎自己就把某個代表排第一。
     fn promote_language_reps(&mut self) {
         use crate::language::Language;
-        /// 前面幾名不動。
-        const KEEP: usize = 3;
+        /// 代表最遲要出現在第幾名之內。
+        ///
+        /// 綁 `CUTTING_PAGE`：TAB 按一下就是顯示這麼多列，所以「進得了
+        /// 這個範圍」等於「按一下 TAB 就看得到」。掉出去的話要按兩下
+        /// 展開全部才找得到，那正是使用者抱怨的。
+        const PAGE: usize = CUTTING_PAGE;
 
         // **鎖定語言時不補代表**：那個模式的整個意義就是「只有一種
         // 切法、不要給我選」，補進來等於把鎖定破壞掉。
@@ -728,28 +868,45 @@ impl Session {
             ));
         }
 
-        let keep = KEEP.min(old.len());
-        let mut out: Vec<Vec<Segment>> = old[..keep].to_vec();
-        // **代表在哪一位就標在哪一位**——已經排在前三名的也要標，
-        // 不然「すし」明明是日文的最佳解卻沒有記號，反而更難懂
+        // 引擎排序原樣保留，代表**排在哪就標在哪**——
+        // 已經在第一頁的不動它，只有掉出去的才拉進來。
+        let mut out: Vec<Vec<Segment>> = old;
         let mut marks: Vec<Vec<Language>> = vec![Vec::new(); out.len()];
+
+        // 先把要救的挑出來（連同它原本的位置），標記的當場標一標。
+        // **分兩趟做**：邊掃邊插的話後插的會把先插的擠出第一頁，
+        // 而且前面的位置一動，還沒掃到的代表位置就全歪了。
+        let mut rescue: Vec<(Language, Vec<Segment>, Option<usize>)> = Vec::new();
         for (lang, r) in reps {
             match out.iter().position(|c| *c == r) {
                 // **用 push 不是覆蓋**：同一種切法可能同時是兩個語言的
                 // 代表，覆蓋的話後面那個會把前面的吃掉，畫面上就少一個
-                Some(i) => marks[i].push(lang),
-                None => {
-                    out.push(r);
-                    marks.push(vec![lang]);
-                }
+                Some(i) if i < PAGE => marks[i].push(lang),
+                // 有這種切法但排太後面 → 記下來等一下搬（`Some(i)`），
+                // 清單裡根本沒有 → 直接插新的（`None`，英文 passthrough
+                // 是造出來的，走的一定是這條）
+                at => rescue.push((lang, r, at)),
             }
         }
-        for c in old {
-            if !out.contains(&c) {
-                out.push(c);
-                marks.push(Vec::new());
-            }
+
+        // **從後往前搬**：先移除全部要搬的，位置才不會邊搬邊歪；
+        // 由大到小刪，刪掉一個不影響還沒刪的那些的索引。
+        let mut moved: Vec<usize> = rescue.iter().filter_map(|(_, _, at)| *at).collect();
+        moved.sort_unstable_by(|a, b| b.cmp(a));
+        for i in moved {
+            out.remove(i);
+            marks.remove(i);
         }
+
+        // 塞回第一頁的尾巴，每個各佔一格。倒著插，
+        // 順序才跟 `reps` 一致（中、日、英）。
+        for (n, (lang, r, _)) in rescue.into_iter().enumerate().rev() {
+            // 這是第一頁**由後數來**第 n 格；切法總數不足就接在尾巴
+            let at = (PAGE - 1 - n).min(out.len());
+            out.insert(at, r);
+            marks.insert(at, vec![lang]);
+        }
+
         self.cuttings = out;
         self.rep_of = marks;
     }
@@ -760,13 +917,56 @@ impl Session {
     ///
     /// 比對**前綴**而不是全等——使用者挑完之後又多打了幾個字，
     /// 新的切法會比當初長，但前面那幾段應該一樣。
+    ///
+    /// # 比的是「切點」，不是「分段」
+    ///
+    /// 使用者挑切法的時機，通常正是**打到一半發現切錯了**，而那時
+    /// 後面還沒打完。原本的做法是拿分段逐段全等比對，於是：
+    ///
+    /// ```text
+    /// 挑的時候（5 鍵）  英:vu | 注:04 | 英:y
+    /// 打完之後（12 鍵） 英:vu | 注:04y94dk3u3      ← 後面合併成一段了
+    /// ```
+    ///
+    /// 使用者要的那一刀（`vu` 之後）**明明還在**，但第二段從 `04`
+    /// 長成 `04y94dk3u3`，全等比對就對不上，整個記憶失效——挑過的
+    /// 切法多打一個字就跳回第一名，正是使用者回報的那件事。
+    ///
+    /// 所以改成比**切點位置**：使用者挑的那幾刀，新的切法有沒有照切。
+    /// 最後一刀之後的部分還在打，不管它。
+    ///
+    /// 語言也不比了——一段長大之後語言本來就可能換（`英:y` 長成
+    /// 注音的一部分），切點還在才是使用者要的東西。
     fn find_chosen(&self) -> Option<usize> {
         let want = self.chosen_cut.as_ref()?;
+        // 使用者挑的那些切點（最後一段的結尾不算——後面還在打）
+        let cuts = |segs: &[(String, crate::language::Language)]| -> Vec<usize> {
+            let mut out = Vec::new();
+            let mut at = 0usize;
+            for (keys, _) in segs.iter().take(segs.len().saturating_sub(1)) {
+                at += keys.chars().count();
+                out.push(at);
+            }
+            out
+        };
+        let want_cuts = cuts(want);
+        // **只認第一刀**。使用者挑切法時表達的是「這裡要分開」，
+        // 後面那幾刀多半是當時還沒打完、引擎自己分的，不是他的意圖：
+        //
+        // ```text
+        // 挑的時候（5 鍵）  英:vu | 注:04 | 英:y   ← 兩刀，但他要的是第一刀
+        // 打完之後（12 鍵） 英:vu | 注:04y94dk3u3  ← 第二刀沒了，第一刀還在
+        // ```
+        //
+        // 要求每一刀都在的話這裡就對不上，記憶失效——正是使用者回報的
+        // 「挑過的切法多打一個字就跳掉」。
+        let first = *want_cuts.first()?;
         self.cuttings.iter().position(|c| {
-            c.len() >= want.len()
-                && c.iter()
-                    .zip(want)
-                    .all(|(seg, (keys, lang))| seg.keys == *keys && seg.lang == *lang)
+            let mut at = 0usize;
+            c.iter().any(|s| {
+                at += s.keys.chars().count();
+                at == first
+            })
         })
     }
 
@@ -783,6 +983,19 @@ impl Session {
             .map(|c| c.iter().map(|s| (s.keys.clone(), s.lang)).collect());
     }
 
+    /// 第 `k` 種切法組出來的格子——**切法選單的預覽用**。
+    ///
+    /// 跟 `rebuild_slots` 走同一組參數（日文詞界、鎖定語言）並且同樣
+    /// 套上使用者的修正，選單上看到的才會等於選下去真正得到的東西。
+    fn preview_slots(&self, k: usize) -> Vec<Slot> {
+        let Some(c) = self.cuttings.get(k) else {
+            return Vec::new();
+        };
+        let mut slots = compose::compose_all(c, self.width, self.jp_bounds.as_ref(), self.lock());
+        apply_picks(&mut slots, &self.picks);
+        slots
+    }
+
     fn rebuild_slots(&mut self) {
         // 符號那一列：整串一格、不給選字（符號沒有候選可挑）
         if let (true, Some(text)) = (self.on_symbol_row(), self.symbol_row()) {
@@ -797,20 +1010,67 @@ impl Session {
             }];
             return;
         }
-        self.slots = match self
-            .cut_at(self.cutting_idx)
-            .and_then(|i| self.cuttings.get(i))
-        {
-            Some(c) => compose::compose_all(
-                c,
+        // **段選單定案過的前區要算進來**。
+        //
+        // `cuttings` 在前區定案之後只剩後區（見 `segmenu`），只看它的話
+        // 送出的文字會缺一截——使用者選了 `logger`，送出的卻只有「要」。
+        //
+        // `seg_segments()` 在沒有前區時就等於「目前選中的那種切法」，
+        // 所以這條路對兩種情況都對，不必分支。
+        let segs = self.seg_segments();
+        self.slots = if segs.is_empty() {
+            Vec::new()
+        } else {
+            compose::compose_all(
+                &segs,
                 self.width,
                 self.jp_bounds.as_ref(),
                 // 鎖定語言時標點跟著鎖走——句首也才有依據
                 self.lock(),
-            ),
-            None => Vec::new(),
+            )
         };
         self.reapply_picks();
+        self.apply_taigi();
+    }
+
+    /// 把段選單挑過的台語詞套回去。
+    ///
+    /// **整段換掉**，不是逐格填——台語詞與華語詞 35.5% 字數不同
+    /// （「他們→𪜶」兩字換一字），逐格對不上。見 `seg_taigi`。
+    ///
+    /// 做法是找出屬於那一段的連續幾格，把第一格換成整個台語詞、其餘
+    /// 清空。`compose::text_of` 接起來就是對的。
+    fn apply_taigi(&mut self) {
+        if self.seg_taigi.is_empty() {
+            return;
+        }
+        for (seg_keys, word) in &self.seg_taigi {
+            // 那一段涵蓋哪幾格？逐格累加按鍵，湊滿就是它
+            let mut acc = String::new();
+            let mut from = None;
+            for i in 0..self.slots.len() {
+                if acc.is_empty() {
+                    from = Some(i);
+                }
+                acc.push_str(&self.slots[i].keys);
+                if acc == *seg_keys {
+                    let start = from.unwrap_or(i);
+                    self.slots[start].text = word.clone();
+                    // **其餘格清空**——那一段的文字全在第一格了
+                    for s in &mut self.slots[start + 1..=i] {
+                        s.text.clear();
+                        // 清空的格不能再選字（沒有東西可選）
+                        s.selectable = false;
+                    }
+                    break;
+                }
+                if !seg_keys.starts_with(&acc) {
+                    // 對不上就從下一格重新開始湊
+                    acc.clear();
+                    from = None;
+                }
+            }
+        }
     }
 
     /// 現在選中的是「注音符號直出」那一列嗎？
@@ -886,29 +1146,12 @@ impl Session {
     }
 
     /// 把使用者手動選過的字套回重建後的格子上。
-    ///
-    /// 重建之後每一格都是引擎算的結果，這裡按「按鍵」對回去——
-    /// 同一個音節出現多次的話（打「你你」）依序對應。
     fn reapply_picks(&mut self) {
-        if self.picks.is_empty() {
-            return;
-        }
-        // 同一個按鍵可能出現多次，用過的就不再用
-        let mut used = vec![false; self.picks.len()];
-        for i in 0..self.slots.len() {
-            if !self.slots[i].selectable {
-                continue;
-            }
-            let found = self
-                .picks
-                .iter()
-                .enumerate()
-                .position(|(k, (keys, _))| !used[k] && *keys == self.slots[i].keys);
-            if let Some(k) = found {
-                used[k] = true;
-                compose::pick(&mut self.slots, i, &self.picks[k].1.clone());
-            }
-        }
+        // `apply_picks` 同時要改 `slots`、讀 `picks`，兩個都是 self 的
+        // 欄位，借用檢查不給過——先把 picks 拿出來，套完再放回去
+        let picks = std::mem::take(&mut self.picks);
+        apply_picks(&mut self.slots, &picks);
+        self.picks = picks;
     }
 
     /// 目前的全半形模式。
@@ -934,4 +1177,33 @@ impl Session {
     // ── 選字 ──
 
     // ── 展開全部候選 ──
+}
+
+/// 把使用者手動選過的字套回一份格子上。
+///
+/// 重建之後每一格都是引擎算的結果，這裡按「按鍵」對回去——
+/// 同一個音節出現多次的話（打「你你」）依序對應。
+///
+/// **組字框與切法選單的預覽共用這一支**：選單那邊如果不套，會出現
+/// 「選單上寫著 A、選下去卻變成 B」的矛盾——實際換切法走的是
+/// `rebuild_slots`，那邊本來就套了修正。
+fn apply_picks(slots: &mut [Slot], picks: &[(String, String)]) {
+    if picks.is_empty() {
+        return;
+    }
+    // 同一個按鍵可能出現多次，用過的就不再用
+    let mut used = vec![false; picks.len()];
+    for i in 0..slots.len() {
+        if !slots[i].selectable {
+            continue;
+        }
+        let found = picks
+            .iter()
+            .enumerate()
+            .position(|(k, (keys, _))| !used[k] && *keys == slots[i].keys);
+        if let Some(k) = found {
+            used[k] = true;
+            compose::pick(slots, i, &picks[k].1);
+        }
+    }
 }

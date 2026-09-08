@@ -63,10 +63,8 @@ pub(super) struct State {
     session: ime_core::session::Session,
     /// 切法選單開著嗎？開著的話空白鍵是「往下選」而不是注音的一聲。
     cutting_menu: bool,
-    /// 切法選單目前展開幾個（TAB 10 個，快速按兩下 50 個）。
-    cutting_shown: usize,
-    /// 上一次按 TAB 的時間——判斷「快速按兩下」用。
-    last_tab: Option<std::time::Instant>,
+    /// **段選單**開著嗎？（新的，TAB 進的是這個）
+    seg_menu: bool,
     /// 使用者設定（行為與外觀）。
     config: ime_core::config::Config,
     /// 上次讀設定檔時它的修改時間。用來判斷「改過了要重讀」。
@@ -91,6 +89,12 @@ pub(super) struct State {
     /// 空白鍵叫出來的假候選清單快取，Enter/數字鍵送出時用。
     candidates: Vec<Candidate>,
     candidate_window: Option<CandidateWindow>,
+    /// 預覽列。跟候選清單是**兩個獨立的視窗**——兩者的寬度不相干
+    /// （預覽裝整句、候選只裝一個字的同音字），塞在同一個視窗裡
+    /// 短的那邊旁邊就空一大塊，見 `crate::preview_window`。
+    ///
+    /// **要跟候選視窗成對收掉**，用 `close_ime_windows()`。
+    preview_window: Option<crate::preview_window::PreviewWindow>,
     /// 全半形切換的提示視窗。跟候選是**兩個獨立的視窗**——
     /// 那是狀態提示，這是選字，混在一起候選高度會忽大忽小。
     width_window: Option<crate::width_window::WidthWindow>,
@@ -162,8 +166,9 @@ pub(super) fn lock_state(m: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
             // 繼續組字安全得多
             g.session.clear();
             g.cutting_menu = false;
+            g.seg_menu = false;
             g.gesture.clear();
-            g.candidate_window = None;
+            g.close_ime_windows();
             g
         }
     }
@@ -211,16 +216,54 @@ fn set_keyboard_open(thread_mgr: &ITfThreadMgr, tid: u32) {
 /// 多一個 `dwFlags` 參數。**每個真實的輸入法都會實作它**——有些宿主
 /// 只找這個介面，只實作舊版的會被當成不完整的 TIP。
 ///
-/// 我們用不到 `dwFlags`，直接轉呼叫 `Activate`（新酷音與小狼毫也是
-/// 這樣寫的）。
+/// 行為上直接轉呼叫 `Activate`（新酷音與小狼毫也是這樣寫的），
+/// 但 `dwFlags` **要記下來**：宿主就是靠它告訴我們這是什麼樣的執行緒。
+/// 最重要的是 `UIELEMENTENABLED`——那代表宿主打算自己畫候選、要我們
+/// 走 UI-less 模式把資料交出去。**我們現在沒做那套**（見開發文件 §2.58），
+/// 所以這行 log 的用途是：量測遊戲等自繪 UI 的宿主時，能直接看出
+/// 「宿主有沒有以 UI-less 啟用我們」，不必從症狀反推。
 impl ITfTextInputProcessorEx_Impl for TextService_Impl {
-    fn ActivateEx(&self, ptim: Ref<ITfThreadMgr>, tid: u32, _dwflags: u32) -> Result<()> {
+    fn ActivateEx(&self, ptim: Ref<ITfThreadMgr>, tid: u32, dwflags: u32) -> Result<()> {
+        crate::dlog!("[啟用] ActivateEx tid={tid} flags={dwflags:#x} {}", {
+            // **常數一律用 crate 匯出的，不要自己抄位元值**——手寫過一次，
+            // 整組錯位（把 `UIELEMENTENABLEDONLY` 當成 8，實際是 4），
+            // 那會讓這行 log 把 `SECUREMODE` 誤報成 UI-less。
+            use windows::Win32::UI::TextServices::{
+                TF_TMAE_COMLESS, TF_TMAE_CONSOLE, TF_TMAE_NOACTIVATEKEYBOARDLAYOUT,
+                TF_TMAE_NOACTIVATETIP, TF_TMAE_SECUREMODE, TF_TMAE_UIELEMENTENABLEDONLY,
+                TF_TMAE_WOW16,
+            };
+            const FLAGS: [(u32, &str); 7] = [
+                (TF_TMAE_NOACTIVATETIP, "NOACTIVATETIP"),
+                (TF_TMAE_SECUREMODE, "SECUREMODE"),
+                // ★ 這一個是重點：宿主要自己畫 UI，要我們走 UI-less
+                (TF_TMAE_UIELEMENTENABLEDONLY, "UIELEMENTENABLEDONLY★"),
+                (TF_TMAE_COMLESS, "COMLESS"),
+                (TF_TMAE_WOW16, "WOW16"),
+                (TF_TMAE_NOACTIVATEKEYBOARDLAYOUT, "NOACTIVATEKEYBOARDLAYOUT"),
+                (TF_TMAE_CONSOLE, "CONSOLE"),
+            ];
+            let names: Vec<&str> = FLAGS
+                .iter()
+                .filter(|(bit, _)| dwflags & bit != 0)
+                .map(|(_, name)| *name)
+                .collect();
+            if names.is_empty() {
+                "(無旗標)".to_string()
+            } else {
+                names.join("|")
+            }
+        });
         crate::guard::com("ActivateEx", || self.Activate(ptim, tid))
     }
 }
 
 impl ITfTextInputProcessor_Impl for TextService_Impl {
     fn Activate(&self, ptim: Ref<ITfThreadMgr>, tid: u32) -> Result<()> {
+        // 走 `ActivateEx` 進來的話上面已經記過一行帶旗標的；只有這一行
+        // 而沒有 `[啟用] ActivateEx` 的，代表**宿主走的是舊版介面**，
+        // 那就沒有旗標可看。量測時要能分辨這兩種情況。
+        crate::dlog!("[啟用] Activate tid={tid}");
         crate::guard::com("Activate", || {
             // 量每一步的耗時。切過去要等一秒的問題就是靠這個定位的。
             let t0 = std::time::Instant::now();
@@ -346,7 +389,7 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
     fn Deactivate(&self) -> Result<()> {
         crate::guard::com("Deactivate", || {
             let mut state = lock_state(&self.state);
-            state.candidate_window = None;
+            state.close_ime_windows();
             // 動畫視窗自己會在跑完時藏起來，但切走輸入法時要真的銷毀
             state.width_window = None;
             state.composition = None;
@@ -384,7 +427,7 @@ impl ITfCompositionSink_Impl for TextService_Impl {
         let mut state = lock_state(&self.state);
         state.composition = None;
         state.session.clear();
-        state.candidate_window = None;
+        state.close_ime_windows();
         Ok(())
     }
 }
@@ -631,6 +674,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     && state.session.push_punct(ch)
                 {
                     state.cutting_menu = false;
+                    state.seg_menu = false;
                     state.gesture.clear();
                     update_composition(self, context, &mut state)?;
                     show_candidates(context, &mut state)?;
@@ -652,17 +696,19 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 refresh_password(ctx, &mut state);
             }
             if state.password {
-                // 萬一還有殘留的候選視窗，一起收掉
-                state.candidate_window = None;
+                // 萬一還有殘留的視窗，一起收掉
+                state.close_ime_windows();
                 return Ok(BOOL(0));
             }
 
             // 收掉沒在組字時留下的提示視窗（見 `show_width_hint`）。
             // 使用者按了別的鍵，代表那個提示看完了。
-            if state.session.is_empty() && state.candidate_window.is_some() {
+            if state.session.is_empty()
+                && (state.candidate_window.is_some() || state.preview_window.is_some())
+            {
                 let toggling = keymap::lookup(state.mode(), vk) == Some(Action::ToggleWidth);
                 if !toggling {
-                    state.candidate_window = None;
+                    state.close_ime_windows();
                 }
             }
 
@@ -724,6 +770,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     }
                     state.session.push(ch);
                     state.cutting_menu = false;
+                    state.seg_menu = false;
                     // 手勢必須是連續四下，打了字就重來
                     state.gesture.clear();
                     update_composition(self, context, &mut state)?;
@@ -748,6 +795,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 Action::Backspace => {
                     state.session.backspace();
                     state.cutting_menu = false;
+                    state.seg_menu = false;
                     if state.session.is_empty() {
                         end_composition(context, &mut state, EndKind::Cancel)?;
                     } else {
@@ -759,6 +807,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     // 選字或選單開著時，Esc 先退回打字狀態；再按一次才取消組字
                     if state.cutting_menu || state.session.select_index().is_some() {
                         state.cutting_menu = false;
+                        state.seg_menu = false;
                         state.session.exit_select();
                         show_candidates(context, &mut state)?;
                     } else {
@@ -783,6 +832,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 Action::Commit => {
                     let text = state.session.text();
                     state.cutting_menu = false;
+                    state.seg_menu = false;
                     learn_from(&mut state);
                     end_composition(context, &mut state, EndKind::Commit(&text))?;
                 }
@@ -794,21 +844,15 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     if state.session.lock().is_some() {
                         return Ok(BOOL(1));
                     }
-                    // **快速按兩下展開全部**——使用者定的。
-                    //
-                    // 判定 400ms：太短來不及按第二下，太長會把「按 TAB 翻頁」
-                    // 誤判成雙擊。這是常見的雙擊門檻。
-                    let now = std::time::Instant::now();
-                    let double = state
-                        .last_tab
-                        .is_some_and(|t| now.duration_since(t) < DOUBLE_TAB);
-                    state.last_tab = Some(now);
+                    // **展開更多不是靠 TAB 按兩下，是往下走到底**——
+                    // 跟選字模式同一種手勢，見 `Session::next_cutting`。
                     state.cutting_menu = true;
-                    state.cutting_shown = if double {
-                        ime_core::session::CUTTING_PAGE_ALL
-                    } else {
-                        ime_core::session::CUTTING_PAGE
-                    };
+                    show_candidates(context, &mut state)?;
+                }
+                // **空白鍵展開更多切法**（使用者指定的）。反白不動——
+                // 展開是「讓我多看幾列」，不是「換一個切法」。
+                Action::ExpandCuttingMenu => {
+                    state.session.expand_cutting();
                     show_candidates(context, &mut state)?;
                 }
                 // **反白條在清單裡跑**，組字區不動。
@@ -835,9 +879,149 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 // 是它了，所以差別只在使用者的意圖，實作上都只是關選單。
                 Action::ConfirmCutting | Action::CloseCuttingMenu => {
                     state.cutting_menu = false;
-                    // 關掉選單就不該再被雙擊判定黏住——
-                    // 不清掉的話下一次按 TAB 會被誤判成「雙擊展開全部」
-                    state.last_tab = None;
+                    state.seg_menu = false;
+                    // 展開狀態跟著收回：下次開選單從十列重新開始，
+                    // 不然一按 TAB 就迎面五十列。
+                    state.session.collapse_cutting();
+                    show_candidates(context, &mut state)?;
+                }
+
+                // ── 段選單 ──
+                //
+                // 反白引擎切出來的一段，選它要當成什麼。細節見
+                // `ime_core::session::segmenu`。
+                Action::OpenSegMenu => {
+                    // **鎖定語言時整串就是一段，沒有切法可選**——但
+                    // 鎖定注音＋裝了台語包時**有台語詞可選**（使用者
+                    // 裁定：台語只在鎖定注音時出現，見 `segmenu`）。
+                    //
+                    // 鎖定日文／英文一律擋掉，那時真的沒東西。
+                    let taigi_ready = state.session.lock()
+                        == Some(ime_core::language::Language::Bopomofo)
+                        && ime_core::pack::any_tw();
+                    if state.session.lock().is_some() && !taigi_ready {
+                        return Ok(BOOL(1));
+                    }
+                    // **選字中按 TAB 要先離開選字**——`mode()` 先看
+                    // `select_index()`，不離開的話下一鍵仍然被當成
+                    // 選字模式，段選單的方向鍵全部失效。
+                    state.session.exit_select();
+                    // 台語模式：反白回到第一個詞。不重設的話重開 TAB 會
+                    // 停在上次定案後的位置，看起來像回不去了
+                    state.session.seg_open();
+                    state.seg_menu = true;
+                    show_candidates(context, &mut state)?;
+                }
+                // **台語模式下 ←→ 換的是「詞」不是「段」**——鎖定注音時
+                // 整串就是一段，換段沒有意義。見 `segmenu` 的 `tw_next`。
+                Action::SegRight => {
+                    if state.session.tw_mode() {
+                        state.session.tw_next();
+                    } else {
+                        state.session.seg_right();
+                    }
+                    show_candidates(context, &mut state)?;
+                }
+                Action::SegLeft => {
+                    if state.session.tw_mode() {
+                        state.session.tw_prev();
+                    } else {
+                        state.session.seg_left();
+                    }
+                    show_candidates(context, &mut state)?;
+                }
+                Action::SegNextCand => {
+                    state.session.seg_next_cand();
+                    show_candidates(context, &mut state)?;
+                }
+                Action::SegPrevCand => {
+                    state.session.seg_prev_cand();
+                    show_candidates(context, &mut state)?;
+                }
+                // 台語模式：調反白**寬度**（「我們」↔「我」）。
+                //
+                // **起點固定、只調長度**（使用者裁定）：要選「們」用 ←→
+                // 跳過去，不必再加一組推左邊界的鍵——鍵位表已經很擠。
+                Action::SegWiden => {
+                    if state.session.tw_mode() {
+                        state.session.tw_widen();
+                    } else {
+                        state.session.seg_widen();
+                    }
+                    show_candidates(context, &mut state)?;
+                }
+                Action::SegNarrow => {
+                    if state.session.tw_mode() {
+                        state.session.tw_narrow();
+                    } else {
+                        state.session.seg_narrow();
+                    }
+                    show_candidates(context, &mut state)?;
+                }
+                Action::SegPick(i) => {
+                    // **數字鍵對應畫面上的位置**，捲動之後跟絕對索引
+                    // 對不起來（跟選字的 `cand_number_index` 同一回事）
+                    let Some(abs) = state.session.seg_number_index(i) else {
+                        return Ok(BOOL(1));
+                    };
+                    state.session.seg_set_cand(abs);
+                    // **挑了就直接定案**——數字鍵的語意是「就是這個」，
+                    // 跟選字的 `PickChar` 一致（挑完就套用，不必再按 Enter）
+                    let advance = state.config.behavior.enter_in_select
+                        == ime_core::config::EnterInSelect::Next;
+                    state.session.seg_confirm_with(advance);
+                    if state.session.seg_done() {
+                        state.seg_menu = false;
+                        // 理由同 `SegConfirm`
+                        if state.config.behavior.commit_on_last {
+                            let text = state.session.text();
+                            learn_from(&mut state);
+                            end_composition(context, &mut state, EndKind::Commit(&text))?;
+                            return Ok(BOOL(1));
+                        }
+                    }
+                    update_composition(self, context, &mut state)?;
+                    show_candidates(context, &mut state)?;
+                }
+                // **選定這一段：前面定案、後面重算。**這是段選單的核心。
+                //
+                // 組字區要重寫——後區重算之後文字可能整個變了，不像切法
+                // 選單那樣只有反白在動。
+                Action::SegConfirm => {
+                    use ime_core::config::EnterInSelect;
+                    // **跟選字共用同一個開關**（使用者裁定）：`Next` 是
+                    // 新注音式的「選完往下一個」，`Exit` 是微軟注音式的
+                    // 「選完就停住」。兩層的粒度不同但心智模型一樣。
+                    let advance = state.config.behavior.enter_in_select == EnterInSelect::Next;
+                    state.session.seg_confirm_with(advance);
+                    // **每一段都定案了就關掉選單**——沒有東西可挑了，
+                    // 留著只會讓反白停在最後一段、候選是空的（實測回報
+                    // 「選到最後不會跳離切法選擇」）。
+                    if state.session.seg_done() {
+                        state.seg_menu = false;
+                        // 「最後一個選完直接送出」——**三個設定同一個框，
+                        // 行為要一致**。選字那條路早就這樣做了，段選單
+                        // 漏接（實測回報「這功能在台語 TAB 中沒生效」）。
+                        if state.config.behavior.commit_on_last {
+                            let text = state.session.text();
+                            learn_from(&mut state);
+                            end_composition(context, &mut state, EndKind::Commit(&text))?;
+                            return Ok(BOOL(1));
+                        }
+                    }
+                    update_composition(self, context, &mut state)?;
+                    show_candidates(context, &mut state)?;
+                }
+                // TAB：關掉選單，**已經定案的段留著**
+                Action::CloseSegMenu => {
+                    state.seg_menu = false;
+                    show_candidates(context, &mut state)?;
+                }
+                // Esc：全部重來，回到引擎自己算的分段
+                Action::SegReset => {
+                    state.session.seg_reset();
+                    state.seg_menu = false;
+                    update_composition(self, context, &mut state)?;
                     show_candidates(context, &mut state)?;
                 }
 
@@ -846,11 +1030,13 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 // 來說是同一件事（往右），差別是內部細節，見 `arrow_right`
                 Action::EnterSelect => {
                     state.cutting_menu = false;
+                    state.seg_menu = false;
                     state.session.arrow_right();
                     show_candidates(context, &mut state)?;
                 }
                 Action::EnterSelectLast => {
                     state.cutting_menu = false;
+                    state.seg_menu = false;
                     state.session.arrow_left();
                     show_candidates(context, &mut state)?;
                 }
@@ -946,6 +1132,18 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     // 使用者設定：選完往下一格（新注音式），還是直接退出
                     let advance = state.config.behavior.enter_in_select == EnterInSelect::Next;
                     let left_select = state.session.confirm_cand_with(advance);
+                    // **離開選字一定要回到打字，不能掉回段選單。**
+                    //
+                    // `mode()` 先看 `select_index()`、再看 `seg_menu`，所以
+                    // 段選單開著時進選字、選完離開，模式會掉回 `SegMenu`，
+                    // Enter 就變成「定案這一段」而不是送出——實測回報
+                    // 「選字 enter 按不下去」正是這條路。
+                    //
+                    // 兩層是互斥的（使用者裁定）：段選單開著就只選段，
+                    // 關掉才用左右進選字。
+                    if left_select {
+                        state.seg_menu = false;
+                    }
                     // 設定成「最後一個字選完直接送出」的話，離開選字就送出
                     if left_select && state.config.behavior.commit_on_last {
                         let text = state.session.text();
@@ -995,6 +1193,8 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                         // （使用者定的）。方向鍵那條路是逐格慢慢挑，
                         // 數字鍵是知道答案的快捷鍵，挑完不該還留在選字裡。
                         state.session.exit_select();
+                        // 離開選字要回打字，理由同 `ConfirmCand`
+                        state.seg_menu = false;
                         update_composition(self, context, &mut state)?;
                         show_candidates(context, &mut state)?;
                     }
@@ -1010,31 +1210,97 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     }
 }
 
-impl State {
-    /// 目前在哪個模式——按鍵綁定要靠它決定同一個鍵做什麼。
-    ///
-    /// 切法選單與選字模式還沒實作，先只分「有沒有在組字」。
-    fn mode(&self) -> Mode {
-        if self.session.is_empty() {
-            Mode::Idle
-        } else if self.session.select_index().is_some() {
-            if self.session.cand_expanded() {
-                Mode::SelectingExpanded
-            } else {
-                Mode::Selecting
-            }
-        } else if self.cutting_menu {
-            Mode::CuttingMenu
+/// 三個旗標決定在哪個模式。**抽成純函式是為了測得到**——`State` 帶著
+/// COM 物件建不起來，但模式的規則本身只看這幾個布林。
+///
+/// **順序就是優先權**：選字蓋過段選單、段選單蓋過切法選單。所以
+/// **離開選字時一定要把 `seg_menu` 關掉**，否則模式會掉回 `SegMenu`
+/// 而不是 `Typing`，Enter 就變成「定案這一段」永遠送不出去
+/// （實測回報「選字 enter 按不下去」）。
+fn mode_of(empty: bool, selecting: Option<bool>, seg_menu: bool, cutting_menu: bool) -> Mode {
+    if empty {
+        Mode::Idle
+    } else if let Some(expanded) = selecting {
+        if expanded {
+            Mode::SelectingExpanded
         } else {
-            Mode::Typing
+            Mode::Selecting
         }
+    } else if seg_menu {
+        Mode::SegMenu
+    } else if cutting_menu {
+        Mode::CuttingMenu
+    } else {
+        Mode::Typing
     }
 }
 
-/// 「快速按兩下 TAB」的判定時間。
-///
-/// 太短來不及按第二下，太長會把「按 TAB 翻頁」誤判成雙擊。
-const DOUBLE_TAB: std::time::Duration = std::time::Duration::from_millis(400);
+impl State {
+    /// 收掉輸入法自己的兩個視窗（預覽列與候選清單）。
+    ///
+    /// **一定要成對收**：只收一個的話另一個會孤零零留在畫面上。
+    /// 分成兩個視窗的理由見 `crate::preview_window`。
+    ///
+    /// 全半形提示視窗不在這裡——那是獨立的狀態提示，生命週期不同。
+    fn close_ime_windows(&mut self) {
+        self.candidate_window = None;
+        self.preview_window = None;
+    }
+
+    /// 目前在哪個模式——按鍵綁定要靠它決定同一個鍵做什麼。
+    fn mode(&self) -> Mode {
+        mode_of(
+            self.session.is_empty(),
+            self.session
+                .select_index()
+                .map(|_| self.session.cand_expanded()),
+            self.seg_menu,
+            self.cutting_menu,
+        )
+    }
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+
+    #[test]
+    fn 空的時候是閒置() {
+        assert_eq!(mode_of(true, None, false, false), Mode::Idle);
+        // 旗標怎麼開都一樣——沒東西可操作
+        assert_eq!(mode_of(true, Some(false), true, true), Mode::Idle);
+    }
+
+    #[test]
+    fn 選字蓋過段選單() {
+        assert_eq!(mode_of(false, Some(false), true, false), Mode::Selecting);
+        assert_eq!(
+            mode_of(false, Some(true), true, false),
+            Mode::SelectingExpanded
+        );
+    }
+
+    /// **這條規則是「選字 enter 按不下去」的根因。**
+    ///
+    /// 段選單開著時進選字，離開選字之後如果 `seg_menu` 還是 true，
+    /// 模式會掉回 `SegMenu`——Enter 在那裡是「定案這一段」不是送出。
+    ///
+    /// 兩層互斥（使用者裁定）：段選單開著就只選段，關掉才用左右進選字。
+    /// 所以 `ConfirmCand` 與 `PickChar` 離開選字時都要清掉 `seg_menu`。
+    #[test]
+    fn 離開選字沒關段選單會掉回段選單() {
+        // 沒清乾淨：模式掉回 SegMenu，Enter 送不出去
+        assert_eq!(mode_of(false, None, true, false), Mode::SegMenu);
+        // 清乾淨了才回得到打字狀態
+        assert_eq!(mode_of(false, None, false, false), Mode::Typing);
+    }
+
+    #[test]
+    fn 段選單蓋過切法選單() {
+        assert_eq!(mode_of(false, None, true, true), Mode::SegMenu);
+        assert_eq!(mode_of(false, None, false, true), Mode::CuttingMenu);
+    }
+}
 
 /// 手勢兩下之間最多隔多久。
 ///

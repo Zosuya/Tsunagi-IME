@@ -171,7 +171,10 @@ impl Default for Behavior {
             width: crate::width::Width::Auto,
             engines: Engines::default(),
             backspace_whole_cell: true,
-            packs: Vec::new(),
+            packs: vec![
+                crate::pack::BUNDLED_SYMBOLS.to_string(),
+                crate::pack::BUNDLED_EMOJI.to_string(),
+            ],
             packs_dir: String::new(),
             lock_punct: LockPunct::default(),
             ctrl_punct: true,
@@ -493,27 +496,67 @@ pub fn is_remote_path(s: &str) -> bool {
     s.starts_with("\\\\") || s.starts_with("//")
 }
 
-/// `%APPDATA%` 底下的資料夾名。設定檔與領域包都放這裡。
+/// 使用者資料夾的名字。設定檔與領域包都放這裡。
+///
+/// **各平台同名**（見 `user_dir`），設定檔格式也一樣，所以在兩台
+/// 之間直接拷貝就能用。
 pub const APP_DIR: &str = "tsunagi-ime";
 
 /// 改名前的資料夾名（2026-09-01 從舊專案名改過來）。
 ///
 /// 只有 `migrate_app_dir` 會用到——搬過去之後就再也碰不到它。
+/// **只在 Windows 編進來**：舊名只在 Windows 上存在過，其他平台
+/// 一律是全新安裝，沒有東西要搬。
+#[cfg(windows)]
 const OLD_APP_DIR: &str = "通用語言輸入法";
 
-/// 使用者的資料夾：`%APPDATA%\tsunagi-ime\`
+/// 使用者的資料夾。各平台的位置見 `base_dir`。
 ///
-/// 用環境變數而不是寫死路徑——使用者名稱、磁碟機代號在別台電腦
-/// 不一定相同（見 CLAUDE.md 的跨電腦開發注意事項）。
+/// 一律從環境變數推導，不寫死路徑——使用者名稱、磁碟機代號在別台
+/// 電腦不一定相同（見 CLAUDE.md 的跨電腦開發注意事項）。
 ///
-/// **順便處理改名的搬家**，見 `migrate_app_dir`。設定與領域包都經過
-/// 這一支，所以不管誰先被呼叫，搬家都只會發生一次。
+/// **順便處理改名的搬家**（只有 Windows 要），見 `migrate_app_dir`。
+/// 設定與領域包都經過這一支，所以不管誰先被呼叫，搬家都只會發生一次。
 pub fn user_dir() -> Option<PathBuf> {
-    let base = PathBuf::from(std::env::var_os("APPDATA")?);
+    let base = base_dir()?;
+    #[cfg(windows)]
     migrate_app_dir(&base);
     Some(base.join(APP_DIR))
 }
 
+/// 平台放使用者資料的根目錄，`APP_DIR` 就掛在它底下。
+///
+/// 拆成獨立一支**是為了能測**——`user_dir` 在 Windows 上會順手觸發
+/// 搬家，測試不該去動使用者真正的 `%APPDATA%`。
+#[cfg(windows)]
+fn base_dir() -> Option<PathBuf> {
+    Some(PathBuf::from(std::env::var_os("APPDATA")?))
+}
+
+/// macOS：`~/Library/Application Support/tsunagi-ime/`。
+///
+/// 這是 Apple 給「App 自己管理的使用者資料」的標準位置，跟
+/// `%APPDATA%` 對應。不用 `~/Library/Preferences`——那裡歸
+/// `NSUserDefaults`（plist）管，手寫 toml 進去會跟系統打架。
+#[cfg(target_os = "macos")]
+fn base_dir() -> Option<PathBuf> {
+    Some(PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support"))
+}
+
+/// 其餘平台（Linux）走 XDG。
+///
+/// **這只是為了讓 core 在別的平台也編得過、有個合理的位置**，
+/// Linux 版本身要到 Phase 6 才評估（開發文件 §2.52）。真的要做的
+/// 時候再回來確認這個位置對不對。
+#[cfg(not(any(windows, target_os = "macos")))]
+fn base_dir() -> Option<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(xdg));
+    }
+    Some(PathBuf::from(std::env::var_os("HOME")?).join(".config"))
+}
+
+#[cfg(windows)]
 /// 舊資料夾改名成新的。**只在新的還不存在時做，而且一個行程只試一次。**
 ///
 /// # 為什麼用 rename 而不是複製
@@ -534,6 +577,7 @@ fn migrate_app_dir(base: &Path) {
     ONCE.call_once(|| rename_old_dir(base));
 }
 
+#[cfg(windows)]
 /// 真正的搬家動作。
 ///
 /// 從 `migrate_app_dir` 抽出來是**為了能測**——那一支有 `Once`，
@@ -549,7 +593,7 @@ fn rename_old_dir(base: &Path) {
     }
 }
 
-/// `%APPDATA%\tsunagi-ime\config.toml`
+/// 使用者自己的設定檔：`user_dir()/config.toml`。
 fn user_config_path() -> Option<PathBuf> {
     Some(user_dir()?.join("config.toml"))
 }
@@ -565,9 +609,45 @@ pub fn modified_at(data_dir: Option<&Path>) -> Option<std::time::SystemTime> {
 
 #[cfg(test)]
 mod tests {
+    /// 使用者資料夾推導得出來嗎。**這一節是 macOS 那個洞的守門員**：
+    /// 2026-09-08 以前 `user_dir` 直接讀 `%APPDATA%`，在 Mac 上一定回
+    /// `None`，設定檔、領域包、學習層全部讀不到——而且不會出任何錯，
+    /// 編得過、測試也全過。
+    mod 使用者資料夾 {
+        use super::super::{base_dir, APP_DIR};
+
+        #[test]
+        fn 每個平台都推導得出來() {
+            let base = base_dir().expect("這個平台推不出使用者資料夾");
+            assert!(base.is_absolute(), "要是絕對路徑，拿到的是 {base:?}");
+        }
+
+        /// `base_dir` 只回根目錄，`APP_DIR` 是 `user_dir` 才接上去的。
+        /// 兩邊都接會變成 `tsunagi-ime/tsunagi-ime`。
+        #[test]
+        fn 根目錄不含應用程式資料夾名() {
+            let base = base_dir().unwrap();
+            assert!(!base.ends_with(APP_DIR), "拿到的是 {base:?}");
+        }
+
+        /// macOS 用 Apple 給「App 自己管理的使用者資料」的標準位置，
+        /// 不是 `~/Library/Preferences`——那裡歸 `NSUserDefaults` 管。
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn mac_放在_application_support() {
+            let base = base_dir().unwrap();
+            assert!(
+                base.ends_with("Library/Application Support"),
+                "拿到的是 {base:?}"
+            );
+        }
+    }
+
     /// 資料夾改名的搬家（2026-09-01 從舊專案名改成 `tsunagi-ime`）。
     ///
     /// 直接在暫存資料夾裡造出兩種狀況來測，不碰真的 `%APPDATA%`。
+    /// **只有 Windows 有搬家這回事**，見 `OLD_APP_DIR`。
+    #[cfg(windows)]
     mod 搬家 {
         use super::super::{rename_old_dir, APP_DIR, OLD_APP_DIR};
 

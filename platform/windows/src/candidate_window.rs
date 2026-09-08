@@ -12,8 +12,8 @@
 use std::sync::Once;
 
 use crate::d2d::{Rect, Renderer, TextMeasurer};
-use crate::slide::{Cell, Slide, Span, SpanSlide};
 use crate::theme::{Color, Theme};
+use ime_core::render::slide::{Cell, Slide};
 use ime_core::Candidate;
 use windows::core::{w, Result, BOOL, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -44,30 +44,11 @@ const ANIM_INTERVAL: u32 = 10;
 
 /// 主題規格用的基準 DPI。Windows 的 100% 縮放是 96 DPI，
 /// 主題裡的尺寸都以這個為基準，實際繪製時按螢幕 DPI 等比放大。
-const BASE_DPI: i32 = 96;
+pub(crate) const BASE_DPI: i32 = 96;
 
 static REGISTER_CLASS: Once = Once::new();
 
 thread_local! {
-    /// 預覽列的文字——組字當下的第一名切法。
-    ///
-    /// 組字區保持原始按鍵（打什麼顯示什麼），轉換結果放在這一列。
-    /// 這樣打字時看到的是自己按了什麼，不會被逐字轉換干擾，
-    /// 同時又看得到引擎的判斷。
-    static PREVIEW: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
-
-    /// 預覽列裡要反白的那一段（在 `PREVIEW` 裡的位元組範圍）。
-    ///
-    /// 選字時要標出「正在選哪一格」。原本是把那一段用【】包起來，
-    /// 但那會**改變文字本身**——預覽列的用意是「送出去會長這樣」，
-    /// 混進不會送出的符號就不誠實了，而且中文全形括號很佔位置。
-    /// 改成畫在文字上，文字保持原樣。
-    ///
-    /// 中間試過細外框，但小字級下不夠顯眼、得盯著找，
-    /// 最後定案是跟候選清單同一組反白色（藍底白字）。
-    static PREVIEW_BOX: std::cell::RefCell<Option<std::ops::Range<usize>>> =
-        const { std::cell::RefCell::new(None) };
-
     /// 底部那行小字提示（例如「↑↑↓↓ 開啟設定」）。空字串就不畫。
     ///
     /// **不放進候選清單**——那裡是候選，提示是提示。混在一起的話
@@ -80,24 +61,6 @@ thread_local! {
     /// 切法選單要靠它——使用者按空白鍵時，反白條在清單裡上下跑，
     /// 而不是每按一次就整個清單重排。
     static SELECTED: std::cell::RefCell<Option<usize>> = const { std::cell::RefCell::new(None) };
-
-    /// 預覽列反白塊正在滑動的話，這裡記著它的動畫。
-    static PREVIEW_SLIDE: std::cell::RefCell<Option<SpanSlide>> =
-        const { std::cell::RefCell::new(None) };
-
-    /// 上一次**實際畫出來**的預覽列反白塊位置（左緣, 右緣）。
-    ///
-    /// 為什麼要記：位置得量字寬才知道，而量字寬要有 DC 和字型，
-    /// 只有 `paint` 拿得到；但「要不要開始滑、從哪裡滑」是 `show`
-    /// 在決定的。所以由 `paint` 把算好的位置存起來，`show` 下次
-    /// 拿它當起點。
-    static PREVIEW_SPAN: std::cell::Cell<Option<Span>> = const { std::cell::Cell::new(None) };
-
-    /// 預覽列的反白這一輪要不要用滑的。
-    ///
-    /// `show` 判斷（同一句話、只是換了一格才滑），`paint` 執行——
-    /// 因為只有 `paint` 量得出新位置在哪。
-    static PREVIEW_ANIMATE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 
     /// 反白條正在滑動的話，這裡記著它的動畫；`None` 就直接畫在
     /// `SELECTED` 那一格。
@@ -113,6 +76,9 @@ thread_local! {
     /// 這個視窗的 DPI。主題尺寸是邏輯像素，畫之前要按它放大。
     static DPI: std::cell::Cell<i32> = const { std::cell::Cell::new(BASE_DPI) };
 
+    /// 上面有沒有接著預覽列。有的話上緣畫直角，兩塊才貼得起來。
+    static TOP_FLAT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
     /// 分成幾欄。`1` 是一般的一直排，`>1` 是展開全部的多欄網格。
     ///
     /// 每欄獨立編號 1-9、向下數——使用者定的，跟日文 IME 的排法一致
@@ -121,6 +87,12 @@ thread_local! {
 
     /// 每一欄放幾個。
     static PER_COLUMN: std::cell::Cell<usize> = const { std::cell::Cell::new(9) };
+
+    /// 候選清單一欄多寬（像素，已含 DPI）。
+    ///
+    /// **不等於視窗寬除以欄數**：視窗可能為了裝下長長的預覽列而變寬，
+    /// 候選欄卻要維持自己的寬度。0 代表還沒算過，那時退回用視窗寬推。
+    static COL_W: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
 
     /// 每一列候選的高度。**不再等高**——長候選會換行佔好幾行。
     ///
@@ -170,7 +142,7 @@ pub fn set_theme(t: Theme) {
 }
 
 /// 把主題的邏輯像素換算成這個螢幕的實際像素。
-fn scaled(v: i32) -> i32 {
+pub(crate) fn scaled(v: i32) -> i32 {
     let dpi = DPI.with(|d| d.get());
     v * dpi / BASE_DPI
 }
@@ -271,8 +243,6 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
                 // 兩個動畫都跑完了才停計時器
                 let cell_done =
                     SLIDE.with(|s| s.borrow().as_ref().map(|x| x.done()).unwrap_or(true));
-                let span_done =
-                    PREVIEW_SLIDE.with(|s| s.borrow().as_ref().map(|x| x.done()).unwrap_or(true));
                 let scroll_done =
                     SCROLL_ANIM.with(|s| s.borrow().as_ref().map(|x| x.done()).unwrap_or(true));
                 if scroll_done {
@@ -281,10 +251,7 @@ unsafe fn wndproc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) ->
                 if cell_done {
                     SLIDE.with(|s| *s.borrow_mut() = None);
                 }
-                if span_done {
-                    PREVIEW_SLIDE.with(|s| *s.borrow_mut() = None);
-                }
-                if cell_done && span_done && scroll_done {
+                if cell_done && scroll_done {
                     let _ = KillTimer(Some(hwnd), ANIM_TIMER);
                 }
                 // 停掉的那一幀也要畫——把反白條收到終點的整數格
@@ -525,7 +492,7 @@ thread_local! {
     /// 滑鼠正指著捲軸嗎。指著就把滑塊畫濃一點，告訴使用者它抓得動。
     static SCROLL_HOVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// 滑塊位置的滑動動畫（存 0～1 的比例，見 `ValueSlide`）。
-    static SCROLL_ANIM: std::cell::RefCell<Option<crate::slide::ValueSlide>> =
+    static SCROLL_ANIM: std::cell::RefCell<Option<ime_core::render::slide::ValueSlide>> =
         const { std::cell::RefCell::new(None) };
     /// 使用者拖了捲軸要通知誰。見 `set_on_scroll`。
     static ON_SCROLL: std::cell::RefCell<Option<IndexHandler>> =
@@ -568,38 +535,20 @@ fn scroll_extra(has_scroll: bool) -> i32 {
 ///   pad             底部內距
 /// ```
 ///
-/// 沒有預覽列時，候選清單上面要自己補一份 `pad`。
-///
-/// **只有預覽列時**（打字中、還沒按空白）視窗就收緊成它自己那麼高，
-/// 底下不留空——黃色底會填滿整個視窗，多留的話會露出一條白邊。
-fn layout(pad: i32, line_h: i32, has_preview: bool, rows: i32, has_hint: bool) -> (i32, i32) {
-    layout_with(pad, line_h, has_preview, line_h * rows, rows == 0, has_hint)
+/// **預覽列不在這個視窗裡**（2026-09-08 拆出去了，見 `preview_window`）
+/// ——兩者的寬度不相干，同一個視窗只能取最大值，短的那邊旁邊就空一大塊。
+fn layout(pad: i32, line_h: i32, rows: i32, has_hint: bool) -> (i32, i32) {
+    layout_with(pad, line_h, line_h * rows, rows == 0, has_hint)
 }
 
 /// 同上，但候選清單的**總高度**直接給——因為每列不等高。
 ///
 /// 長候選會換行佔好幾行，所以不能再用「行高 × 列數」算。
 /// `list_h` 是所有列加起來的高度，`empty` 是「一列都沒有」。
-fn layout_with(
-    pad: i32,
-    line_h: i32,
-    has_preview: bool,
-    list_h: i32,
-    empty: bool,
-    has_hint: bool,
-) -> (i32, i32) {
-    // **預覽列固定一行**——它不換行，長了就捲動顯示尾端。
-    // 讓它變高的話打字時視窗會忽高忽低，很干擾。
-    let list_top = if has_preview { pad * 2 + line_h } else { pad };
-    if has_preview && empty && !has_hint {
-        return (list_top, list_top);
-    }
+fn layout_with(pad: i32, line_h: i32, list_h: i32, empty: bool, has_hint: bool) -> (i32, i32) {
+    let list_top = pad;
     // 什麼都沒有時也要留一列的高度，不然視窗會扁掉
-    let list_h = if empty && !has_preview {
-        line_h
-    } else {
-        list_h
-    };
+    let list_h = if empty { line_h } else { list_h };
     let height = list_top + list_h + line_h * i32::from(has_hint) + pad;
     (list_top, height)
 }
@@ -669,14 +618,13 @@ fn paint_inner(hwnd: HWND) {
             dpi,
         );
 
-        let x = PaintCtx::new(&theme, w, h, dpi);
+        let x = PaintCtx::new(&theme, w, h);
 
         let Ok(frame) = renderer.begin() else {
             return;
         };
 
         paint_background(renderer, &frame, &x, t_frame, ms_px);
-        paint_preview(renderer, &frame, &x);
         paint_candidates(renderer, &frame, &x, &font);
         paint_hint(&frame, &x, hint_font.as_ref().ok());
         paint_scrollbar(&frame, &x);
@@ -699,24 +647,21 @@ struct PaintCtx<'a> {
     line_h: f32,
     gap: f32,
     radius: f32,
-    dpi: f32,
     /// 候選清單的上緣——預覽列在不在會影響它
     list_top: f32,
     hl_style: ime_core::config::HighlightStyle,
     /// 候選列與預覽列的反白配色。**原色不同**（候選字色 vs 淺藍），
     /// 所以要分別算，不能共用一份
     hl_row: ime_core::render::HighlightPaint,
-    hl_preview: ime_core::render::HighlightPaint,
 }
 
 impl<'a> PaintCtx<'a> {
-    fn new(theme: &'a Theme, w: f32, h: f32, dpi: f32) -> Self {
+    fn new(theme: &'a Theme, w: f32, h: f32) -> Self {
         let c = &theme.colors;
         let pad = scaled(theme.metrics.padding()) as f32;
         let line_h = scaled(theme.metrics.line_height()) as f32;
         let hl_style = theme.metrics.highlight_style;
-        let has_preview = PREVIEW.with(|p| !p.borrow().is_empty());
-        let (list_top, _) = layout(pad as i32, line_h as i32, has_preview, 0, false);
+        let (list_top, _) = layout(pad as i32, line_h as i32, 0, false);
         Self {
             theme,
             w,
@@ -725,7 +670,6 @@ impl<'a> PaintCtx<'a> {
             line_h,
             gap: scaled(theme.metrics.index_gap()) as f32,
             radius: scaled(theme.metrics.corner_radius()) as f32,
-            dpi,
             list_top: list_top as f32,
             hl_style,
             // **反白該畫成什麼樣，一律問 `core`**——設定頁的預覽問同一份，
@@ -735,12 +679,6 @@ impl<'a> PaintCtx<'a> {
                 c.highlight_bg.to_rgb(),
                 c.highlight_text.to_rgb(),
                 c.text.to_rgb(),
-            ),
-            hl_preview: ime_core::render::highlight_paint(
-                hl_style,
-                c.highlight_bg.to_rgb(),
-                c.highlight_text.to_rgb(),
-                c.preview_text.to_rgb(),
             ),
         }
     }
@@ -787,169 +725,37 @@ fn paint_background(
         b.clone()
     });
     let ms_bmp = t_bmp.elapsed().as_millis();
+    // **上面接著預覽列時上緣畫直角**——兩塊要貼得起來。
+    // 各自圓角的話接縫處會露出兩個內凹的小缺口。
+    let joined = TOP_FLAT.with(|x| x.get());
+    let rc = Rect::new(0.0, 0.0, w, h);
     let t_img = std::time::Instant::now();
     if let Some(img) = &bg {
-        frame.fill_round_image(Rect::new(0.0, 0.0, w, h), radius, img, 1.0);
+        if joined {
+            frame.fill_bottom_round_image(rc, radius, img, 1.0);
+        } else {
+            frame.fill_round_image(rc, radius, img, 1.0);
+        }
     }
     let ms_img = t_img.elapsed().as_millis();
     let ms_frame = t_frame.elapsed().as_millis();
     if ms_frame >= SLOW_FRAME_MS {
         crate::dlog!("[paint] 慢幀 {ms_frame}ms（解碼 {ms_px} / 建圖 {ms_bmp} / 畫圖 {ms_img}）");
     }
-    frame.fill_round_gradient(
-        Rect::new(0.0, 0.0, w, h),
-        radius,
-        c.window_bg,
-        c.window_bg2,
-        // 有圖時蓋薄一點讓圖透出來，濃度由使用者調。
-        //
-        // **要補償混色的色彩空間差異**——D2D 在 gamma 空間混色，
-        // 同樣的數值會比設定頁的預覽暗一截（見
-        // `dim_alpha_for_gamma_blend`）。
-        if bg.is_some() {
-            ime_core::render::dim_alpha_for_gamma_blend(theme.background.overlay_alpha())
-        } else {
-            1.0
-        },
-    );
-}
-
-/// 預覽列：正在組的那一串字，含反白框與滑動動畫。
-fn paint_preview(renderer: &crate::d2d::Renderer, frame: &crate::d2d::Frame, x: &PaintCtx) {
-    let theme = x.theme;
-    let c = x.colors();
-    let (w, h, pad, line_h, radius, dpi) = (x.w, x.h, x.pad, x.line_h, x.radius, x.dpi);
-    let list_top = x.list_top;
-    let hl_style = x.hl_style;
-    let hl_preview = &x.hl_preview;
-
-    // ── 預覽列 ──
-    PREVIEW.with(|p| {
-        let preview = p.borrow();
-        if preview.is_empty() {
-            return;
-        }
-        let row_bottom = pad * 2.0 + line_h;
-        // 底下沒有候選清單時填到視窗底，並跟著視窗圓角收邊
-        let alone = h <= list_top;
-        if c.preview_bg != c.window_bg || c.preview_bg2 != c.preview_bg {
-            let rc = Rect::new(0.0, 0.0, w, if alone { h } else { row_bottom });
-            if alone {
-                // 上下都要收邊——整個視窗就只有這一列
-                frame.fill_round_gradient(rc, radius, c.preview_bg, c.preview_bg2, 1.0);
-            } else {
-                // **只收上緣**。畫成直角的話那兩個角會填滿視窗的圓角
-                // 缺口，看起來像預覽列比下面的面板寬出去一截
-                frame.fill_top_round_gradient(rc, radius, c.preview_bg, c.preview_bg2, 1.0);
-            }
-        }
-
-        // **預覽列固定一行，太長就捲動顯示尾端**。
-        //
-        // 使用者關心的是剛打的字，不是句子開頭。換行的話視窗會
-        // 忽高忽低，打字時很干擾。
-        let Ok(pfont) = renderer.text_format_nowrap(
-            &theme.font.family,
-            theme.metrics.font_size_pt() as f32,
-            dpi,
-        ) else {
-            return;
-        };
-        let avail = w - pad * 2.0;
-        let gap = preview_gap(PREVIEW_BOX.with(|bx| bx.borrow().is_some()));
-        let cells = layout_preview(renderer, &preview, &pfont, gap);
-        let full_w = cells.last().map(|(_, _, x, cw)| x + cw).unwrap_or(0.0);
-        // 反白框在**還沒捲動**時的位置——捲動量要看它才決定得了
-        let box_span = PREVIEW_BOX.with(|bx| {
-            let range = bx.borrow().clone()?;
-            // 落在反白範圍內的那幾個字
-            let first = cells.iter().find(|(a, _, _, _)| *a >= range.start)?;
-            let last = cells.iter().rev().find(|(_, b, _, _)| *b <= range.end)?;
-            // 左右各留半個間隙，框才會置中在空隙裡
-            Some((first.2 - gap / 2.0, last.2 + last.3 + gap / 2.0))
-        });
-
-        let scroll = preview_scroll(full_w, avail, box_span);
-        let marked = box_span.map(|(a, b)| (pad + a - scroll, pad + b - scroll));
-
-        // 滑動動畫：`show` 說要滑的話這裡才建得出來
-        // （到這一步才量得出位置）
-        if PREVIEW_ANIMATE.with(|a| a.replace(false)) {
-            if let (Some(from), Some(to)) = (PREVIEW_SPAN.with(|p| p.get()), marked) {
-                PREVIEW_SLIDE.with(|s| {
-                    let next =
-                        SpanSlide::start(s.borrow().as_ref(), from, (to.0 as i32, to.1 as i32));
-                    *s.borrow_mut() = Some(next);
-                });
-            }
-        }
-        PREVIEW_SPAN.with(|p| p.set(marked.map(|(a, b)| (a as i32, b as i32))));
-
-        let bar = PREVIEW_SLIDE
-            .with(|s| {
-                s.borrow()
-                    .as_ref()
-                    .filter(|x| !x.done())
-                    .map(|x| x.position())
-            })
-            .or(marked);
-
-        // 底色先畫，字才不會被蓋掉
-        if let Some((x0, x1)) = bar {
-            let inset = scaled(1) as f32;
-            frame.fill_highlight(
-                Rect::new(x0, pad + inset, x1, pad + line_h - inset),
-                radius / 2.0,
-                c.highlight_bg,
-                hl_style,
-                // **不畫上緣的光**——這一格很矮，加了會糊成一塊，
-                // 只留外框比較清楚
-                false,
-            );
-        }
-
-        // **逐字畫**，位置用上面那份排版——含字間距，框才對得準。
-        //
-        // 反白那幾個字直接換色，不必像以前那樣整段畫完再重畫一次。
-        // 換色的判斷用**終點範圍**而不是滑動中的位置，不然動畫途中
-        // 會出現半個字變色。
-        let hot_range = PREVIEW_BOX.with(|bx| bx.borrow().clone());
-        for (a, b, x, cw) in &cells {
-            let Some(ch) = preview.get(*a..*b) else {
-                continue;
-            };
-            let left = pad + x - scroll;
-            // 捲出可視範圍的就不用畫了
-            if left + cw < 0.0 || left > w {
-                continue;
-            }
-            let hot = hot_range
-                .as_ref()
-                .is_some_and(|r| *a >= r.start && *b <= r.end);
-            draw_label(
-                frame,
-                theme,
-                ch,
-                Rect::new(left, pad, left + cw, pad + line_h),
-                &pfont,
-                if hot {
-                    Color::from(hl_preview.text)
-                } else {
-                    c.preview_text
-                },
-                1.0,
-            );
-        }
-
-        // 分隔線。只有預覽列時不畫——下面沒東西可分隔。
-        if !alone {
-            frame.fill_rect(
-                Rect::new(0.0, row_bottom - 1.0, w, row_bottom),
-                c.separator,
-                1.0,
-            );
-        }
-    });
+    // 有圖時蓋薄一點讓圖透出來，濃度由使用者調。
+    //
+    // **要補償混色的色彩空間差異**——D2D 在 gamma 空間混色，
+    // 同樣的數值會比設定頁的預覽暗一截（見 `dim_alpha_for_gamma_blend`）。
+    let overlay = if bg.is_some() {
+        ime_core::render::dim_alpha_for_gamma_blend(theme.background.overlay_alpha())
+    } else {
+        1.0
+    };
+    if joined {
+        frame.fill_bottom_round_gradient(rc, radius, c.window_bg, c.window_bg2, overlay);
+    } else {
+        frame.fill_round_gradient(rc, radius, c.window_bg, c.window_bg2, overlay);
+    }
 }
 
 /// 候選清單：反白條、滑鼠指著的那列、每一列的編號與候選字。
@@ -972,7 +778,18 @@ fn paint_candidates(
     let selected = SELECTED.with(|s| *s.borrow());
     let per_col = PER_COLUMN.with(|x| x.get()).max(1);
     let n_cols = COLUMNS.with(|x| x.get()).max(1);
-    let col_w = if n_cols > 1 { w / n_cols as f32 } else { w };
+    // **候選欄寬用量好的那個**，不是視窗寬除以欄數——視窗可能被
+    // 長預覽列撐寬，候選欄不該跟著胖。沒量過才退回用視窗寬推。
+    let col_w = match COL_W.with(|c| c.get()) {
+        0 => {
+            if n_cols > 1 {
+                w / n_cols as f32
+            } else {
+                w
+            }
+        }
+        v => v as f32,
+    };
 
     // 反白條先鋪底色，字再畫上去
     let bar_at: Option<(f32, f32)> = SLIDE
@@ -1239,7 +1056,7 @@ const OUTLINE_COLOR: crate::theme::Color = crate::theme::Color::rgb(0, 0, 0);
 /// 畫一段文字，依設定決定要不要描邊。
 ///
 /// 五個呼叫處都走這裡，不然「描邊」這個開關會漏掉其中幾處。
-fn draw_label(
+pub(crate) fn draw_label(
     frame: &crate::d2d::Frame,
     theme: &Theme,
     text: &str,
@@ -1319,7 +1136,7 @@ fn ensure_background_pixels(setting: &str) {
 ///
 /// 但**選字時要讓被選的那格留在畫面內**：只看尾端的話，往回選到前面
 /// 的字時那一格會被推出左邊，使用者根本看不到自己在選什麼。
-fn preview_scroll(full_w: f32, avail: f32, box_span: Option<(f32, f32)>) -> f32 {
+pub(crate) fn preview_scroll(full_w: f32, avail: f32, box_span: Option<(f32, f32)>) -> f32 {
     let max_scroll = (full_w - avail).max(0.0);
     let Some((x0, x1)) = box_span else {
         return max_scroll;
@@ -1352,7 +1169,7 @@ fn preview_scroll(full_w: f32, avail: f32, box_span: Option<(f32, f32)>) -> f32 
 ///
 /// **量測與繪製共用這一份**：先前繪製有間隙、算視窗寬度時卻沒有，
 /// 視窗因此少了 `間隙 × 字數` 那麼寬，一進選字內容就溢出被切掉。
-fn preview_gap(selecting: bool) -> f32 {
+pub(crate) fn preview_gap(selecting: bool) -> f32 {
     if selecting {
         scaled(ime_core::render::OUTLINE_WIDTH as i32).max(1) as f32
     } else {
@@ -1360,7 +1177,7 @@ fn preview_gap(selecting: bool) -> f32 {
     }
 }
 
-fn layout_preview(
+pub(crate) fn layout_preview(
     renderer: &Renderer,
     text: &str,
     font: &windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
@@ -1368,13 +1185,15 @@ fn layout_preview(
 ) -> Vec<(usize, usize, f32, f32)> {
     let mut out = Vec::new();
     let mut x = 0.0;
-    let mut buf = [0u8; 4];
-    for (i, ch) in text.char_indices() {
-        let one = ch.encode_utf8(&mut buf);
+    // **照叢集切，不是逐字元**：`👩‍💻` 是三個字元組成的一個圖，逐字元
+    // 排會拆成兩個人像中間一個空隙。膚色、變體選擇符同理。
+    // 注音的聲調符號也是靠這個才不會跟音節分家。見開發文件 §2.51。
+    for (a, b) in renderer.clusters(text, font) {
+        let one = &text[a..b];
         // **要前進寬度，不是 `measure`**：單獨一個空白在 `measure` 下
         // 量到 0（那個 API 不含尾端空白），排版就會把空白吃掉。
         let cw = renderer.measure_advance(one, font);
-        out.push((i, i + ch.len_utf8(), x, cw));
+        out.push((a, b, x, cw));
         x += cw + gap;
     }
     out
@@ -1394,7 +1213,7 @@ fn layout_preview(
 ///
 /// 全部是純數值運算，所以測得起來——邊界情況（貼底、貼右、螢幕太矮）
 /// 用手測很難蓋全。
-fn place(caret: RECT, w: i32, h: i32, work: RECT) -> (i32, i32) {
+pub(crate) fn place(caret: RECT, w: i32, h: i32, work: RECT) -> (i32, i32) {
     let below = caret.bottom;
     let above = caret.top - h;
     let y = if below + h <= work.bottom {
@@ -1410,7 +1229,7 @@ fn place(caret: RECT, w: i32, h: i32, work: RECT) -> (i32, i32) {
 }
 
 /// 這個螢幕位置的工作區（扣掉工作列）。查不到就退回整個虛擬桌面。
-fn work_area_at(pt: POINT) -> RECT {
+pub(crate) fn work_area_at(pt: POINT) -> RECT {
     use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
     unsafe {
         let mon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
@@ -1497,47 +1316,41 @@ fn measure_row_heights(
     })
 }
 
-/// 算視窗該多寬：量最長那一行，夾在主題的 min/max 之間。
+/// 算候選欄該多寬：量最長那一行，夾在主題的 min/max 之間。
 ///
 /// **用 DirectWrite 量**，跟繪製同一個引擎。先前用 GDI 量的話，
 /// 兩者每個字元的微小差異會累積——實測 58 個字元就差 35px，
 /// 視窗因此不夠寬，長句子被推出可視範圍。
-fn measure_width(
-    theme: &Theme,
-    candidates: &[Candidate],
-    preview: &str,
-    hint: &str,
-    selecting: bool,
-) -> i32 {
+///
+/// **只看候選字與提示列**。預覽列在另一個視窗，寬度各算各的——
+/// 混在一起的話打得愈長候選格子愈胖，看起來像候選字莫名其妙變寬。
+fn measure_width(theme: &Theme, candidates: &[Candidate], hint: &str) -> i32 {
+    let min_w = scaled(theme.metrics.min_width());
+    let max_w = scaled(theme.metrics.max_width());
     MEASURER.with(|m| {
         let mut slot = m.borrow_mut();
         if slot.is_none() {
             *slot = TextMeasurer::new().ok();
         }
         let Some(meas) = slot.as_ref() else {
-            return scaled(theme.metrics.min_width());
+            return min_w;
         };
         let dpi = DPI.with(|d| d.get()) as f32;
         let Ok(fmt) = meas.format(&theme.font.family, theme.metrics.font_size_pt() as f32, dpi)
         else {
-            return scaled(theme.metrics.min_width());
+            return min_w;
         };
         let wide = |t: &str| meas.measure(t, &fmt, f32::MAX / 2.0).0;
+        let pad = scaled(theme.metrics.padding()) * 2 + scaled(theme.metrics.index_gap());
 
-        // 選字時每個字左右各撐開半個間隙，視窗要跟著變寬才裝得下。
-        // 少算的話內容溢出，不是頭被切就是尾被切。
-        let gap_total = preview_gap(selecting) * preview.chars().count() as f32;
-        let mut widest = (wide(preview) + gap_total).max(wide(hint));
+        // **提示列算進候選欄**：它畫在清單底下、跟候選同一個區塊，
+        // 被切掉就讀不到了。
+        let mut widest = wide(hint);
         for (i, c) in candidates.iter().enumerate() {
             // 編號那段用的是小字，但用大字量是安全的高估
             widest = widest.max(wide(&format!("{}. {}", i + 1, c.text)));
         }
-
-        let pad = scaled(theme.metrics.padding()) * 2 + scaled(theme.metrics.index_gap());
-        (widest.ceil() as i32 + pad).clamp(
-            scaled(theme.metrics.min_width()),
-            scaled(theme.metrics.max_width()),
-        )
+        (widest.ceil() as i32 + pad).clamp(min_w, max_w)
     })
 }
 
@@ -1546,12 +1359,6 @@ pub struct CandidateWindow {
 }
 
 impl CandidateWindow {
-    /// `preview` 是組字當下的第一名切法，畫在候選清單上方那一列。
-    /// 傳空字串就不畫預覽列。
-    ///
-    /// `preview_box` 是預覽列裡要反白的那一段（位元組範圍），
-    /// 選字時用來標出正在選哪一格。`None` 就不標。
-    ///
     /// `selected` 是反白哪一列（切法選單／選字用），`None` 不反白。
     /// 顯示或更新候選視窗。
     ///
@@ -1566,28 +1373,32 @@ impl CandidateWindow {
     /// `scroll` 是 `(可見的第一欄, 總欄數)`，展開到十欄裝不下時才有值
     /// ——底部會多畫一條捲軸，告訴使用者左右還有東西。
     /// `hint` 是底部那行小字（例如「↑↑↓↓ 開啟設定」），空字串不畫。
+    ///
+    /// `top_flat` 說上面有沒有接著預覽列——有的話上緣畫直角，
+    /// 兩塊才貼得起來。
+    ///
+    /// `pos_for` 拿算好的 `(寬, 高)` 換回視窗左上角（螢幕座標）。
+    /// **定位由呼叫端決定**：預覽列與候選清單要當成一整塊擺，
+    /// 不然螢幕邊界翻轉時會一個在上、一個在下。
     #[allow(clippy::too_many_arguments)]
     pub fn show(
         existing: Option<Self>,
         candidates: &[Candidate],
-        preview: &str,
-        preview_box: Option<std::ops::Range<usize>>,
         hint: &str,
         selected: Option<usize>,
         per_column: usize,
         scroll: Option<(usize, usize)>,
-        caret: RECT,
+        anchor: POINT,
+        top_flat: bool,
+        pos_for: impl FnOnce(i32, i32) -> (i32, i32),
     ) -> Result<Self> {
         ensure_class_registered();
 
-        let anchor = POINT {
-            x: caret.left,
-            y: caret.bottom,
-        };
         let theme = THEME.with(|t| t.borrow().clone());
         // 這個位置在哪個螢幕上？DPI 要按那個螢幕算，
         // 不然接了兩台不同縮放的螢幕時會一邊糊一邊太小。
         DPI.with(|d| d.set(dpi_at(anchor)));
+        TOP_FLAT.with(|x| x.set(top_flat));
 
         // 分欄：per_column 為 0 或候選裝得下一欄時就是一直排
         let per_col = if per_column == 0 {
@@ -1600,7 +1411,7 @@ impl CandidateWindow {
         // **寬度依內容算**——固定寬度會把切法選單的整句切斷。
         // 多欄時每欄各自要那麼寬。
         let work = work_area_at(anchor);
-        let mut col_w = measure_width(&theme, candidates, preview, hint, preview_box.is_some());
+        let mut col_w = measure_width(&theme, candidates, hint);
         // **總寬不得超過螢幕**：`max_width` 夾的是「一欄」，展開全部時
         // 欄數一多就相乘出去（三欄就是三倍），而 `place` 只會把視窗推到
         // 貼齊左緣、右邊直接被切掉。這裡把每欄等比壓回可用寬度。
@@ -1625,7 +1436,6 @@ impl CandidateWindow {
         let (_, height) = layout_with(
             pad_px,
             line_h,
-            !preview.is_empty(),
             list_h,
             candidates.is_empty(),
             !hint.is_empty(),
@@ -1657,35 +1467,12 @@ impl CandidateWindow {
             }
         });
 
-        // **預覽列的反白要不要滑**：同一句話、標記換了一段才滑。
-        //
-        // 預覽文字變了就是重打或送出，跳過去；標記沒動就讓還在跑的
-        // 動畫繼續跑完。實際的位置這裡量不出來（要有 DC 和字型），
-        // 只放一個旗標，`paint` 量完新位置才真的建動畫。
-        let same_text = existing.is_some() && PREVIEW.with(|p| *p.borrow() == preview);
-        let prev_box = PREVIEW_BOX.with(|b| b.borrow().clone());
-        let moved = match (&prev_box, &preview_box) {
-            (Some(a), Some(b)) => a != b,
-            _ => false,
-        };
-        if same_text && moved {
-            PREVIEW_ANIMATE.with(|a| a.set(true));
-        } else if !same_text || preview_box.is_none() {
-            // 換句話或不再標記了：動畫與記住的位置一起作廢，
-            // 不然下次會從一個不相干的位置滑過來
-            PREVIEW_ANIMATE.with(|a| a.set(false));
-            PREVIEW_SLIDE.with(|s| *s.borrow_mut() = None);
-            PREVIEW_SPAN.with(|p| p.set(None));
-        }
-
         // **換了候選就清掉滑鼠反白**：同一個索引在新清單裡是別的字，
         // 留著會反白到不相干的那一列。滑鼠再動一下就會重新亮起來。
         if !same_list {
             HOVER.with(|h| h.set(None));
         }
         CURRENT_CANDIDATES.with(|c| *c.borrow_mut() = candidates.to_vec());
-        PREVIEW.with(|p| *p.borrow_mut() = preview.to_string());
-        PREVIEW_BOX.with(|b| *b.borrow_mut() = preview_box);
         HINT.with(|h| *h.borrow_mut() = hint.to_string());
         SELECTED.with(|s| *s.borrow_mut() = selected);
         THEME.with(|t| *t.borrow_mut() = theme);
@@ -1707,7 +1494,11 @@ impl CandidateWindow {
                         .unwrap_or(to);
                     let same_target = slot.as_ref().is_some_and(|x| x.target() == to);
                     if !same_target && from != to {
-                        *slot = Some(crate::slide::ValueSlide::start(slot.as_ref(), from, to));
+                        *slot = Some(ime_core::render::slide::ValueSlide::start(
+                            slot.as_ref(),
+                            from,
+                            to,
+                        ));
                     }
                 }
                 _ => *slot = None,
@@ -1715,11 +1506,11 @@ impl CandidateWindow {
         });
         COLUMNS.with(|c| c.set(n_cols));
         PER_COLUMN.with(|c| c.set(per_col));
+        COL_W.with(|c| c.set(col_w));
 
-        // **決定真正的位置**：預設在組字文字下方，螢幕底部放不下就
-        // 翻到上方（見 `place`）。以前直接用 `anchor`，在畫面底部的
-        // 輸入框打字時視窗會整個掉到螢幕外。
-        let (pos_x, pos_y) = place(caret, width, height, work);
+        // **位置由呼叫端算**：兩個視窗要當成一整塊擺（見 `pos_for`
+        // 的說明），這裡只把量好的尺寸交出去。
+        let (pos_x, pos_y) = pos_for(width, height);
 
         // 已經有視窗就沿用——這是不閃的關鍵
         if let Some(win) = existing {
@@ -1736,8 +1527,6 @@ impl CandidateWindow {
                 // 有動畫要跑就開計時器（重複呼叫 `SetTimer` 同一個編號
                 // 只是重設，不會疊出第二個）；沒有就確保它是關的。
                 let animating = SLIDE.with(|s| s.borrow().is_some())
-                    || PREVIEW_SLIDE.with(|s| s.borrow().is_some())
-                    || PREVIEW_ANIMATE.with(|a| a.get())
                     || SCROLL_ANIM.with(|s| s.borrow().is_some());
                 if animating {
                     SetTimer(Some(win.hwnd), ANIM_TIMER, ANIM_INTERVAL, None);
@@ -1796,7 +1585,6 @@ impl Drop for CandidateWindow {
         // 動畫狀態跟著視窗一起清掉——下一個視窗建起來時
         // 反白該直接出現，不是從上一個視窗的位置滑過來
         SLIDE.with(|s| *s.borrow_mut() = None);
-        PREVIEW_SLIDE.with(|s| *s.borrow_mut() = None);
         // 繪圖環境綁在這個視窗上，視窗沒了它也不能用
         RENDERER.with(|r| *r.borrow_mut() = None);
         // **點陣圖也要一起清掉**——它是從上面那個繪圖裝置建出來的，
@@ -1805,8 +1593,6 @@ impl Drop for CandidateWindow {
         // 但**解碼後的像素留著**（`BG_PIXELS`）：那份跟裝置無關，
         // 下次要用時從記憶體重建點陣圖就好，不必再讀檔解碼。
         BG_BITMAP.with(|b| *b.borrow_mut() = None);
-        PREVIEW_SPAN.with(|p| p.set(None));
-        PREVIEW_ANIMATE.with(|a| a.set(false));
         unsafe {
             let _ = KillTimer(Some(self.hwnd), ANIM_TIMER);
             let _ = DestroyWindow(self.hwnd);
@@ -2204,27 +1990,17 @@ mod tests {
     const LH: i32 = 28;
 
     #[test]
-    fn 候選清單不會侵入預覽列() {
-        // 這是實際發生過的 bug：預覽列的底在 pad*2 + line_h，
-        // 但候選列從 pad + line_h 開始算——第一列往上蓋掉預覽列的字。
-        let (list_top, _) = layout(PAD, LH, true, 5, false);
-        let preview_bottom = PAD * 2 + LH;
-        assert!(
-            list_top >= preview_bottom,
-            "候選清單起點 {list_top} 不該在預覽列底部 {preview_bottom} 之上"
-        );
-    }
-
-    #[test]
-    fn 沒有預覽列時從內距開始() {
-        let (list_top, _) = layout(PAD, LH, false, 5, false);
+    fn 清單從內距開始() {
+        // 預覽列拆成獨立視窗之後，這個視窗上面沒有別的東西了，
+        // 第一列候選直接從內距開始
+        let (list_top, _) = layout(PAD, LH, 5, false);
         assert_eq!(list_top, PAD);
     }
 
     #[test]
     fn 高度容得下所有內容() {
-        // 有預覽列、5 列候選、有提示列
-        let (list_top, height) = layout(PAD, LH, true, 5, true);
+        // 5 列候選、有提示列
+        let (list_top, height) = layout(PAD, LH, 5, true);
         // 最後一列候選的底 + 提示列 + 底部內距，都要在視窗內
         let last_row_bottom = list_top + LH * 5;
         assert!(
@@ -2237,7 +2013,7 @@ mod tests {
     fn 提示列的位置跟高度算法一致() {
         // `paint` 把提示列畫在 `rc.bottom - pad - line_h`，
         // 那裡必須正好接在最後一列候選的下面，不能疊到它
-        let (list_top, height) = layout(PAD, LH, true, 5, true);
+        let (list_top, height) = layout(PAD, LH, 5, true);
         let hint_top = height - PAD - LH;
         let last_row_bottom = list_top + LH * 5;
         assert_eq!(hint_top, last_row_bottom, "提示列該正好接在候選清單下面");
@@ -2247,9 +2023,9 @@ mod tests {
     fn 長候選換行時高度要跟著加() {
         // **候選太長會換行**，那一列就佔好幾個行高。
         // 用「行高 × 列數」算的話視窗會不夠高，底下的列被切掉。
-        let normal = layout_with(PAD, LH, true, LH * 3, false, false).1;
+        let normal = layout_with(PAD, LH, LH * 3, false, false).1;
         // 中間那列換成兩行高
-        let wrapped = layout_with(PAD, LH, true, LH * 4, false, false).1;
+        let wrapped = layout_with(PAD, LH, LH * 4, false, false).1;
         assert_eq!(wrapped - normal, LH, "多一行就該多一個行高");
     }
 
@@ -2258,35 +2034,18 @@ mod tests {
         // `layout` 是 `layout_with` 的薄包裝（等高的情況）
         for rows in 0..5 {
             assert_eq!(
-                layout(PAD, LH, true, rows, false),
-                layout_with(PAD, LH, true, LH * rows, rows == 0, false),
+                layout(PAD, LH, rows, false),
+                layout_with(PAD, LH, LH * rows, rows == 0, false),
             );
         }
     }
 
     #[test]
-    fn 只有預覽列時視窗收緊到剛好() {
-        // 打字中的狀態：只有預覽列、沒有候選。
-        // 高度要**正好**是預覽列那麼高——黃色底會填滿整個視窗，
-        // 底下多留一點就會露出一條白邊，而視窗是圓角的，
-        // 直角的黃色矩形填到底還會從圓角外面漏出來（串色）。
-        let (list_top, height) = layout(PAD, LH, true, 0, false);
-        assert_eq!(height, PAD * 2 + LH, "只有預覽列時視窗該收緊");
-        assert_eq!(height, list_top, "底下不該多留空間");
-    }
-
-    #[test]
-    fn 只有預覽列加提示列時不收緊() {
-        // 有提示列就不是「只有預覽列」，要照一般版面算
-        let (list_top, height) = layout(PAD, LH, true, 0, true);
-        assert!(height > list_top, "提示列要有地方畫");
-        assert_eq!(height, list_top + LH + PAD);
-    }
-
-    #[test]
-    fn 什麼都沒有時仍留一列高度() {
-        let (_, height) = layout(PAD, LH, false, 0, false);
-        assert!(height >= PAD * 2 + LH, "高度 {height} 太扁");
+    fn 一列候選都沒有時仍留一列的高度() {
+        // 只有提示列的情況（例如指令提示）。清單是空的，
+        // 但視窗不能扁掉——那樣提示列會被擠出可視範圍。
+        let (_, height) = layout(PAD, LH, 0, true);
+        assert!(height >= PAD * 2 + LH, "空清單的視窗不該扁掉");
     }
 
     // ── 捲軸 ──

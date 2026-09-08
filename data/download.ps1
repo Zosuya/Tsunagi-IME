@@ -351,6 +351,22 @@ Get-File `
     $moeZip
 Convert-MoeCharFreq -ZipPath $moeZip -OutPath "$dataDir\bopomofo\char_freq.txt"
 
+# 中文選字的**字級 bigram 語言模型**（RIME 八股文，LGPL-3）。
+#
+# 為什麼需要它：在這之前選字完全不看前後文，「他在／他再」「這份／這分」
+# 這一類光看字本身永遠分不開——兩邊字頻差不多，等於在丟硬幣。這份補的是
+# 「誰接誰」的統計，實測文字命中 738 到 748（790 句）、錯字率 2.5% 到 2.2%。
+#
+# 為什麼只要字級那份：詞級的 bgw（39.5MB）鍵是詞對詞，拿字對字去查大多
+# 落空（涵蓋正解只有 55.9%），對我們沒有用。
+#
+# **這份資料是簡體語料轉繁體來的**，`為`／`線`／`眾`／`群` 在裡面是零命中
+# （模型用 `爲`／`綫`／`衆`／`羣`）。core/src/lm.rs 的 ALIAS_GROUPS 用共存
+# 處理，輸出的字不受影響。
+Get-File `
+    "https://github.com/lotem/rime-octagram-data/raw/hant/zh-hant-t-essay-bgc.gram" `
+    "$dataDir\bopomofo\zh_bigram.gram"
+
 # 中文：把三份詞頻資料合併成引擎實際讀的 word_freq.txt。
 # 為什麼要三份、怎麼合，見 Convert-WordFreq 的說明。
 Convert-WordFreq `

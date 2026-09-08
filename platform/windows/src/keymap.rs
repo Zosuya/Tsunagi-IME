@@ -32,8 +32,16 @@ pub enum Mode {
     Idle,
     /// 正在打字，預覽列顯示第一名
     Typing,
-    /// 切法選單開著（按過 TAB）
+    /// 切法選單開著（按過 TAB）。
+    ///
+    /// **舊的整句選單**，目前沒有入口——TAB 進的是 `SegMenu`。
+    /// 段選單實測沒問題之後這個模式連同 `session::cutting` 一起刪掉。
     CuttingMenu,
+    /// **段選單**開著：反白引擎切出來的一段，選它要當成什麼。
+    ///
+    /// 跟 `CuttingMenu` 分開而不是加參數——方向鍵的意義完全不同：
+    /// 整句選單只有上下（每列一整句），段選單左右換段、上下換解釋。
+    SegMenu,
     /// 選字中（反白某一格）
     Selecting,
     /// 選字中且候選字已展開全部（多欄）。
@@ -56,8 +64,10 @@ pub enum Action {
     Commit,
 
     // ── 切法選單 ──
-    /// 展開切法選單（TAB）；已經開著時展開更多（雙擊 TAB）
+    /// 打開切法選單（TAB）
     OpenCuttingMenu,
+    /// 選單開著時列出更多切法（空白鍵）
+    ExpandCuttingMenu,
     /// 切法選單：下一個
     NextCutting,
     /// 切法選單：上一個
@@ -66,6 +76,30 @@ pub enum Action {
     ConfirmCutting,
     /// 單純關閉選單，切法維持原本選中的那個（TAB）
     CloseCuttingMenu,
+
+    // ── 段選單（新的，取代切法選單；舊的先留著沒入口）──
+    /// 打開段選單（TAB）
+    OpenSegMenu,
+    /// 關閉段選單，保留已定案的段
+    CloseSegMenu,
+    /// 反白往右一段
+    SegRight,
+    /// 反白往左一段
+    SegLeft,
+    /// 這一段的候選往下一個
+    SegNextCand,
+    /// 這一段的候選往上一個
+    SegPrevCand,
+    /// **選定這一段：前面定案、後面重算**（Enter）
+    SegConfirm,
+    /// 邊界往右推到下一個合法長度（`Shift+→`）
+    SegWiden,
+    /// 邊界往左收到上一個合法長度（`Shift+←`）
+    SegNarrow,
+    /// 直接挑第 N 個候選（數字鍵，0-based）
+    SegPick(usize),
+    /// 取消整個段選單，回到引擎自己算的分段
+    SegReset,
 
     // ── 選字 ──
     /// 進入選字模式，反白第一格
@@ -257,7 +291,9 @@ const DEFAULT_BINDINGS: &[(Mode, Combo, Action)] = &[
     (Mode::Typing, Combo::plain(VK_BACK.0 as u32),   Action::Backspace),
     (Mode::Typing, Combo::plain(VK_ESCAPE.0 as u32), Action::Cancel),
     (Mode::Typing, Combo::plain(VK_RETURN.0 as u32), Action::Commit),
-    (Mode::Typing, Combo::plain(VK_TAB.0 as u32),    Action::OpenCuttingMenu),
+    // TAB 開**段選單**（新的）。舊的整句選單留在程式碼裡但沒有入口，
+    // 段選單實測沒問題之後一起刪。
+    (Mode::Typing, Combo::plain(VK_TAB.0 as u32),    Action::OpenSegMenu),
     // 上下鍵走手勢偵測：湊滿「上上下下」且組字內容是指令就執行，
     // 否則退回原本的「進選字」。見 `ime_core::command::Gesture`。
     (Mode::Typing, Combo::plain(VK_DOWN.0 as u32),   Action::Gesture(Dir::Down)),
@@ -287,18 +323,18 @@ const DEFAULT_BINDINGS: &[(Mode, Combo, Action)] = &[
 
     // ── 切法選單 ──
     //
-    // 空白往下、Shift+空白往上——使用者指定的。
-    // TAB 再按一次展開更多（`OpenCuttingMenu` 自己判斷）。
-    (Mode::CuttingMenu, Combo::plain(VK_SPACE.0 as u32),  Action::NextCutting),
-    (Mode::CuttingMenu, Combo::shift(VK_SPACE.0 as u32),  Action::PrevCutting),
+    // **空白鍵是展開**（使用者指定的）：選單裡最想要的動作是「還有
+    // 別的嗎」，那顆最大的鍵就給它。移動交給方向鍵。
+    // Shift+空白在選單裡不綁——它在別的模式是切全半形，不該在這裡
+    // 變成第三種意思。
+    (Mode::CuttingMenu, Combo::plain(VK_SPACE.0 as u32),  Action::ExpandCuttingMenu),
     // TAB 在選單裡是「單純關掉選單」，不選也不送出。
-    // 快速按兩下展開全部是靠 `OpenCuttingMenu` 自己判斷時間差，
-    // 那個判斷在 `text_service` 裡（見 `DOUBLE_TAB`）。
     (Mode::CuttingMenu, Combo::plain(VK_TAB.0 as u32),    Action::CloseCuttingMenu),
+    // **上下移動，不用左右**——選單是一直排的（切法每列是一整句），
+    // 左右在這裡沒有意義。走到最後一列再往下仍會自動展開，
+    // 見 `Session::next_cutting`。
     (Mode::CuttingMenu, Combo::plain(VK_DOWN.0 as u32),   Action::NextCutting),
     (Mode::CuttingMenu, Combo::plain(VK_UP.0 as u32),     Action::PrevCutting),
-    (Mode::CuttingMenu, Combo::plain(VK_RIGHT.0 as u32),  Action::NextCutting),
-    (Mode::CuttingMenu, Combo::plain(VK_LEFT.0 as u32),   Action::PrevCutting),
     // Enter 是「就選反白這個切法」——關掉選單但**留在組字狀態**，
     // 不是送出。送出要再按一次 Enter（那時已經是 Typing 模式）。
     (Mode::CuttingMenu, Combo::plain(VK_RETURN.0 as u32), Action::ConfirmCutting),
@@ -306,6 +342,36 @@ const DEFAULT_BINDINGS: &[(Mode, Combo, Action)] = &[
     // 使用者只是不想選了，字還在打
     (Mode::CuttingMenu, Combo::plain(VK_ESCAPE.0 as u32), Action::CloseCuttingMenu),
     (Mode::CuttingMenu, Combo::plain(VK_BACK.0 as u32),   Action::Backspace),
+
+    // ── 段選單 ──
+    //
+    // **跟選字同一組手勢**，只是反白的是「段」不是「格」：
+    //
+    // | 鍵 | 段選單 | 選字 |
+    // |---|---|---|
+    // | ←→ | 換一段 | 換一格 |
+    // | ↑↓ | 換這段的解釋 | 換這格的字 |
+    // | Shift+←→ | 推這段的邊界 | 推日文詞界 |
+    // | 1-9 | 直接挑 | 直接挑 |
+    //
+    // 使用者不必學新東西——同一個心智模型，換一個粒度。
+    (Mode::SegMenu, Combo::plain(VK_RIGHT.0 as u32),  Action::SegRight),
+    (Mode::SegMenu, Combo::plain(VK_LEFT.0 as u32),   Action::SegLeft),
+    (Mode::SegMenu, Combo::plain(VK_DOWN.0 as u32),   Action::SegNextCand),
+    (Mode::SegMenu, Combo::plain(VK_UP.0 as u32),     Action::SegPrevCand),
+    // **Shift+←→ 推邊界**：跳過清單直接改長度。跟選字的日文詞界調整
+    // （`WidenWord`／`NarrowWord`）是同一個手勢、同一個概念。
+    (Mode::SegMenu, Combo::shift(VK_RIGHT.0 as u32),  Action::SegWiden),
+    (Mode::SegMenu, Combo::shift(VK_LEFT.0 as u32),   Action::SegNarrow),
+    // Enter 是「選定這一段」——前面定案、後面重算，反白自動移到下一段。
+    // **不是送出**：送出要先關掉選單回到 Typing。
+    (Mode::SegMenu, Combo::plain(VK_RETURN.0 as u32), Action::SegConfirm),
+    // TAB 關掉選單，已經定案的段留著
+    (Mode::SegMenu, Combo::plain(VK_TAB.0 as u32),    Action::CloseSegMenu),
+    // **Esc 是「全部重來」**，不是關選單——關選單有 TAB 了，而定案
+    // 之後沒有別的後悔藥（逐段撤銷會讓狀態機複雜一倍）。
+    (Mode::SegMenu, Combo::plain(VK_ESCAPE.0 as u32), Action::SegReset),
+    (Mode::SegMenu, Combo::plain(VK_BACK.0 as u32),   Action::Backspace),
 
     // ── 選字中（未展開，一次列 10 個候選）──
     //
@@ -324,7 +390,9 @@ const DEFAULT_BINDINGS: &[(Mode, Combo, Action)] = &[
     // 上下鍵在候選字清單裡移動反白
     (Mode::Selecting, Combo::plain(VK_DOWN.0 as u32),   Action::NextCand),
     (Mode::Selecting, Combo::plain(VK_UP.0 as u32),     Action::PrevCand),
-    (Mode::Selecting, Combo::plain(VK_TAB.0 as u32),    Action::OpenCuttingMenu),
+    // 選字中按 TAB 也是開**段選單**（跟打字中一致）。舊的整句選單
+    // 留在程式碼裡但沒有入口。
+    (Mode::Selecting, Combo::plain(VK_TAB.0 as u32),    Action::OpenSegMenu),
     (Mode::Selecting, Combo::plain(VK_BACK.0 as u32),   Action::Backspace),
     // **空白鍵展開全部候選**——10 個不夠時攤開來找
     (Mode::Selecting, Combo::plain(VK_SPACE.0 as u32),  Action::ExpandAllChars),
@@ -367,6 +435,16 @@ pub fn lookup(mode: Mode, vk: u32) -> Option<Action> {
         // 這是主鍵盤那排做不到的事（見 `DEFAULT_BINDINGS` 的說明）。
         if let Some(d) = (0x61..=0x69u32).contains(&vk).then(|| (vk - 0x61) as usize) {
             return Some(Action::PickChar(d));
+        }
+    }
+    // **段選單也一樣**：那時在挑「這一段是什麼」，不會再輸入注音，
+    // 數字就空出來了。跟選字同一個道理。
+    if mode == Mode::SegMenu {
+        if let Some(d) = (0x31..=0x39u32).contains(&vk).then(|| (vk - 0x31) as usize) {
+            return Some(Action::SegPick(d));
+        }
+        if let Some(d) = (0x61..=0x69u32).contains(&vk).then(|| (vk - 0x61) as usize) {
+            return Some(Action::SegPick(d));
         }
     }
     // **數字鍵盤：打什麼就是什麼**。要放在 `typed_char` 之前，
@@ -676,12 +754,52 @@ mod tests {
 
     #[test]
     fn 同一個鍵不同模式做不同的事() {
+        // TAB 開**段選單**（舊的整句選單留在程式碼裡但沒有入口）
         let tab = VK_TAB.0 as u32;
-        assert_eq!(lookup(Mode::Typing, tab), Some(Action::OpenCuttingMenu));
+        assert_eq!(lookup(Mode::Typing, tab), Some(Action::OpenSegMenu));
         let down = VK_DOWN.0 as u32;
         assert_eq!(lookup(Mode::Typing, down), Some(Action::Gesture(Dir::Down)));
         assert_eq!(lookup(Mode::CuttingMenu, down), Some(Action::NextCutting));
+        assert_eq!(lookup(Mode::SegMenu, down), Some(Action::SegNextCand));
         assert_eq!(lookup(Mode::Selecting, down), Some(Action::NextCand));
+    }
+
+    /// 段選單跟選字**同一組手勢**，只是粒度不同（段 vs 格）。
+    #[test]
+    fn 段選單的方向鍵跟選字同一套() {
+        let (left, right) = (VK_LEFT.0 as u32, VK_RIGHT.0 as u32);
+        // 左右換段
+        assert_eq!(lookup(Mode::SegMenu, left), Some(Action::SegLeft));
+        assert_eq!(lookup(Mode::SegMenu, right), Some(Action::SegRight));
+        // 上下換這一段的解釋
+        assert_eq!(
+            lookup(Mode::SegMenu, VK_UP.0 as u32),
+            Some(Action::SegPrevCand)
+        );
+        // Enter 是「選定這一段」，不是送出
+        assert_eq!(
+            lookup(Mode::SegMenu, VK_RETURN.0 as u32),
+            Some(Action::SegConfirm)
+        );
+        // Esc 是全部重來（關選單有 TAB）
+        assert_eq!(
+            lookup(Mode::SegMenu, VK_ESCAPE.0 as u32),
+            Some(Action::SegReset)
+        );
+        assert_eq!(
+            lookup(Mode::SegMenu, VK_TAB.0 as u32),
+            Some(Action::CloseSegMenu)
+        );
+    }
+
+    /// 數字鍵在段選單是直接挑候選——跟選字同一個道理（那時不會再
+    /// 輸入注音，十個數字就空出來了）。
+    #[test]
+    fn 段選單的數字鍵是挑候選() {
+        assert_eq!(lookup(Mode::SegMenu, 0x31), Some(Action::SegPick(0)));
+        assert_eq!(lookup(Mode::SegMenu, 0x39), Some(Action::SegPick(8)));
+        // 數字鍵盤也一樣
+        assert_eq!(lookup(Mode::SegMenu, 0x61), Some(Action::SegPick(0)));
     }
 
     #[test]
@@ -794,6 +912,37 @@ mod tests {
     }
 
     #[test]
+    fn 切法選單的空白是展開不是往下() {
+        // 使用者定的：選單裡最想要的動作是「還有別的嗎」，
+        // 那顆最大的鍵就給展開。移動交給上下鍵。
+        assert_eq!(
+            lookup(Mode::CuttingMenu, VK_SPACE.0 as u32),
+            Some(Action::ExpandCuttingMenu)
+        );
+        assert_eq!(
+            lookup(Mode::CuttingMenu, VK_DOWN.0 as u32),
+            Some(Action::NextCutting)
+        );
+        assert_eq!(
+            lookup(Mode::CuttingMenu, VK_UP.0 as u32),
+            Some(Action::PrevCutting)
+        );
+    }
+
+    #[test]
+    fn 切法選單不用左右鍵() {
+        // 選單是一直排的（每列是一整句），左右在這裡沒有意義。
+        // 但**仍然要吃掉**——放行給宿主會把游標移出組字區。
+        for vk in [VK_LEFT.0 as u32, VK_RIGHT.0 as u32] {
+            assert_eq!(
+                lookup(Mode::CuttingMenu, vk),
+                Some(Action::Swallow),
+                "左右鍵在切法選單裡該吃掉不做事"
+            );
+        }
+    }
+
+    #[test]
     fn 兩種退出切法選單的方式() {
         // Enter：選中反白的切法，關選單但留在組字狀態（不是送出）
         assert_eq!(
@@ -823,10 +972,10 @@ mod tests {
             lookup(Mode::Typing, VK_SPACE.0 as u32),
             Some(Action::Input(' '))
         );
-        // 但切法選單開著時空白是往下選
+        // 但切法選單開著時空白是展開更多，見 `切法選單的空白是展開不是往下`
         assert_eq!(
             lookup(Mode::CuttingMenu, VK_SPACE.0 as u32),
-            Some(Action::NextCutting)
+            Some(Action::ExpandCuttingMenu)
         );
     }
 

@@ -122,21 +122,71 @@ zh.ErrLocked=無法更新輸入法：舊的程式檔正在使用中，而且無�
 ja.ErrLocked=入力方式を更新できません：古いプログラムファイルが使用中で、退避もできませんでした。再起動してからもう一度インストールしてください。
 en.ErrLocked=Cannot update: the old program file is in use and could not be moved aside. Please restart your computer and install again.
 
+zh.CompMain=輸入法主程式
+ja.CompMain=入力方式本体
+en.CompMain=Input method (required)
+
+zh.CompTaigi=台語擴充包（用注音打華語詞，候選出台語漢字）
+ja.CompTaigi=台湾語辞書パック
+en.CompTaigi=Taiwanese Hokkien pack
+
+[Types]
+; 只有一種安裝類型，但仍要宣告——沒有 [Types] 的話 Inno 會自己生一組
+; 預設值（完整／自訂），元件頁會多出使用者用不到的下拉選單。
+Name: "full"; Description: "{cm:CompMain}"
+
+[Components]
+; **元件（Components）不是工作（Tasks）**：元件決定「裝哪些檔案」，
+; 工作決定「做哪些動作」。台語包是檔案，所以走元件。
+;
+; 沒勾的人事後要補：重新執行安裝程式、把台語勾起來即可，Inno 的元件
+; 選擇本來就可重入，已裝好的部分不受影響。
+Name: "main";  Description: "{cm:CompMain}";  Types: full; Flags: fixed
+Name: "taigi"; Description: "{cm:CompTaigi}"; Types: full
+
 [Files]
-Source: "{#Root}\target\release\ime_tip_windows.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#Root}\target\release\ime_settings.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#Root}\target\release\register_tool.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#Root}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#Root}\CREDITS.md"; DestDir: "{app}"; Flags: ignoreversion
+; 主程式：`Components: main` 而 main 是 fixed，使用者取消不掉。
+Source: "{#Root}\target\release\ime_tip_windows.dll"; DestDir: "{app}"; Flags: ignoreversion; Components: main
+Source: "{#Root}\target\release\ime_settings.exe"; DestDir: "{app}"; Flags: ignoreversion; Components: main
+Source: "{#Root}\target\release\register_tool.exe"; DestDir: "{app}"; Flags: ignoreversion; Components: main
+Source: "{#Root}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion; Components: main
+Source: "{#Root}\CREDITS.md"; DestDir: "{app}"; Flags: ignoreversion; Components: main
 
 ; 詞庫。**只裝編譯後的二進位檔**——原始下載檔（147MB）不打包，它們只是
 ; 產生這幾個檔的原料。授權盤點見開發文件 §2.31。
 ;
 ; 目錄結構要跟開發環境一致：程式用「執行檔旁邊的 data/」找這些檔案。
-Source: "{#Root}\data\bopomofo\dict_zh.bin"; DestDir: "{app}\data\bopomofo"; Flags: ignoreversion
-Source: "{#Root}\data\japanese\dict_ja.bin"; DestDir: "{app}\data\japanese"; Flags: ignoreversion
-Source: "{#Root}\data\japanese\connection.bin"; DestDir: "{app}\data\japanese"; Flags: ignoreversion
-Source: "{#Root}\data\english\en_50k.txt"; DestDir: "{app}\data\english"; Flags: ignoreversion
+Source: "{#Root}\data\bopomofo\dict_zh.bin"; DestDir: "{app}\data\bopomofo"; Flags: ignoreversion; Components: main
+Source: "{#Root}\data\japanese\dict_ja.bin"; DestDir: "{app}\data\japanese"; Flags: ignoreversion; Components: main
+Source: "{#Root}\data\japanese\connection.bin"; DestDir: "{app}\data\japanese"; Flags: ignoreversion; Components: main
+Source: "{#Root}\data\english\en_50k.txt"; DestDir: "{app}\data\english"; Flags: ignoreversion; Components: main
+; 中文選字的字級 bigram（9.8MB）。**原樣打包、不轉檔**——它本來就是
+; 唯讀的 darts-clone 版面，mmap 友善，跟 .bin 同性質。缺這份檔案不會
+; 壞掉，選字只是退回不看前後文的行為（見 core/src/lm.rs 的 load）。
+Source: "{#Root}\data\bopomofo\zh_bigram.gram"; DestDir: "{app}\data\bopomofo"; Flags: ignoreversion; Components: main
+
+; 預載的擴充包。目前只有「內建符號」——那份原本寫死在 symbol.rs 裡，
+; 2026-09-05 抽出來變成包，使用者才看得到有哪些符號、能複製一份來改。
+;
+; **裝在執行檔旁邊，不是 %APPDATA%**：使用者可以把 packs_dir 改到別的
+; 地方（同步資料夾之類），放進去的話整批預載包就跟著消失。放這裡則是
+; 永遠找得到、升級直接覆蓋，而想改的人在自己的包裡放同名的那一組就
+; 蓋過去了（`pack::dirs()` 讓使用者目錄排在前面）。
+;
+; **一定要逐個列出，不可以用 `packs\*.txt`**：開發機的 packs\ 底下還有
+; 遊戲名、資訊技術這類個人化的包（`.gitignore` 刻意排除它們），萬用字元
+; 會把開發者自己的東西一起打進安裝包送給使用者。
+Source: "{#Root}\packs\內建符號.txt"; DestDir: "{app}\packs"; Flags: ignoreversion; Components: main
+Source: "{#Root}\packs\內建emoji.txt"; DestDir: "{app}\packs"; Flags: ignoreversion; Components: main
+
+; 台語包（1.7MB）**是可選元件**——只有勾了 taigi 才裝。
+;
+; 為什麼另外拆成元件：它比其他預載包大一個數量級，而且是給特定族群用的。
+; 沒勾的人事後想補，重新執行安裝程式勾起來即可（Inno 的元件選擇可重入）。
+;
+; 資料是 CC BY-SA 4.0，**檔頭的來源與授權那幾行是授權義務的一部分，
+; 不是說明文字**，重產包時不可以拿掉（見 tools/取台語資料.md）。
+Source: "{#Root}\packs\台語.txt"; DestDir: "{app}\packs"; Flags: ignoreversion; Components: taigi
 
 [Icons]
 ; **只放一個捷徑，不建資料夾。**

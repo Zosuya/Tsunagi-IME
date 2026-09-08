@@ -1,0 +1,4 @@
+﻿# name: BOM 測試包
+# version: 1.2
+# author: 測試
+en	zzbomtestword

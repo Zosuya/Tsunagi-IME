@@ -45,8 +45,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_POPUP,
 };
 
-use crate::theme::{Color, Theme};
-use crate::width_bar::WidthBar;
+use crate::theme::{Color, Theme, ToColorRef};
+use ime_core::render::width_bar::WidthBar;
 
 const CLASS_NAME: PCWSTR = w!("UniversalIME.WidthWindow");
 const ANIM_TIMER: usize = 1;
@@ -187,7 +187,7 @@ impl WidthWindow {
         anchor: POINT,
         dpi: i32,
     ) -> Result<Self> {
-        use crate::width_bar::{index_of, symbol, OPTIONS};
+        use ime_core::render::width_bar::{index_of, symbol, OPTIONS};
         let labels: Vec<&'static str> = OPTIONS.iter().map(|&o| symbol(o)).collect();
         Self::show_bar(
             existing,

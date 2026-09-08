@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>tsunagi_installer</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.tsunagi.installer</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Tsunagi Installer</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2.0</string>
+	<key>CFBundleSignature</key>
+	<string>TSNI</string>
+	<key>CFBundleVersion</key>
+	<string>0.2.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<!-- ★ 刻意「沒有」LSUIElement／LSBackgroundOnly ★
+	     這支要是**前景 app**，那正是這個 spike 要測的差異。 -->
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+</dict>
+</plist>

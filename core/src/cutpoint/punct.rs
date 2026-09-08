@@ -71,7 +71,9 @@ pub fn is_punct(keys: &str, i: usize) -> bool {
         let hi = (i + 3).min(chars.len());
         for end in (i + 1)..=hi {
             let seg: String = chars[start..end].iter().collect();
-            if bopomofo::syllable::check(&seg) == bopomofo::Validity::Valid {
+            if bopomofo::syllable::check(&seg) == bopomofo::Validity::Valid
+                && !EMPTY_SYLLABLES.contains(&seg.as_str())
+            {
                 return false;
             }
         }
@@ -79,6 +81,28 @@ pub fn is_punct(keys: &str, i: usize) -> bool {
 
     true
 }
+
+/// **合法但沒有任何字在用的音節**——遇到這些不要讓標點讓位。
+///
+/// # 為什麼需要這張表
+///
+/// `su3cl3,`（你好，）的逗號判得出是標點，但**後面多一個空白就不行**
+/// ——`,␣` 剛好是「ㄝ一聲」這個合法音節，於是「能參與完整音節」那條
+/// 規則成立，逗號被吞進注音段。而「你好，」後面接空白是極常見的打法。
+///
+/// 掃過五個一鍵兩用的鍵（`,` `.` `;` `/` `-`）× 五個聲調的所有合法
+/// 音節，只有 `,␣` 的候選清單裡**沒有任何真正的字**——唯一的候選是
+/// 注音符號 `ㄝ` 本身（那是 §2.18「注音符號直出」放進去的）。
+///
+/// 其餘的都有字：`.␣` 是ㄡ（歐、鷗）、`;␣` 是ㄤ（骯、腌）、
+/// `/␣` 是ㄥ（鞥）、`-␣` 是ㄦ（兒），都不能收進來。
+///
+/// # 為什麼寫成常數而不是查詞典
+///
+/// `punct` 是切點引擎的底層，目前只依賴 `bopomofo`，**不碰詞典**
+/// ——那是刻意的分層（詞典是背景載入的，載完之前判斷會不一致）。
+/// 這張表只有一筆，寫死比引進依賴划算。
+const EMPTY_SYLLABLES: &[&str] = &[", "];
 
 #[cfg(test)]
 mod tests {
@@ -110,6 +134,21 @@ mod tests {
         // `su3cl3,` = 你好，
         assert!(punct_at("su3cl3,", 6), "你好後面的逗號");
         assert!(punct_at("su3cl3.", 6), "你好後面的句號");
+    }
+
+    /// **後面接空白也要判得出是標點**。
+    ///
+    /// `su3cl3,` 判得出來，但多一個空白就不行——`,␣` 剛好是「ㄝ一聲」
+    /// 這個合法音節，「能參與完整音節」那條規則就成立了。而 ㄝ 一聲
+    /// 沒有任何字在用（唯一候選是注音符號本身），不該讓標點讓位。
+    #[test]
+    fn 逗號後面接空白仍是標點() {
+        assert!(punct_at("su3cl3, ", 6), "你好，␣");
+        assert!(punct_at("su3cl3, hi", 6), "你好，␣hi");
+        // 其餘四個一鍵兩用的鍵**有字在用**，不可以一起放行
+        assert!(!punct_at(".  ", 0), ".␣ 是ㄡ（歐）");
+        assert!(!punct_at(";  ", 0), ";␣ 是ㄤ（骯）");
+        assert!(!punct_at("-  ", 0), "-␣ 是ㄦ（兒）");
     }
 
     #[test]

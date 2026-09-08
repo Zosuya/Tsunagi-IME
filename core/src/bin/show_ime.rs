@@ -142,9 +142,14 @@ fn main() {
     // 沒給 `--pack` 就用設定檔的清單（`[behavior] packs = [...]`）
     let cfg = ime_core::config::Config::load(Some(&data));
     let enabled = packs.unwrap_or_else(|| cfg.behavior.packs.clone());
+    // 預載包（內建符號）在 `data/` 的兄弟目錄。**這支要跟真正的引擎載
+    // 一樣的東西**，不然量到的行為跟使用者看到的不一樣。
+    ime_core::pack::set_bundled_dir(data.parent().map(|d| d.join("packs")));
     ime_core::pack::load(&cfg.behavior.packs_dir, &enabled);
     ime_core::english::load(&data);
     ime_core::dict::load_bopomofo(&data);
+    // 選字的中文 bigram——計分器一定要載，不然量到的是「關掉模型」的行為
+    ime_core::lm::load(&data, ime_core::dict::char_freq_map(&data));
     ime_core::dict::load_japanese(&data);
     // 整句轉換要用的接續矩陣。**這支要跟真正的引擎載一樣的東西**，
     // 不然量到的行為跟使用者看到的不一樣（這個坑踩過一次）。

@@ -1,0 +1,2 @@
+# name: Big5 ´ú¸Õ¥]
+en	zzbig5word

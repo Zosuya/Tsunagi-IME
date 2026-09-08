@@ -15,15 +15,23 @@
 //! 「名字到哪裡結束」，夾在句子中間（`你好\星\好`）也完全清楚。
 //! 慣例上跟 Discord／Slack 的 `:star:` 是同一件事。
 //!
-//! # 名字是「組出來的文字」，不是按鍵
+//! # 名字有兩條路：組出來的文字、按鍵原文
 //!
-//! 這樣三種語言天然共用同一份表：
+//! 這樣三種語言共用同一份表——包裡一列就把三種名字列齊，指向同一組
+//! 符號：
 //!
 //! ```text
-//! \vu/␣\   注音組出「星」  ─┐
-//! \hoshi\  日文組出「星」  ─┼→ 都是「星」這個鍵
-//! \star\   英文就是 star   ─┘（另一個鍵，指向同一組符號）
+//! sym  星,hoshi,star  ★☆✦✧⭐      ← 欄位其實是 Tab 分隔
+//!
+//! \vu/␣\   注音組出「星」──→ 用**文字**查中
+//! \hoshi\  日文按鍵 hoshi ─→ 用**按鍵**查中
+//! \star\   英文兩條都一樣 ─→ 都查得中
 //! ```
+//!
+//! **日文名字列羅馬字不列假名**：羅馬字要先過語言判斷、再過整句轉換，
+//! 組出來的文字不可預期（`tougou` 變漢字「統合」、`sekibun` 前半被判成
+//! 中文），只有按鍵原文百分之百對得上。查詢的順序與實測見
+//! `compose::merge_symbols` 的說明。
 //!
 //! # 預設永遠是原樣
 //!
@@ -48,109 +56,93 @@ pub fn is_prefix(c: char) -> bool {
     c == PREFIX
 }
 
-/// 內建的符號表：名字 → 一組符號。
-///
-/// 同一組符號可以有多個名字（中文、英文、日文漢字），查表時各自是
-/// 獨立的一列——**不做同義詞展開**，那會讓「這個名字有沒有收」變得
-/// 難以預測。
-///
-/// 排序就是候選的順序，第一個放最常用的。
-const BUILTIN: &[(&str, &str)] = &[
-    // ── 星與心 ──
-    ("星", "★☆✦✧⭐✩✪✫"),
-    ("star", "★☆✦✧⭐✩✪✫"),
-    ("心", "♥♡❤❥♥️"),
-    ("heart", "♥♡❤❥"),
-    // ── 箭頭 ──
-    ("箭頭", "→←↑↓↔↕⇒⇐⇑⇓⇔"),
-    ("arrow", "→←↑↓↔↕⇒⇐⇑⇓⇔"),
-    ("右", "→⇒➡▶►"),
-    ("左", "←⇐⬅◀◄"),
-    ("上", "↑⇑⬆▲△"),
-    ("下", "↓⇓⬇▼▽"),
-    // ── 勾叉 ──
-    ("勾", "✓✔☑√"),
-    ("check", "✓✔☑√"),
-    ("叉", "✗✘☒×╳"),
-    ("cross", "✗✘☒×╳"),
-    // ── 數學 ──
-    ("數學", "＋－×÷＝≠≒≈±√∞∫∑∏"),
-    ("math", "＋－×÷＝≠≒≈±√∞∫∑∏"),
-    ("度", "°℃℉"),
-    ("degree", "°℃℉"),
-    // ── 圖形 ──
-    ("圓", "○●◎⊙◯⭕"),
-    ("circle", "○●◎⊙◯⭕"),
-    ("方", "□■▢▣◻◼"),
-    ("square", "□■▢▣◻◼"),
-    ("三角", "△▲▽▼◢◣◤◥"),
-    ("triangle", "△▲▽▼◢◣◤◥"),
-    ("菱形", "◇◆◈"),
-    ("diamond", "◇◆◈"),
-    // ── 常用標記 ──
-    ("註", "※§¶†‡"),
-    ("note", "※§¶†‡"),
-    ("點", "・‧·•◦∙"),
-    ("dot", "・‧·•◦∙"),
-    ("音樂", "♪♫♬♩♭♯"),
-    ("music", "♪♫♬♩♭♯"),
-    ("天氣", "☀☁☂☃❄☔"),
-    ("weather", "☀☁☂☃❄☔"),
-    ("電話", "☎☏📞"),
-    ("phone", "☎☏📞"),
-    ("信", "✉✎✏📧"),
-    ("mail", "✉✎✏📧"),
-    // ── 貨幣 ──
-    ("錢", "＄￥€£￡￠₩"),
-    ("money", "＄￥€£￡￠₩"),
-    // ── 撲克與棋 ──
-    ("撲克", "♠♣♥♦♤♧♡♢"),
-    ("card", "♠♣♥♦♤♧♡♢"),
-    // ── 性別 ──
-    ("性別", "♀♂⚥"),
-    ("gender", "♀♂⚥"),
-];
-
 /// 這個名字有哪些符號？沒有就回空的。
 ///
-/// 層順序跟詞的查詢一致：**擴充包先問，再問內建**——使用者自己加的
-/// 應該贏過我們列的。
+/// # 全部都在包裡
+///
+/// 這裡原本有一份 `BUILTIN` 常數（24 組），2026-09-05 抽出去變成隨程式
+/// 一起裝的預載包 `packs/內建符號.txt`。好處是使用者打開就看得到有哪些、
+/// 可以複製一份來改、更新符號表不必重新編譯 DLL。
+///
+/// 所以查詢只剩一條路：包。使用者自己的包同名時蓋過預載的那份，那是在
+/// `pack::dirs()` 的優先序裡決定的，不在這裡。
 pub fn lookup(name: &str) -> Vec<String> {
     if name.is_empty() {
         return Vec::new();
     }
-    // 擴充包是獨立的一層。沒啟用包的話 `any()` 直接短路
-    if crate::pack::any() {
-        if let Some(s) = crate::pack::index().sym.get(name) {
-            return s.chars().map(|c| c.to_string()).collect();
-        }
+    // 一個符號都沒有時直接短路，不必拿讀鎖
+    if !crate::pack::any_sym() {
+        return Vec::new();
     }
-    BUILTIN
-        .iter()
-        .find(|(k, _)| *k == name)
-        .map(|(_, v)| v.chars().map(|c| c.to_string()).collect())
+    // 已經是拆好的清單——「怎麼拆」在 `pack::parse` 就決定了。
+    // 這裡原本是 `s.chars()`，2026-09-07 改的：emoji 拆不了字元。
+    crate::pack::index()
+        .sym
+        .get(name)
+        .cloned()
         .unwrap_or_default()
-}
-
-/// 內建了幾組？測試與設定頁顯示用。
-pub fn builtin_count() -> usize {
-    BUILTIN.len()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// 預載包在專案根的 `packs/`。使用者目錄指向不存在的路徑，
+    /// 測試才不會被本機 `%APPDATA%` 裡的包影響。
+    fn load() -> bool {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        crate::pack::set_bundled_dir(Some(root.join("packs")));
+        crate::pack::load(
+            "__測試用_不存在的資料夾__",
+            &[crate::pack::BUNDLED_SYMBOLS.to_string()],
+        );
+        crate::pack::any_sym()
+    }
+
+    /// 預載包的原始內容，給「表本身對不對」那幾條用。
+    fn rows() -> Vec<(String, String)> {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("packs")
+            .join(format!("{}.txt", crate::pack::BUNDLED_SYMBOLS));
+        let Ok(text) = std::fs::read_to_string(p) else {
+            return Vec::new();
+        };
+        text.lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .filter_map(|l| {
+                let mut f = l.split('\t');
+                match (f.next()?, f.next()?, f.next()?) {
+                    // 名字欄可能列了好幾個別名，跟 `pack::parse` 一樣展開
+                    ("sym", k, v) => Some(
+                        k.split(',')
+                            .map(|n| (n.trim().to_string(), v.to_string()))
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                }
+            })
+            .flatten()
+            .collect()
+    }
+
     #[test]
-    fn 查得到內建的名字() {
+    fn 查得到預載包的名字() {
+        assert!(load(), "預載包載不進來");
         let s = lookup("星");
         assert_eq!(s.first().map(String::as_str), Some("★"));
-        // 中英文名指向同一組
+        // 中／日／英三個名字指向同一組
         assert_eq!(lookup("star"), s);
+        // 日文名字在表裡是羅馬字（`compose` 用按鍵原文查它）
+        assert_eq!(lookup("hoshi"), s);
     }
 
     #[test]
     fn 查不到的回空的() {
+        load();
         assert!(lookup("這個名字不存在").is_empty());
         assert!(lookup("").is_empty());
         // 路徑裡常見的資料夾名不該誤中
@@ -158,20 +150,26 @@ mod tests {
         assert!(lookup("Program Files").is_empty());
     }
 
-    /// 表裡不能有重複的名字——後面那個會被 `find` 忽略，是靜默的錯。
+    /// 表裡不能有重複的名字——後面那個進不了索引，是靜默的錯。
     #[test]
     fn 名字不重複() {
+        let rows = rows();
+        assert!(rows.len() >= 40, "預載包只讀到 {} 列", rows.len());
         let mut seen = std::collections::HashSet::new();
-        for (k, _) in BUILTIN {
-            assert!(seen.insert(*k), "重複的名字：{k}");
+        for (k, _) in &rows {
+            assert!(seen.insert(k.clone()), "重複的名字：{k}");
         }
     }
 
-    /// 送進文件的字串要過 `sanitize` 那一關，跟擴充包同一道門。
+    /// 送進文件的字串要過 `sanitize` 那一關，跟其他擴充包同一道門。
+    ///
+    /// **這條擋的是真的踩過的坑**：`♥️` 帶了 emoji variation selector
+    /// （U+FE0F，不可見），寫在包裡會讓整行被 `parse` 跳過——而它跟前面
+    /// 的 `♥` 看起來一模一樣，肉眼看不出少了什麼。
     #[test]
-    fn 內建的符號都是安全的輸出() {
-        for (k, v) in BUILTIN {
-            assert!(crate::sanitize::is_safe_output(v), "{k} 的符號不安全");
+    fn 預載包的符號都是安全的輸出() {
+        for (k, v) in rows() {
+            assert!(crate::sanitize::is_safe_output(&v), "{k} 的符號不安全");
             assert!(!v.is_empty(), "{k} 沒有符號");
         }
     }

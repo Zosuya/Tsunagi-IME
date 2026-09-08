@@ -36,7 +36,7 @@
 //! 是一樣的，留在 `session`。這一層只管「按鍵 → 段落」。
 
 use crate::bopomofo::buffer::{KeyResult, Syllable};
-use crate::cutpoint::{incremental::Incremental, normalize, punct, rank, Segment};
+use crate::cutpoint::{incremental::Incremental, punct, rank, Segment};
 use crate::language::Language;
 
 /// 一次按鍵之後，輸入層有什麼變化。
@@ -195,6 +195,54 @@ impl Input {
         }
         input
     }
+
+    /// **段選單定案了開頭幾段**：把它們當成凍結區，後區維持原狀。
+    ///
+    /// 見 `Incremental::freeze_user_prefix`——重點是**不重建**，後區
+    /// 已經算好的分支與凍結成果全部留著。回傳 `false` 代表這條快路
+    /// 走不通（切點跟使用者的決定衝突），呼叫端要退回整個重建。
+    ///
+    /// 只有自動模式（`Cascade`）需要——鎖定模式整串就是一段，沒有
+    /// 段選單可言。
+    pub fn freeze_user_prefix(&mut self, prefix: Vec<Segment>, n: usize) -> bool {
+        match self {
+            Input::Cascade(c) => {
+                if !c.inc.freeze_user_prefix(prefix, n) {
+                    return false;
+                }
+                // **`keys` 不動**——它對外的語意是完整按鍵串，而
+                // `Incremental` 內部自己記著哪一截已經凍結。砍掉的話
+                // `Session` 那邊算出來的段落總長就少一截，送出的文字
+                // 會缺開頭（測試「選定之後前區定案後區重算」抓到過）。
+                c.recompute(None);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 凍結區的分段。見 `Incremental::frozen_segments`。
+    pub fn frozen_segments(&self) -> Vec<Segment> {
+        match self {
+            Input::Cascade(c) => c.inc.frozen_segments().to_vec(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 把前區掛成凍結區。見 `Incremental::adopt_frozen`——「整個重建」
+    /// 那條路收尾用。
+    pub fn adopt_frozen(&mut self, prefix: Vec<Segment>) {
+        if let Input::Cascade(c) = self {
+            // **`Cascade::keys` 也要補**——`Input::keys()` 回的是它，
+            // 而它對外的語意是完整按鍵串。只補 `inc` 的話送出的文字
+            // 會缺開頭（測試「取消之後回到引擎原本的分段」抓到過：
+            // 連選兩段之後 `keys()` 變空字串）。
+            let head: String = prefix.iter().map(|s| s.keys.as_str()).collect();
+            c.keys = format!("{head}{}", c.keys);
+            c.inc.adopt_frozen(prefix);
+            c.recompute(None);
+        }
+    }
 }
 
 /// **自動模式**的輸入：累加式切法 + 排序。
@@ -262,12 +310,17 @@ impl Cascade {
             };
             return;
         }
+        // 凍結區有幾段——那些是使用者在段選單定案的，不准合併
+        let frozen_n = self.inc.frozen_segments().len();
         let sorted = rank::sort(self.inc.cuttings());
         let mut seen = std::collections::HashSet::new();
         let engines = self.engines;
         self.cuttings = sorted
             .iter()
-            .map(|c| normalize(c))
+            // **凍結區不參與合併**：使用者明講 `,` 自成一段，`normalize`
+            // 卻因為後面的 `data` 也是英文而黏成 `,data`，他就再也沒機會
+            // 單獨選 `data`（實測回報「走到 data daijoubu 切不出來」）
+            .map(|c| crate::cutpoint::normalize_after(c, frozen_n))
             // **停用的語言在出口過濾掉**。
             //
             // 不去動十幾處 `validity` 的呼叫點——那要嘛得把設定一路

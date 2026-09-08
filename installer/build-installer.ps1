@@ -49,6 +49,9 @@ if (-not $SkipBuild) {
 
 # --- 2. 檢查要打包的檔案 ---
 Write-Host "`n[2/3] 檢查打包清單" -ForegroundColor Cyan
+# **這份清單要跟 tsunagi.iss 的 [Files] 一致**——它是「缺檔就早點失敗」的
+# 守門員，漏列的檔案在這裡不會被抓到，要等 ISCC 編譯才報錯（或更糟：
+# 靜靜地少裝一個檔）。加減 iss 的檔案時記得同步這裡。
 $need = @(
     'target\release\ime_tip_windows.dll',
     'target\release\ime_settings.exe',
@@ -57,6 +60,10 @@ $need = @(
     'data\japanese\dict_ja.bin',
     'data\japanese\connection.bin',
     'data\english\en_50k.txt',
+    'data\bopomofo\zh_bigram.gram',
+    'packs\內建符號.txt',
+    'packs\內建emoji.txt',
+    'packs\台語.txt',
     'LICENSE',
     'CREDITS.md'
 )

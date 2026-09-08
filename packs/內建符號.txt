@@ -1,0 +1,123 @@
+# name: 內建符號
+# description: 星、箭頭、數學、天氣這些常用符號，中日英三種名字都叫得出來
+# version: 4.0
+# license: CC0
+# updated: 2026-09-07
+#
+# 這份原本寫死在程式碼裡（symbol.rs 的 BUILTIN），2026-09-05 抽出來
+# 變成預載包：看得到有哪些、可以複製一份改、更新不必重新編譯。
+# 想改的話不要動這個檔案（升級會被覆蓋），在自己的包裡用同名的那一組蓋過去。
+#
+# 格式：第二欄是名字，**逗號可以列好幾個**，指向第三欄同一組符號。
+# 這裡的順序是「中文,日文羅馬字,英文」，三種語言都叫得出同一批符號。
+#
+# 第三欄的符號**用空白分隔**（2026-09-07 的 4.0 改的，舊格式是整串
+# 連著寫）。改的原因是 emoji：`👨‍👩‍👧` 是五個字元組成的一個圖，
+# 舊的逐字元拆會拆成一堆碎片。這份表全是單字元符號，兩種拆法結果
+# 一樣，但格式要統一。
+#
+# 名字撞到別的包時**兩邊的符號會接起來**，不是誰蓋過誰——內建 emoji
+# 包也有 `\音樂\`，打一次 ♪♫♬♩ 和 🎵🎶🎤 都在候選裡。
+# （「使用者自己寫一份同檔名的包」仍然是整份取代，那是另一回事。）
+#
+# 日文列的是**羅馬字**（sekibun）不是假名（せきぶん）：名字先用組出來的
+# 文字查，查不到才用按鍵原文查，而日文羅馬字組出來的東西不可預期
+# （tougou 會變成漢字「統合」、mugen 尾巴的 n 還沒收成「ん」），
+# 只有按鍵原文百分之百對得上。
+#
+# 一列放幾個符號的判準：**同一個東西的不同寫法**才放在一起（星有 ★☆✦✧，
+# 按方向鍵挑）。**根本是不同東西的**各給各的名字——＋－×÷ 是四件事，
+# 打「\加\」「\減\」「\乘\」「\除\」一次到位，不必在一排裡數格子。
+# 群組那一列留著當瀏覽入口：想不起來叫什麼時打「\math\」翻一遍。
+
+
+# 星與心──同一個東西的不同寫法，留在一組用方向鍵挑
+sym	星,hoshi,star	★ ☆ ✦ ✧ ⭐ ✩ ✪ ✫
+sym	心,kokoro,heart	♥ ♡ ❤ ❥
+
+# 箭頭
+sym	箭頭,yajirushi,arrow	→ ← ↑ ↓ ↔ ↕ ⇒ ⇐ ⇑ ⇓ ⇔
+sym	右,migi,right	→ ⇒ ➡ ▶ ►
+sym	左,hidari,left	← ⇐ ⬅ ◀ ◄
+sym	上,ue,up	↑ ⇑ ⬆ ▲ △
+sym	下,shita,down	↓ ⇓ ⬇ ▼ ▽
+
+# 勾叉
+sym	勾,chekku,check	✓ ✔ ☑ √
+sym	叉,batsu,cross	✗ ✘ ☒ × ╳
+
+# 四則──底下每個運算符號各有自己的名字
+sym	數學,suugaku,math	＋ － × ÷ ＝ ≠ ±
+sym	加,tasu,plus	＋
+sym	減,hiku,minus	－
+sym	乘,kakeru,times	×
+sym	除,waru,divide	÷
+sym	正負,purasumainasu,plusminus	±
+
+# 等號
+sym	等於,ikooru,tougou,equal	＝
+sym	不等於,futougou,notequal	≠
+sym	約等於,niarii,approx	≒ ≈
+sym	恆等,goudou,identical	≡
+
+# 其他數學
+sym	根號,ruuto,root	√ ∛ ∜
+sym	無限,mugen,infinity	∞
+sym	積分,sekibun,integral	∫ ∬ ∮
+sym	總和,shiguma,sum	∑
+sym	連乘,soujou,product	∏
+sym	度,do,degree	°
+sym	攝氏,sesshi,celsius	℃
+sym	華氏,kashi,fahrenheit	℉
+
+# 圖形
+sym	圓,maru,circle	○ ● ◎ ⊙ ◯ ⭕
+sym	方,shikaku,square	□ ■ ▢ ▣ ◻ ◼
+sym	三角,sankaku,triangle	△ ▲ ▽ ▼ ◢ ◣ ◤ ◥
+sym	菱形,hishigata,diamond	◇ ◆ ◈
+
+# 常用標記
+sym	註,komejirushi,note	※
+sym	章節,sekushon,section	§
+sym	段落,danraku,paragraph	¶
+sym	劍號,dagaa,dagger	† ‡
+sym	點,ten,dot	・ ‧ · • ◦ ∙
+
+# 音樂
+sym	音樂,ongaku,onpu,music	♪ ♫ ♬ ♩
+sym	升記號,shaapu,sharp	♯
+sym	降記號,furatto,flat	♭
+
+# 天氣
+sym	天氣,tenki,weather	☀ ☁ ☂ ☃ ❄ ☔
+sym	太陽,taiyou,sun	☀
+sym	雲,kumo,cloud	☁
+sym	傘,kasa,umbrella	☂ ☔
+sym	雪人,yukidaruma,snowman	☃
+sym	雪,yuki,snow	❄
+
+# 通訊
+sym	電話,denwa,phone	☎ ☏ 📞
+sym	信,tegami,mail	✉ 📧
+sym	筆,enpitsu,pencil	✎ ✏
+
+# 貨幣
+sym	錢,okane,money	＄ ￥ € £ ￡ ￠ ₩
+sym	美元,doru,dollar	＄
+sym	日圓,en,yen	￥
+sym	歐元,yuuro,euro	€
+sym	英鎊,pondo,pound	£ ￡
+sym	分,sento,cent	￠
+sym	韓元,uon,won	₩
+
+# 撲克
+sym	撲克,toranpu,card	♠ ♣ ♥ ♦ ♤ ♧ ♡ ♢
+sym	黑桃,supeedo,spade	♠ ♤
+sym	梅花,kurabu,club	♣ ♧
+sym	紅心,haato,hearts	♥ ♡
+sym	方塊,daiya,diamonds	♦ ♢
+
+# 性別
+sym	性別,seibetsu,gender	♀ ♂ ⚥
+sym	女,onna,female	♀
+sym	男,otoko,male	♂

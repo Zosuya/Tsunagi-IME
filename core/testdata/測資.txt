@@ -1,0 +1,2052 @@
+# 通譯輸入法 測資
+#
+# 一份檔案，用 `## 標籤 ｜ 主測：… ｜ 來源：…` 分節。計分器共用
+# `src/bin/common/testdata.rs` 讀這份，**不再各自寫死檔名清單**——
+# 從前十支計分器各有一份清單而且子集互不相同，加一個檔要改十處、
+# 漏一處那支就默默少量一組。
+#
+# ## 格式
+#
+# 資料列三欄，**用 TAB 分隔**（用空白分欄的行會被靜默跳過）：
+#
+#   文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+#
+#   第一欄 文字期望：各段用 `|` 分隔，`_` = 分隔符空白自成一段
+#   第二欄 按鍵期望：**同樣的切法標在按鍵層級**，`|` 就是切點位置
+#   第三欄 按鍵序列：使用者實際按的鍵
+#
+#   第二欄是計分基準——它不需要任何推導，逐字元比對即可。
+#   按鍵序列裡的空白可能是「一聲」也可能是「分隔符」，正是要測的東西：
+#     `check| |u vu84`   第一個空白是分隔符（前後都切），第二個是「一」的一聲
+#
+# ## 四種標記，沒有第五種（見 期望基準審核.md §0）
+#
+#   照寫 `A|B`   正確：段數與每段文字都要一樣
+#   `~` 開頭     寬容-段：只比接起來的文字，切成幾段不管
+#   ` || `       寬容-列舉：命中任一個就算對（前後**都要有空白**）
+#   重產         測資本身寫錯，用 mkkeys 重產
+#
+# ## 規矩
+#
+# - **按鍵序列不准手敲**，一律用 mkkeys 產生並當場驗證。舊的 100 組
+#   測資就是手敲注音毀掉的（多音字判讀錯），錯的期望會把計分器帶偏
+# - **不從詞庫抽樣**——抽到的必然都是引擎查得到的東西，測不出真實使用
+#   的樣子。真實輸入會有詞庫沒收的組合、專有名詞、口語說法
+# - **刻意保留失敗案例**：測資反映真實需求，不是反映目前的能力。把做
+#   不到的排除在外數字會好看，但下次改動時無從得知有沒有修好
+# - 加完新測資先跑 `check_testdata`，**要先是 0** 才算數
+#
+# ## 節標題的「來源」
+#
+#   人工          人寫的句子，不能重產
+#   使用者實測    實際打字時回報的案例，不能重產
+#   生成          工具產的，可以整節重產
+#
+# 保留集（holdout）另外標記：它的規矩是**寫的時候不看引擎輸出**，
+# 產測資時不准拿引擎篩選，否則它就失去「證明泛化」的意義。
+
+
+## cutpoint ｜ 主測：切點 ｜ 來源：人工
+# 切點測資：三語所有排列組合
+#
+# 15 種組合（中/英/日 的單語重複、兩語、三語排列）× 20 句 = 300 句
+# 每種組合 10 句有分隔符空白（標成獨立的 `_` 段）、10 句完全黏著。
+#
+# 標記規則（依「通用語言輸入法 篩選規則」canvas）：
+#
+# 注音按鍵依「注音按鍵合法表及對照表.md」（使用者核對過）轉換。
+#
+#
+#
+已經|_|完成	u3ru/ | |j06t/6	u3ru/  j06t/6
+明天|_|記得	au/6wu0 | |ru42k6	au/6wu0  ru42k6
+一下|_|沒問題	u vu84| |ao6jp4wu6	u vu84 ao6jp4wu6
+好吃|_|買	cl3t | |a93	cl3t  a93
+好|_|測試	cl3| |hk4g4	cl3 hk4g4
+資料|_|檔案	y xul4| |2;304	y xul4 2;304
+可以|_|時間	dk3u3| |g6ru0 	dk3u3 g6ru0 
+討論|_|確認	wl3xjp4| |fm,4bp4	wl3xjp4 fm,4bp4
+上傳|_|_|已經	g;4tj06| | |u3ru/ 	g;4tj06  u3ru/ 
+今天|_|明天	rup wu0 | |au/6wu0 	rup wu0  au/6wu0 
+這個一下	5k4ek7u vu84	5k4ek7u vu84
+見面好吃	ru04au04cl3t 	ru04au04cl3t 
+開好	d9 cl3	d9 cl3
+問題資料	jp4wu6y xul4	jp4wu6y xul4
+需要可以	vm ul4dk3u3	vm ul4dk3u3
+工作討論	ej/ yji4wl3xjp4	ej/ yji4wl3xjp4
+修改上傳	vu. e93g;4tj06	vu. e93g;4tj06
+完成今天	j06t/6rup wu0 	j06t/6rup wu0 
+記得這個	ru42k65k4ek7	ru42k65k4ek7
+沒問題見面	ao6jp4wu6ru04au04	ao6jp4wu6ru04au04
+notebook|_|test	notebook| |test	notebook test
+file|_|data	file| |data	file data
+commit|_|deploy	commit| |deploy	commit deploy
+client|_|debug	client| |debug	client debug
+report|_|push	report| |push	report push
+build|_|_|login	build| | |login	build  login
+hello|_|world	hello| |world	hello world
+check|_|meeting	check| |meeting	check meeting
+good|_|notebook	good| |notebook	good notebook
+email|_|file	email| |file	email file
+reviewcommit	reviewcommit	reviewcommit
+serverclient	serverclient	serverclient
+configreport	configreport	configreport
+mergebuild	mergebuild	mergebuild
+searchhello	searchhello	searchhello
+updatecheck	updatecheck	updatecheck
+buggood	buggood	buggood
+testemail	testemail	testemail
+datareview	datareview	datareview
+deployserver	deployserver	deployserver
+美味しい|_|頑張って	oishii| |gannbatte	oishii gannbatte
+電話|_|仕事	dennwa| |shigoto	dennwa shigoto
+時間|_|会議	jikann| |kaigi	jikann kaigi
+電車|_|学校	dennsha| |gakkou	dennsha gakkou
+ございます|_|こんにちは	gozaimasu| |konnnichiha	gozaimasu konnnichiha
+アニメ|_|寿司	anime| |sushi	anime sushi
+あります|_|です	arimasu| |desu	arimasu desu
+お願い|_|失礼	onegai| |shitsurei	onegai shitsurei
+楽しい|_|美味しい	tanoshii| |oishii	tanoshii oishii
+友達|_|電話	tomodachi| |dennwa	tomodachi dennwa
+やすみじかん	yasumijikann	yasumijikann
+しゃしんでんしゃ || 写真電車	shashinndennsha	shashinndennsha
+ありがとうございます	arigatougozaimasu	arigatougozaimasu
+あしたあにめ || 明日アニメ	ashitaanime	ashitaanime
+せいたんあります || 生誕あります	seitannarimasu	seitannarimasu
+わかりましたおねがい || わかりましたお願い	wakarimashitaonegai	wakarimashitaonegai
+だいじょうぶたのしい || 大丈夫楽しい	daijoubutanoshii	daijoubutanoshii
+がんばってともだち || 頑張って友達	gannbattetomodachi	gannbattetomodachi
+しごとやすみ || 仕事休み	shigotoyasumi	shigotoyasumi
+かいぎしゃしん || 会議写真	kaigishashinn	kaigishashinn
+討論|_|build	wl3xjp4| |build	wl3xjp4 build
+上傳|_|hello	g;4tj06| |hello	g;4tj06 hello
+今天|_|check	rup wu0 | |check	rup wu0  check
+這個|_|good	5k4ek7| |good	5k4ek7 good
+見面|_|email	ru04au04| |email	ru04au04 email
+開|_|review	d9 | |review	d9  review
+問題|_|server	jp4wu6| |server	jp4wu6 server
+需要|_|config	vm ul4| |config	vm ul4 config
+工作|_|merge	ej/ yji4| |merge	ej/ yji4 merge
+修改|_|search	vu. e93| |search	vu. e93 search
+完成|update	j06t/6|update	j06t/6update
+記得|bug	ru42k6|bug	ru42k6bug
+沒問題|test	ao6jp4wu6|test	ao6jp4wu6test
+買|data	a93|data	a93data
+測試|deploy	hk4g4|deploy	hk4g4deploy
+檔案|debug	2;304|debug	2;304debug
+時間|push	g6ru0 |push	g6ru0 push
+確認|login	fm,4bp4|login	fm,4bp4login
+已經|world	u3ru/ |world	u3ru/ world
+明天|meeting	au/6wu0 |meeting	au/6wu0 meeting
+明天|_|アニメ	au/6wu0 | |anime	au/6wu0  anime
+一下|_|あります	u vu84| |arimasu	u vu84 arimasu
+好吃|_|お願い	cl3t | |onegai	cl3t  onegai
+好|_|楽しい	cl3| |tanoshii	cl3 tanoshii
+資料|_|友達	y xul4| |tomodachi	y xul4 tomodachi
+可以|_|休み	dk3u3| |yasumi	dk3u3 yasumi
+討論|_|写真	wl3xjp4| |shashinn	wl3xjp4 shashinn
+上傳|_|ありがとう	g;4tj06| |arigatou	g;4tj06 arigatou
+今天|_|明日	rup wu0 | |ashita	rup wu0  ashita
+這個|_|生誕	5k4ek7| |seitann	5k4ek7 seitann
+見面|わかりました	ru04au04|wakarimashita	ru04au04wakarimashita
+開|大丈夫	d9 |daijoubu	d9 daijoubu
+問題|頑張って	jp4wu6|gannbatte	jp4wu6gannbatte
+需要|仕事	vm ul4|shigoto	vm ul4shigoto
+工作|会議	ej/ yji4|kaigi	ej/ yji4kaigi
+修改|学校	vu. e93|gakkou	vu. e93gakkou
+完成|こんにちは	j06t/6|konnnichiha	j06t/6konnnichiha
+記得|寿司	ru42k6|sushi	ru42k6sushi
+沒問題|です	ao6jp4wu6|desu	ao6jp4wu6desu
+買|失礼	a93|shitsurei	a93shitsurei
+file|_|開	file| |d9 	file d9 
+commit|_|問題	commit| |jp4wu6	commit jp4wu6
+client|_|需要	client| |vm ul4	client vm ul4
+report|_|工作	report| |ej/ yji4	report ej/ yji4
+build|_|修改	build| |vu. e93	build vu. e93
+hello|_|完成	hello| |j06t/6	hello j06t/6
+check|_|記得	check| |ru42k6	check ru42k6
+good|_|沒問題	good| |ao6jp4wu6	good ao6jp4wu6
+email|_|買	email| |a93	email a93
+review|_|測試	review| |hk4g4	review hk4g4
+server|檔案	server|2;304	server2;304
+config|時間	config|g6ru0 	configg6ru0 
+merge|確認	merge|fm,4bp4	mergefm,4bp4
+search|已經	search|u3ru/ 	searchu3ru/ 
+update|明天	update|au/6wu0 	updateau/6wu0 
+bug|一下	bug|u vu84	bugu vu84
+test|好吃	test|cl3t 	testcl3t 
+data|好	data|cl3	datacl3
+deploy|資料	deploy|y xul4	deployy xul4
+debug|可以	debug|dk3u3	debugdk3u3
+debug|_|しごと || debug_仕事	debug| |shigoto	debug shigoto
+push|_|会議	push| |kaigi	push kaigi
+login|_|学校	login| |gakkou	login gakkou
+world|_|こんにちは	world| |konnnichiha	world konnnichiha
+meeting|_|寿司	meeting| |sushi	meeting sushi
+notebook|_|です	notebook| |desu	notebook desu
+file|_|失礼	file| |shitsurei	file shitsurei
+commit|_|美味しい	commit| |oishii	commit oishii
+client|_|電話	client| |dennwa	client dennwa
+report|_|時間	report| |jikann	report jikann
+build|電車	build|dennsha	builddennsha
+hello|ございます	hello|gozaimasu	hellogozaimasu
+check|アニメ	check|anime	checkanime
+good|あります	good|arimasu	goodarimasu
+email|お願い	email|onegai	emailonegai
+review|楽しい	review|tanoshii	reviewtanoshii
+server|友達	server|tomodachi	servertomodachi
+config|やすみ || config休み	config|yasumi	configyasumi
+merge|写真	merge|shashinn	mergeshashinn
+search|ありがとう	search|arigatou	searcharigatou
+学校|_|已經	gakkou| |u3ru/ 	gakkou u3ru/ 
+こんにちは|_|明天	konnnichiha| |au/6wu0 	konnnichiha au/6wu0 
+寿司|_|一下	sushi| |u vu84	sushi u vu84
+です|_|好吃	desu| |cl3t 	desu cl3t 
+失礼|_|好	shitsurei| |cl3	shitsurei cl3
+美味しい|_|資料	oishii| |y xul4	oishii y xul4
+電話|_|可以	dennwa| |dk3u3	dennwa dk3u3
+時間|_|討論	jikann| |wl3xjp4	jikann wl3xjp4
+電車|_|上傳	dennsha| |g;4tj06	dennsha g;4tj06
+ございます|_|今天	gozaimasu| |rup wu0 	gozaimasu rup wu0 
+アニメ|這個	anime|5k4ek7	anime5k4ek7
+あります|見面	arimasu|ru04au04	arimasuru04au04
+お願い|開	onegai|d9 	onegaid9 
+楽しい|問題	tanoshii|jp4wu6	tanoshiijp4wu6
+友達|需要	tomodachi|vm ul4	tomodachivm ul4
+休み|工作	yasumi|ej/ yji4	yasumiej/ yji4
+写真|修改	shashinn|vu. e93	shashinnvu. e93
+ありがとう|完成	arigatou|j06t/6	arigatouj06t/6
+明日|記得	ashita|ru42k6	ashitaru42k6
+生誕|沒問題	seitann|ao6jp4wu6	seitannao6jp4wu6
+生誕|_|notebook	seitann| |notebook	seitann notebook
+わかりました|_|file	wakarimashita| |file	wakarimashita file
+大丈夫|_|commit	daijoubu| |commit	daijoubu commit
+頑張って|_|client	gannbatte| |client	gannbatte client
+仕事|_|report	shigoto| |report	shigoto report
+会議|_|build	kaigi| |build	kaigi build
+学校|_|hello	gakkou| |hello	gakkou hello
+こんにちは|_|check	konnnichiha| |check	konnnichiha check
+寿司|_|good	sushi| |good	sushi good
+です|_|email	desu| |email	desu email
+失礼|review	shitsurei|review	shitsureireview
+美味しい|server	oishii|server	oishiiserver
+電話|config	dennwa|config	dennwaconfig
+時間|merge	jikann|merge	jikannmerge
+電車|search	dennsha|search	dennshasearch
+ございます|update	gozaimasu|update	gozaimasuupdate
+アニメ|bug	anime|bug	animebug
+あります|test	arimasu|test	arimasutest
+お願い|data	onegai|data	onegaidata
+楽しい|deploy	tanoshii|deploy	tanoshiideploy
+測試|_|deploy|_|頑張って	hk4g4| |deploy| |gannbatte	hk4g4 deploy gannbatte
+檔案|_|debug|_|しごと || 檔案_debug_仕事	2;304| |debug| |shigoto	2;304 debug shigoto
+時間|_|push|_|会議	g6ru0 | |push| |kaigi	g6ru0  push kaigi
+確認|_|login|_|学校	fm,4bp4| |login| |gakkou	fm,4bp4 login gakkou
+已經|_|world|_|こんにちは	u3ru/ | |world| |konnnichiha	u3ru/  world konnnichiha
+明天|_|meeting|_|寿司	au/6wu0 | |meeting| |sushi	au/6wu0  meeting sushi
+一下|_|notebook|_|です	u vu84| |notebook| |desu	u vu84 notebook desu
+好吃|_|file|_|失礼	cl3t | |file| |shitsurei	cl3t  file shitsurei
+好|_|commit|_|美味しい	cl3| |commit| |oishii	cl3 commit oishii
+資料|_|client|_|電話	y xul4| |client| |dennwa	y xul4 client dennwa
+可以|report|時間	dk3u3|report|jikann	dk3u3reportjikann
+討論|build|電車	wl3xjp4|build|dennsha	wl3xjp4builddennsha
+上傳|hello|ございます	g;4tj06|hello|gozaimasu	g;4tj06hellogozaimasu
+今天|check|アニメ	rup wu0 |check|anime	rup wu0 checkanime
+這個|good|あります	5k4ek7|good|arimasu	5k4ek7goodarimasu
+見面|email|お願い	ru04au04|email|onegai	ru04au04emailonegai
+開|review|楽しい	d9 |review|tanoshii	d9 reviewtanoshii
+問題|server|友達	jp4wu6|server|tomodachi	jp4wu6servertomodachi
+需要|config|やすみ || 需要config休み	vm ul4|config|yasumi	vm ul4configyasumi
+工作|merge|写真	ej/ yji4|merge|shashinn	ej/ yji4mergeshashinn
+工作|_|会議|_|build	ej/ yji4| |kaigi| |build	ej/ yji4 kaigi build
+修改|_|学校|_|hello	vu. e93| |gakkou| |hello	vu. e93 gakkou hello
+完成|_|こんにちは|_|check	j06t/6| |konnnichiha| |check	j06t/6 konnnichiha check
+記得|_|寿司|_|good	ru42k6| |sushi| |good	ru42k6 sushi good
+沒問題|_|です|_|email	ao6jp4wu6| |desu| |email	ao6jp4wu6 desu email
+買|_|失礼|_|review	a93| |shitsurei| |review	a93 shitsurei review
+測試|_|美味しい|_|server	hk4g4| |oishii| |server	hk4g4 oishii server
+檔案|_|電話|_|config	2;304| |dennwa| |config	2;304 dennwa config
+時間|_|時間|_|merge	g6ru0 | |jikann| |merge	g6ru0  jikann merge
+確認|_|電車|_|search	fm,4bp4| |dennsha| |search	fm,4bp4 dennsha search
+已經|ございます|update	u3ru/ |gozaimasu|update	u3ru/ gozaimasuupdate
+明天|アニメ|bug	au/6wu0 |anime|bug	au/6wu0 animebug
+一下|あります|test	u vu84|arimasu|test	u vu84arimasutest
+好吃|お願い|data	cl3t |onegai|data	cl3t onegaidata
+好|楽しい|deploy	cl3|tanoshii|deploy	cl3tanoshiideploy
+資料|ともだち|debug || 資料友達debug	y xul4|tomodachi|debug	y xul4tomodachidebug
+可以|休み|push	dk3u3|yasumi|push	dk3u3yasumipush
+討論|写真|login	wl3xjp4|shashinn|login	wl3xjp4shashinnlogin
+上傳|ありがとう|world	g;4tj06|arigatou|world	g;4tj06arigatouworld
+今天|明日|meeting	rup wu0 |ashita|meeting	rup wu0 ashitameeting
+update|_|明天|_|アニメ	update| |au/6wu0 | |anime	update au/6wu0  anime
+bug|_|一下|_|あります	bug| |u vu84| |arimasu	bug u vu84 arimasu
+test|_|好吃|_|お願い	test| |cl3t | |onegai	test cl3t  onegai
+data|_|好|_|楽しい	data| |cl3| |tanoshii	data cl3 tanoshii
+deploy|_|資料|_|友達	deploy| |y xul4| |tomodachi	deploy y xul4 tomodachi
+debug|_|可以|_|やすみ || debug_可以_休み	debug| |dk3u3| |yasumi	debug dk3u3 yasumi
+push|_|討論|_|写真	push| |wl3xjp4| |shashinn	push wl3xjp4 shashinn
+login|_|上傳|_|ありがとう	login| |g;4tj06| |arigatou	login g;4tj06 arigatou
+world|_|今天|_|明日	world| |rup wu0 | |ashita	world rup wu0  ashita
+meeting|_|這個|_|生誕	meeting| |5k4ek7| |seitann	meeting 5k4ek7 seitann
+notebook|見面|わかりました	notebook|ru04au04|wakarimashita	notebookru04au04wakarimashita
+file|開|大丈夫	file|d9 |daijoubu	filed9 daijoubu
+commit|問題|頑張って	commit|jp4wu6|gannbatte	commitjp4wu6gannbatte
+client|需要|仕事	client|vm ul4|shigoto	clientvm ul4shigoto
+report|工作|会議	report|ej/ yji4|kaigi	reportej/ yji4kaigi
+build|修改|学校	build|vu. e93|gakkou	buildvu. e93gakkou
+hello|完成|こんにちは	hello|j06t/6|konnnichiha	helloj06t/6konnnichiha
+check|記得|寿司	check|ru42k6|sushi	checkru42k6sushi
+good|沒問題|です	good|ao6jp4wu6|desu	goodao6jp4wu6desu
+email|買|失礼	email|a93|shitsurei	emaila93shitsurei
+email|_|お願い|_|開	email| |onegai| |d9 	email onegai d9 
+review|_|楽しい|_|問題	review| |tanoshii| |jp4wu6	review tanoshii jp4wu6
+server|_|友達|_|需要	server| |tomodachi| |vm ul4	server tomodachi vm ul4
+config|_|やすみ|_|工作 || config_休み_工作	config| |yasumi| |ej/ yji4	config yasumi ej/ yji4
+merge|_|写真|_|修改	merge| |shashinn| |vu. e93	merge shashinn vu. e93
+search|_|ありがとう|_|完成	search| |arigatou| |j06t/6	search arigatou j06t/6
+update|_|明日|_|記得	update| |ashita| |ru42k6	update ashita ru42k6
+bug|_|生誕|_|沒問題	bug| |seitann| |ao6jp4wu6	bug seitann ao6jp4wu6
+test|_|わかりました|_|買	test| |wakarimashita| |a93	test wakarimashita a93
+data|_|大丈夫|_|測試	data| |daijoubu| |hk4g4	data daijoubu hk4g4
+deploy|頑張って|檔案	deploy|gannbatte|2;304	deploygannbatte2;304
+debug|しごと|時間 || debug仕事時間	debug|shigoto|g6ru0 	debugshigotog6ru0 
+push|会議|確認	push|kaigi|fm,4bp4	pushkaigifm,4bp4
+login|学校|已經	login|gakkou|u3ru/ 	logingakkouu3ru/ 
+world|こんにちは|明天	world|konnnichiha|au/6wu0 	worldkonnnichihaau/6wu0 
+meeting|寿司|一下	meeting|sushi|u vu84	meetingsushiu vu84
+notebook|です|好吃	notebook|desu|cl3t 	notebookdesucl3t 
+file|失礼|好	file|shitsurei|cl3	fileshitsureicl3
+commit|美味しい|資料	commit|oishii|y xul4	commitoishiiy xul4
+client|電話|可以	client|dennwa|dk3u3	clientdennwadk3u3
+友達|_|需要|_|config	tomodachi| |vm ul4| |config	tomodachi vm ul4 config
+休み|_|工作|_|merge	yasumi| |ej/ yji4| |merge	yasumi ej/ yji4 merge
+写真|_|修改|_|search	shashinn| |vu. e93| |search	shashinn vu. e93 search
+ありがとう|_|完成|_|update	arigatou| |j06t/6| |update	arigatou j06t/6 update
+明日|_|記得|_|bug	ashita| |ru42k6| |bug	ashita ru42k6 bug
+生誕|_|沒問題|_|test	seitann| |ao6jp4wu6| |test	seitann ao6jp4wu6 test
+わかりました|_|買|_|data	wakarimashita| |a93| |data	wakarimashita a93 data
+大丈夫|_|測試|_|deploy	daijoubu| |hk4g4| |deploy	daijoubu hk4g4 deploy
+がんばって|_|檔案|_|debug || 頑張って_檔案_debug	gannbatte| |2;304| |debug	gannbatte 2;304 debug
+仕事|_|時間|_|_|push	shigoto| |g6ru0 | | |push	shigoto g6ru0   push
+会議|確認|login	kaigi|fm,4bp4|login	kaigifm,4bp4login
+学校|已經|world	gakkou|u3ru/ |world	gakkouu3ru/ world
+こんにちは|明天|meeting	konnnichiha|au/6wu0 |meeting	konnnichihaau/6wu0 meeting
+寿司|一下|notebook	sushi|u vu84|notebook	sushiu vu84notebook
+です|好吃|file	desu|cl3t |file	desucl3t file
+失礼|好|commit	shitsurei|cl3|commit	shitsureicl3commit
+美味しい|資料|client	oishii|y xul4|client	oishiiy xul4client
+電話|可以|report	dennwa|dk3u3|report	dennwadk3u3report
+時間|討論|build	jikann|wl3xjp4|build	jikannwl3xjp4build
+電車|上傳|hello	dennsha|g;4tj06|hello	dennshag;4tj06hello
+電車|_|search|_|已經	dennsha| |search| |u3ru/ 	dennsha search u3ru/ 
+ございます|_|update|_|明天	gozaimasu| |update| |au/6wu0 	gozaimasu update au/6wu0 
+アニメ|_|bug|_|一下	anime| |bug| |u vu84	anime bug u vu84
+あります|_|test|_|好吃	arimasu| |test| |cl3t 	arimasu test cl3t 
+お願い|_|data|_|好	onegai| |data| |cl3	onegai data cl3
+楽しい|_|deploy|_|資料	tanoshii| |deploy| |y xul4	tanoshii deploy y xul4
+ともだち|_|debug|_|可以 || 友達_debug_可以	tomodachi| |debug| |dk3u3	tomodachi debug dk3u3
+休み|_|push|_|討論	yasumi| |push| |wl3xjp4	yasumi push wl3xjp4
+写真|_|login|_|上傳	shashinn| |login| |g;4tj06	shashinn login g;4tj06
+ありがとう|_|world|_|今天	arigatou| |world| |rup wu0 	arigatou world rup wu0 
+明日|meeting|這個	ashita|meeting|5k4ek7	ashitameeting5k4ek7
+生誕|notebook|見面	seitann|notebook|ru04au04	seitannnotebookru04au04
+わかりました|file|開	wakarimashita|file|d9 	wakarimashitafiled9 
+大丈夫|commit|問題	daijoubu|commit|jp4wu6	daijoubucommitjp4wu6
+頑張って|client|需要	gannbatte|client|vm ul4	gannbatteclientvm ul4
+仕事|report|工作	shigoto|report|ej/ yji4	shigotoreportej/ yji4
+会議|build|修改	kaigi|build|vu. e93	kaigibuildvu. e93
+学校|hello|完成	gakkou|hello|j06t/6	gakkouhelloj06t/6
+こんにちは|check|記得	konnnichiha|check|ru42k6	konnnichihacheckru42k6
+寿司|good|沒問題	sushi|good|ao6jp4wu6	sushigoodao6jp4wu6
+# ---- 外來語 f 系列（2026-08-28 補）----
+# 規格表的「外來語」原本只列 v，補上 f 之後才有 ふぁ ふぃ ふ ふぇ ふぉ ふゅ。
+# fujisan（富士山）、fairu（ファイル）這類詞會用到。
+富士山	fujisann	fujisann
+ファイル	fairu	fairu
+ソフト	sofuto	sofuto
+フィルム	firumu	firumu
+フォーク	fo-ku	fo-ku
+ふゅーじょん	fyu-jonn	fyu-jonn
+ファン	fann	fann
+コーヒー	ko-hi-	ko-hi-
+富士山|_|photo	fujisann| |photo	fujisann photo
+ソフト|_|update	sofuto| |update	sofuto update
+ファイル|save	fairu|save	fairusave
+ファン|_|好	fann| |cl3	fann cl3
+買|_|ソフト	a93| |sofuto	a93 sofuto
+富士山|_|photo|_|好	fujisann| |photo| |cl3	fujisann photo cl3
+
+
+## daily ｜ 主測：切點 ｜ 來源：人工
+# 混合語言測資（第一組）：日常對話混英文
+#
+# 【重要】這份資料是人工寫的，**不從詞庫抽樣**。
+#
+# 從詞庫抽詞來測詞庫等於拿考題當答案——抽到的必然都是引擎查得到的
+# 東西，測不出真實使用的樣子。真實輸入會有詞庫沒收的組合、專有名詞、
+# 口語說法，那些才是會出問題的地方。
+#
+# 注音按鍵序列**不是手敲的**：用 `mkkeys` 工具從 BPMFMappings 的注音
+# 自動產生，並當場驗證「這串按鍵打得出這個詞、而且排第一」。之前的
+# 100 組測資就是因為手敲注音而毀掉（多音字判讀錯誤），不重蹈覆轍。
+#
+#
+#
+# ---- 空格分隔：英文在前 ----
+check|_|一下	check| |u vu84	check u vu84
+push|_|上去	push| |g;4fm4	push g;4fm4
+review|_|文件	review| |jp6ru04	review jp6ru04
+update|_|進度	update| |rup42j4	update rup42j4
+meeting|_|時間	meeting| |g6ru0 	meeting g6ru0 
+deadline|_|前|_|確認	deadline| |fu06| |fm,4bp4	deadline fu06 fm,4bp4
+# ---- 空格分隔：中文在前 ----
+記得|_|update	ru42k6| |update	ru42k6 update
+麻煩|_|review	a86z06| |review	a86z06 review
+需要|_|debug	vm ul4| |debug	vm ul4 debug
+已經|_|完成|_|test	u3ru/ | |j06t/6| |test	u3ru/  j06t/6 test
+明天|_|meeting|_|討論	au/6wu0 | |meeting| |wl3xjp4	au/6wu0  meeting wl3xjp4
+現在|_|可以|_|merge	vu04y94| |dk3u3| |merge	vu04y94 dk3u3 merge
+# ---- 中英中夾心 ----
+這個|_|bug|_|很好	5k4ek7| |bug| |cp3cl3	5k4ek7 bug cp3cl3
+先|_|check|_|沒問題	vu0 | |check| |ao6jp4wu6	vu0  check ao6jp4wu6
+把|_|feature|_|做完	183| |feature| |yji4j06	183 feature yji4j06
+# ---- 沒有空格：英文緊接注音 ----
+ok|沒問題	ok|ao6jp4wu6	okao6jp4wu6
+hi|今天	hi|rup wu0 	hirup wu0 
+bye|明天	bye|au/6wu0 	byeau/6wu0 
+# ---- 純注音（不該被誤切）----
+今天天氣不錯	rup wu0 wu0 fu41j6hji4	rup wu0 wu0 fu41j6hji4
+早上好好休息	yl3g;4cl3cl3vu. vu6	yl3g;4cl3cl3vu. vu6
+對不起麻煩你了	2jo41j4fu3a86z06su3xk7	2jo41j4fu3a86z06su3xk7
+# ---- 純英文（不該被誤切）----
+hello	hello	hello
+computer	computer	computer
+keyboard	keyboard	keyboard
+
+
+#
+# ---- 2026-09-07 補 26 筆：同型的工作場景 ----
+明天|_|call|_|客戶	au/6wu0 | |call| |dk4cj4	au/6wu0  call dk4cj4
+mail|_|寄出去了	mail| |ru4tj fm4xk7	mail ru4tj fm4xk7
+記得|_|backup	ru42k6| |backup	ru42k6 backup
+print|_|兩份	print| |xu;3zp4	print xu;3zp4
+先|_|test|_|一下	vu0 | |test| |u vu84	vu0  test u vu84
+save|_|檔案	save| |2;304	save 2;304
+幫我|_|book|_|會議室	1; ji3| |book| |cjo4u4g4	1; ji3 book cjo4u4g4
+cancel|_|訂單	cancel| |2u/420 	cancel 2u/420 
+下週|_|demo	vu845. | |demo	vu845.  demo
+upload|_|報告	upload| |1l4el4	upload 1l4el4
+等|_|reply	2/3| |reply	2/3 reply
+share|_|連結	share| |xu06ru,6	share xu06ru,6
+改成|_|draft	e93t/6| |draft	e93t/6 draft
+submit|_|表單	submit| |1ul320 	submit 1ul320 
+附上|_|invoice	zj4g;4| |invoice	zj4g;4 invoice
+merge|_|分支	merge| |zp 5 	merge zp 5 
+整理|_|notes	5/3xu3| |notes	5/3xu3 notes
+export|_|名單	export| |au/620 	export au/620 
+確認|_|budget	fm,4bp4| |budget	fm,4bp4 budget
+track|_|進度	track| |rup42j4	track rup42j4
+安排|_|interview	0 q96| |interview	0 q96 interview
+archive|_|舊資料	archive| |ru.4y xul4	archive ru.4y xul4
+通知|_|team	wj/ 5 | |team	wj/ 5  team
+draft|_|合約	draft| |ck6m, 	draft ck6m, 
+補上|_|comment	1j3g;4| |comment	1j3g;4 comment
+今晚|_|deploy	rup j03| |deploy	rup j03 deploy
+## otaku ｜ 主測：切點 ｜ 來源：人工
+# 混合語言測資（第二組）：ACG／日本旅遊話題，中日英三語混合
+#
+# 【重要】同第一組，這份資料是人工寫的，**不從詞庫抽樣**。
+#
+# 為什麼要有這一組：第一組全是「中文＋英文」，日文引擎完全沒被測到。
+# 但本專案的核心賣點正是三語言同時處理，只測兩語言等於漏掉三分之一。
+#
+# 這一組的日文是**羅馬字輸入**（anime → アニメ），不是日文漢字。
+# 引擎要能在同一句裡分辨「這段是日文羅馬字」與「這段是英文」——
+# 兩者都是純字母、沒有聲調鍵，是最難分的一組。
+#
+# 注音按鍵同樣用 `mkkeys` 產生並驗證過。
+#
+#
+#
+# ---- 中文 + 日文羅馬字 ----
+這部|_|anime|_|好看 || 這部|_|アニメ|_|好看	5k41j4| |anime| |cl3d04	5k41j4 anime cl3d04
+最新|_|一集	yjo4vup | |u4ru6	yjo4vup  u4ru6
+日本|_|旅行	b41p3| |xm3vu/6	b41p3 xm3vu/6
+東京|_|好玩	2j/ ru/ | |cl3j06	2j/ ru/  cl3j06
+推薦|_|這個|_|遊戲	wjo ru04| |5k4ek7| |u.6vu4	wjo ru04 5k4ek7 u.6vu4
+聲優|_|很好	g/ u. | |cp3cl3	g/ u.  cp3cl3
+主題|_|歌曲|_|好聽	5j3wu6| |ek fm3| |cl3wu/ 	5j3wu6 ek fm3 cl3wu/ 
+原作|_|小說	m06yji4| |vul3gji 	m06yji4 vul3gji 
+改編動畫	e931u0 2j/4cj84	e931u0 2j/4cj84
+# ---- 日文羅馬字（純日文段，不該被誤判成英文）----
+sushi || 寿司	sushi	sushi
+ramen	ramen	ramen
+sakura || 桜	sakura	sakura
+tsunami || 津波	tsunami	tsunami
+karaoke || カラオケ	karaoke	karaoke
+konnichiwa	konnichiwa	konnichiwa
+arigatou || ありがとう	arigatou	arigatou
+# ---- 英文（不該被誤判成日文）----
+computer	computer	computer
+password	password	password
+download	download	download
+# ---- 三語混一句 ----
+~明天|_|去|_|東京|_|看|_|anime || ~明天|_|去|_|東京|_|看|_|アニメ	au/6wu0 | |fm4| |2j/ ru/ | |d04| |anime	au/6wu0  fm4 2j/ ru/  d04 anime
+~這個|_|game|_|的|_|音樂	5k4ek7| |game| |2k7| |up m,4	5k4ek7 game 2k7 up m,4
+~日本|_|的|_|ramen|_|好吃	b41p3| |2k7| |ramen| |cl3t 	b41p3 2k7 ramen cl3t 
+# ---- 純注音（不該被誤切）----
+動畫漫畫遊戲	2j/4cj84a04cj84u.6vu4	2j/4cj84a04cj84u.6vu4
+~日本東京旅行	b41p32j/ ru/ xm3vu/6	b41p32j/ ru/ xm3vu/6
+
+
+#
+# ---- 2026-09-07 補 26 筆：ACG 場景，中日英三語 ----
+# 14/26 過。三語混合本來就是最難的一類，數字誠實記著。
+漫画|_|很好看	mannga| |cp3cl3d0 	mannga cp3cl3d0 
+声優|_|是誰	seiyuu| |g4go6	seiyuu g4go6
+這部|_|アニメ	5o41j4| |anime	5o41j4 anime
+主題歌|_|超好聽	shudaika| |tl cl3wu/ 	shudaika tl cl3wu/ 
+去|_|秋葉原	fm4| |akihabara	fm4 akihabara
+同人誌|_|買了三本	douzinnsi| |a93xk7n0 1p3	douzinnsi a93xk7n0 1p3
+等|_|新刊	2/3| |sinnkann	2/3 sinnkann
+限定版|_|賣完了	gennteibann| |a94j06xk7	gennteibann a94j06xk7
+排|_|整理券	q96| |seirikenn	q96 seirikenn
+握手会|_|要抽選	akushukai| |ul t. vm03	akushukai ul t. vm03
+看|_|配信	d0 | |haisinn	d0  haisinn
+字幕|_|出來了	zimaku| |tj x94xk7	zimaku tj x94xk7
+追|_|連載	5jo | |rennsai	5jo  rennsai
+単行本|_|下個月	tannkouhonn| |vu84ek4m,4	tannkouhonn vu84ek4m,4
+玩|_|乙女ゲーム	j04| |otomege-mu	j04 otomege-mu
+実況|_|好笑	zikkyou| |cl3vul4	zikkyou cl3vul4
+發售|_|記念	z8 g.4| |kinenn	z8 g.4 kinenn
+特典|_|很讚	tokutenn| |cp3y04	tokutenn cp3y04
+去|_|聖地巡礼	fm4| |seitijunnrei	fm4 seitijunnrei
+応援|_|上映	ouenn| |g;4u/4	ouenn g;4u/4
+抽到|_|推し	t. 2l4| |osi	t. 2l4 osi
+円盤|_|預購了	ennbann| |m4e.4xk7	ennbann m4e.4xk7
+找|_|資料集	5l3| |siryoushuu	5l3 siryoushuu
+設定|_|很詳細	settei| |cp3vu;6vu4	settei cp3vu;6vu4
+買|_|痛車|_|貼紙	a93| |itasha| |wu, 53	a93 itasha wu, 53
+同人|_|shop	douzinn| |shop	douzinn shop
+## trilingual ｜ 主測：合法性 ｜ 來源：使用者實測＋人工
+# 混合語言測資（第四組）：真實的三語混雜句
+#
+# 使用者實測時貼的十個句子，中英日交錯出現在同一句裡。
+# 這組不測「切得對不對」（那是 mixed_* 那三組的職責），測的是
+# **每一段都要有合法解讀**——依核心原則，引擎可以猜錯排序，但不能
+# 給不出東西、也不能吐出不合法的組合。
+#
+#
+#
+# 句1：今天的 meeting 真的很 boring
+今天|_|meeting|_|真的	rup wu0 | |meeting| |5p 2k7	rup wu0  meeting 5p 2k7
+boring	boring	boring
+# 句2：supermarket 買了牛奶
+supermarket	supermarket	supermarket
+牛奶	su.6s93	su.6s93
+# 句3：project 的 deadline 是明天
+project|_|deadline	project| |deadline	project deadline
+明天	au/6wu0 	au/6wu0 
+# 句4：餐廳的 food 真的很 amazing
+餐廳|_|food	h0 wu/ | |food	h0 wu/  food
+amazing	amazing	amazing
+# 句5：日文詞（ずっと / どうしよう / 頑張って）
+zutto || ずっと	zutto	zutto
+doushiyou || どうしよう	doushiyou	doushiyou
+gannbatte || 頑張って	gannbatte	gannbatte
+# 句6：itinerary / hotel / flight
+itinerary	itinerary	itinerary
+hotel|_|flight	hotel| |flight	hotel flight
+# 句7：天氣很好 + 日文 散歩
+天氣	wu0 fu4	wu0 fu4
+sannpo || 散歩	sannpo	sannpo
+# 句8：design / improve
+design|_|improve	design| |improve	design improve
+# 句9：期末考 + 複習
+期末考	fu6ai4dl3	fu6ai4dl3
+# 句10：中文 + switch
+中文|_|switch	5j/ jp6| |switch	5j/ jp6 switch
+# ---- 標點符號 ----
+# 標點跟注音是**同一個按鍵的兩種身分**（`,`=ㄝ、`.`=ㄡ），
+# 全形/半形看前一段是什麼語言。日文逗號是讀點「、」不是「，」。
+# 句11：中文 + 中文全形逗號
+你好|，	su3cl3|,	su3cl3,
+# 句12：英文 + 半形逗號
+hello|,	hello|,	hello,
+# 句13：日文 + 讀點
+頑張って|、	gannbatte|,	gannbatte,
+# 句14：中文 + 句號
+你好|。	su3cl3|.	su3cl3.
+# 句15：英文 + 半形句號
+hello|.	hello|.	hello.
+# 句16：中英混合，逗號**前面是英文**→ 半形
+你好|hello|，	su3cl3|hello|,	su3cl3hello,
+# 句17：連續標點要沿用同一種寫法（不能半全形混用）
+hello|.|.|.	hello|.|.|.	hello...
+# 句18：中文連續句號
+你好|… || 你好|。|。|。	su3cl3|.|.|.	su3cl3...
+# 句19：跨標點斷詞——hi 在沒標點時會跟後面黏成 hirup
+hi|,|今天	hi|,|rup wu0 	hi,rup wu0 
+# 句20：同理 go，標點天然就是邊界
+go|,|好	go|,|cl3	go,cl3
+# 句21：email（@ 沒有任何引擎能消化，要原樣輸出）
+a|@|b|.|com	a|@|b|.|com	a@b.com
+# 句22：中文 + 未知符號
+你好|@	su3cl3|@	su3cl3@
+
+
+#
+# ---- 2026-09-07 補 20 筆：工作場景的三語交錯 ----
+今天|_|standup|_|遅刻	rup wu0 | |standup| |tikoku	rup wu0  standup tikoku
+sprint|_|結束|_|お疲れ	sprint| |ru,6gj4| |otukare	sprint ru,6gj4 otukare
+資料|_|review|_|完成	siryou| |review| |j06t/6	siryou review j06t/6
+release|_|予定|_|延後	release| |yotei| |u06c.4	release yotei u06c.4
+会議|_|改到|_|friday	kaigi| |e932l4| |friday	kaigi e932l4 friday
+先|_|merge|_|確認	vu0 | |merge| |kakuninn	vu0  merge kakuninn
+test|_|環境|_|壞了	test| |kannkyou| |cj94xk7	test kannkyou cj94xk7
+午後|_|demo|_|準備	gogo| |demo| |5jp31o4	gogo demo 5jp31o4
+記得|_|push|_|今日中	ru42k6| |push| |kyoujuu	ru42k6 push kyoujuu
+server|_|再起動|_|一下	server| |saikidou| |u vu84	server saikidou u vu84
+新機能|_|上線|_|today	sinnkinou| |g;4vu04| |today	sinnkinou g;4vu04 today
+幫忙|_|check|_|設定	1; a;6| |check| |settei	1; a;6 check settei
+config|_|変更|_|好了	config| |hennkou| |cl3xk7	config hennkou cl3xk7
+締切|_|是|_|monday	simeki| |g4| |monday	simeki g4 monday
+那份|_|report|_|提出	s84zp4| |report| |teishutu	s84zp4 report teishutu
+client|_|連絡|_|了嗎	client| |rennraku| |xk7a8 	client rennraku xk7a8 
+予算|_|approve|_|通過	yosann| |approve| |wj/ eji4	yosann approve wj/ eji4
+剛剛|_|deploy|_|成功	e; e; | |deploy| |seikou	e; e;  deploy seikou
+log|_|確認|_|沒問題	log| |kakuninn| |ao6jp4wu6	log kakuninn ao6jp4wu6
+明天|_|review|_|資料	au/6wu0 | |review| |siryou	au/6wu0  review siryou
+## holdout ｜ 主測：泛化 ｜ 來源：人工，保留集（寫時不看引擎）
+# 混合語言測資（第三組）：保留驗證集（hold-out set）
+#
+# 【這一組的用途跟前兩組不同】
+#
+# 前兩組是「開發集」——我看著它們的失敗案例一路調規則，所以它們
+# 最後 100% 是必然的，**那個數字不能拿來證明規則有效**（等於拿考題
+# 當練習題，就是先前評分標準犯過的循環論證）。
+#
+# 這一組是**規則全部調完之後才寫的**，寫的時候不看引擎輸出，只憑
+# 「真實使用者會這樣打」來造句。它的分數才反映規則對沒見過的輸入
+# 有沒有效。
+#
+# 刻意包含前兩組沒有的情境：
+#   - 英文夾在句子中間（不是開頭或結尾）
+#   - 連續兩個英文詞
+#   - 大寫英文
+#   - 含數字的段落
+#
+# 注音按鍵一樣用 `mkkeys` 產生並驗證過。
+# ---- 英文在句子中間 ----
+資料|_|send|_|你	y xul4| |send| |su3	y xul4 send su3
+明天記得|bring|_|傘	au/6wu0 ru42k6|bring| |n03	au/6wu0 ru42k6bring n03
+影片|see|_|沒有	u/3qu04|see| |ao6u.3	u/3qu04see ao6u.3
+帳號|_|forget|密碼	5;4cl4| |forget|au4a83	5;4cl4 forgetau4a83
+# ---- 連續兩個英文詞 ----
+先|_|copy|_|paste	vu0 | |copy| |paste	vu0  copy paste
+用|_|git|_|push	m/4| |git| |push	m/4 git push
+開|_|new|_|tab	d9 | |new| |tab	d9  new tab
+# ---- 大寫英文 ----
+用|API|串接	m/4|API|tj04ru, 	m/4APItj04ru, 
+看|README	d04|README	d04README
+# ---- 含數字 ----
+# 原本有「下午 3 點」「第 3 版」，但這兩筆**測資本身是錯的**：
+下午|3|點	vu84j3|3|2u03	vu84j332u03
+第|3|_|版	2u4|3| |103	2u43 103
+# ---- 英文緊接注音----
+ok|走走	ok|y.3y.3	oky.3y.3
+no|問題	no|jp4wu6	nojp4wu6
+go|出去	go|tj fm4	gotj fm4
+# ---- 純英文（不該被切）----
+notebook	notebook	notebook
+javascript	javascript	javascript
+background	background	background
+performance	performance	performance
+# ---- 純注音（不該被切）----
+網路有點慢	j;3xj4u.32u03a04	j;3xj4u.32u03a04
+手機沒電了	g.3ru ao62u04xk7	g.3ru ao62u04xk7
+電腦當機了	2u04sl32;4ru xk7	2u04sl32;4ru xk7
+~咖啡好喝	d8 zo cl3ck 	d8 zo cl3ck 
+# ---- 純日文羅馬字（不該被切）----
+oyasumi || お休み	oyasumi	oyasumi
+itadakimasu || いただきます	itadakimasu	itadakimasu
+omoshiroi || 面白い	omoshiroi	omoshiroi
+
+
+#
+# ---- 2026-09-07 補 75 筆 ----
+# **全部收下，一筆都沒有篩選**——保留集的規矩是寫的時候不看引擎輸出，
+# 用 mkkeys 的 --tsv 篩掉打不出來的就等於偷看，那會讓這節失去意義。
+# 造句時只憑「真實使用者會這樣打」，寫完直接產鍵、直接收進來。
+剛剛|_|client|_|打來	e; e; | |client| |283x96	e; e;  client 283x96
+vpn|_|連不上	vpn| |xu061j6g;4	vpn xu061j6g;4
+麻煩|_|forward|_|給我	a86z06| |forward| |eo3ji3	a86z06 forward eo3ji3
+電車|_|誤點|了	dennsha| |j42u03|xk7	dennsha j42u03xk7
+api|_|回傳|錯誤	api| |cjo65j04|hji4j4	api cjo65j04hji4j4
+週報|_|template|_|在哪	5. 1l4| |template| |y94s83	5. 1l4 template y94s83
+excel|_|打不開	excel| |2831j4d9 	excel 2831j4d9 
+這台|_|printer|_|壞了	5o4w96| |printer| |cj94xk7	5o4w96 printer cj94xk7
+定期|_|要|續約	teiki| |ul |vm4m, 	teiki ul vm4m, 
+zoom|_|連結|_|過期	zoom| |xu06ru,6| |eji4fu6	zoom xu06ru,6 eji4fu6
+幫我|_|forward|_|資料	1; ji3| |forward| |siryou	1; ji3 forward siryou
+wifi|_|很慢	wifi| |cp3a04	wifi cp3a04
+那個|_|folder|_|找不到	s84ek7| |folder| |5l31j62l4	s84ek7 folder 5l31j62l4
+切符|_|買好了	kippu| |a93cl3xk7	kippu a93cl3xk7
+token|_|要更新	token| |ul e/ vup 	token ul e/ vup 
+昨天|_|backup|_|失敗	yji6wu0 | |backup| |g 194	yji6wu0  backup g 194
+cache|_|清一下	cache| |fu/ u vu84	cache fu/ u vu84
+記得|_|logout	ru42k6| |logout	ru42k6 logout
+予約|_|取消|了	yoyaku| |fm3vul |xk7	yoyaku fm3vul xk7
+branch|_|合併完成	branch| |ck61u/4j06t/6	branch ck61u/4j06t/6
+今天|_|standup|_|取消	rup wu0 | |standup| |fm3vul 	rup wu0  standup fm3vul 
+docker|_|起不來	docker| |fu31j4x96	docker fu31j4x96
+那份|_|pdf|_|太大	s84zp4| |pdf| |w94284	s84zp4 pdf w94284
+書類|_|交出去了	shorui| |rul tj fm4xk7	shorui rul tj fm4xk7
+build|_|掛掉了	build| |ej842ul4xk7	build ej842ul4xk7
+密碼|_|reset|_|一下	au4a83| |reset| |u vu84	au4a83 reset u vu84
+port|_|被|佔用	port| |1o4|504m/4	port 1o4504m/4
+這個|_|endpoint|_|沒回應	5k4ek7| |endpoint| |ai4cjo6u/ 	5k4ek7 endpoint ai4cjo6u/ 
+郵便|_|寄到了	yuubinn| |ru42l4xk7	yuubinn ru42l4xk7
+webhook|_|沒觸發	webhook| |ai4tj4z8 	webhook ai4tj4z8 
+剩下|_|test|_|還沒跑	g/4vu84| |test| |c96ai4ql3	g/4vu84 test c96ai4ql3
+proxy|_|設定|好了	proxy| |gk42u/4|cl3xk7	proxy gk42u/4cl3xk7
+那個|_|script|_|要改	s84ek7| |script| |ul e93	s84ek7 script ul e93
+請求書|_|寄過去	seikyuusho| |ru4eji4fm4	seikyuusho ru4eji4fm4
+queue|_|塞住了	queue| |n9 5j4xk7	queue n9 5j4xk7
+記得|_|commit|_|訊息	ru42k6| |commit| |vmp4vu6	ru42k6 commit vmp4vu6
+staging|_|環境|_|好了	staging| |cj06ru/4| |cl3xk7	staging cj06ru/4 cl3xk7
+這個|_|package|_|太舊	5k4ek7| |package| |w94ru.4	5k4ek7 package w94ru.4
+担当|_|換人|了	tanntou| |cj04bp6|xk7	tanntou cj04bp6xk7
+memory|_|不太夠	memory| |1j4w94e.4	memory 1j4w94e.4
+請|_|review|_|一下	fu/3| |review| |u vu84	fu/3 review u vu84
+https|_|憑證|_|過期	https| |qu/65/4| |eji4fu6	https qu/65/4 eji4fu6
+今晚|_|release	rup j03| |release	rup j03 release
+面接|_|安排|好了	mennsetu| |0 q96|cl3xk7	mennsetu 0 q96cl3xk7
+log|_|太多了	log| |w942ji xk7	log w942ji xk7
+那個|_|link|_|失效	s84ek7| |link| |g vul4	s84ek7 link g vul4
+mobile|_|版本|_|有問題	mobile| |1031p3| |u.3jp4wu6	mobile 1031p3 u.3jp4wu6
+幫忙|_|debug|_|一下	1; a;6| |debug| |u vu84	1; a;6 debug u vu84
+報告書|_|寫完了	houkokusho| |vu,3j06xk7	houkokusho vu,3j06xk7
+database|_|備份|好了	database| |1o4zp4|cl3xk7	database 1o4zp4cl3xk7
+那個|_|feature|_|先|關掉	s84ek7| |feature| |vu0 |ej0 2ul4	s84ek7 feature vu0 ej0 2ul4
+cronjob|_|沒跑	cronjob| |ai4ql3	cronjob ai4ql3
+這個|_|query|_|很慢	5k4ek7| |query| |cp3a04	5k4ek7 query cp3a04
+見積|_|出來了	mitumo| |tj x94xk7	mitumo tj x94xk7
+redis|_|重啟一下	redis| |tj/6fu3u vu84	redis tj/6fu3u vu84
+麻煩|_|approve	a86z06| |approve	a86z06 approve
+sso|_|登入失敗	sso| |2/ bj4g 194	sso 2/ bj4g 194
+那台|_|server|_|重開	s84w96| |server| |5j/4d9 	s84w96 server 5j/4d9 
+契約|_|延長一年	keiyaku| |u06t;6u su06	keiyaku u06t;6u su06
+ssl|_|要更新	ssl| |ul e/ vup 	ssl ul e/ vup 
+今天|_|oncall|_|是誰	rup wu0 | |oncall| |g4go6	rup wu0  oncall g4go6
+alert|_|一直響	alert| |u 56vu;3	alert u 56vu;3
+這個|_|metric|_|不對	5k4ek7| |metric| |1j62jo4	5k4ek7 metric 1j62jo4
+出張|_|下週	shucchou| |vu845. 	shucchou vu845. 
+dashboard|_|掛了	dashboard| |ej84xk7	dashboard ej84xk7
+那個|_|job|_|失敗	s84ek7| |job| |g 194	s84ek7 job g 194
+pipeline|_|過了	pipeline| |eji4xk7	pipeline eji4xk7
+幫我|_|invite|_|他	1; ji3| |invite| |w8 	1; ji3 invite w8 
+社内|_|公告|_|出了	shanai| |ej/ el4| |tj xk7	shanai ej/ el4 tj xk7
+license|_|到期	license| |2l4fu6	license 2l4fu6
+這份|_|doc|_|要更新	5o4zp4| |doc| |ul e/ vup 	5o4zp4 doc ul e/ vup 
+sandbox|_|可以用了	sandbox| |dk3u3m/4xk7	sandbox dk3u3m/4xk7
+休憩|_|十分鐘	kyuukei| |g6zp 5j/ 	kyuukei g6zp 5j/ 
+runbook|_|在哪	runbook| |y94s83	runbook y94s83
+那個|_|release|_|延期	s84ek7| |release| |u06fu6	s84ek7 release u06fu6
+## ja_en ｜ 主測：切點 ｜ 來源：使用者實測＋人工
+# 混合語言測資（第五組）：日文緊接英文，中間沒有空白
+#
+# 使用者實測時提出的案例。這組的共同結構是**日文詞直接黏著英文詞**，
+# 中間沒有任何分隔線索——不像中文有聲調鍵、英文詞之間有空白。
+#
+# 這是目前已知最難的一類，多數案例現在是**過不了的**。
+# 測資保留失敗案例是刻意的：測資反映真實需求，不是反映目前的能力。
+# 把做不到的案例排除在外，數字會好看，但下次改動時無從得知有沒有
+# 修好、或有沒有弄得更糟。
+#
+# 為什麼難：日文引擎對整串永遠給得出「純假名兜底」的答案
+# （`seitannlive` → `せいたんぃヴェ`），那條路徑只有一段、不必付
+# 跨語言分段懲罰；而正解 `生誕|live` 要付一次懲罰。當日文詞本身
+# 信心度不高時（生誕 0.364），懲罰會蓋過證據。
+#
+# 曾嘗試「日文接英文時減輕分段懲罰」，實測修好 2 個、弄壞 1 個，
+# 而弄壞的是 `hi|今天` → `昼|p |天`——使用者打的鍵消失了，
+# 那是比排序更嚴重的等級。詳見開發文件 §4.43。
+#
+#
+#
+# 日文詞 + 英文詞，無分隔
+生誕|live	seitann|live	seitannlive
+明日|meeting	ashita|meeting	ashitameeting
+今日|test	kyou|test	kyoutest
+一緒に|lunch	issyoni|lunch	issyonilunch
+寿司|buffet	sushi|buffet	sushibuffet
+# 對照組：這些現在是對的，不能被弄壞
+debug	debug	debug
+javascript	javascript	javascript
+localhost	localhost	localhost
+hi|今天	hi|rup wu0 	hirup wu0 
+
+#
+# ---- 2026-09-07 補 41 筆：同型的「日文詞黏英文詞」 ----
+# 原本只有 9 筆。這批 39/41 直接就過——比檔頭寫的「多數過不了」好很多，
+# 是後來的改動修好的（分區、假名碎片、bigram）。留著誠實的數字。
+# 沒過的兩筆（写真app → 者shinapp）正是難的那類：日文詞信心度不高時，
+# 純假名兜底那條路不必付跨語言分段懲罰，會蓋過正解。
+
+会議|room	kaigi|room	kaigiroom
+資料|folder	siryou|folder	siryoufolder
+予定|table	yotei|table	yoteitable
+電話|call	dennwa|call	dennwacall
+写真|app	shasinn|app	shasinnapp
+音楽|player	onngaku|player	onngakuplayer
+時間|limit	zikann|limit	zikannlimit
+仕事|mode	sigoto|mode	sigotomode
+友達|list	tomodati|list	tomodatilist
+学校|site	gakkou|site	gakkousite
+先生|page	sennsei|page	sennseipage
+名前|field	namae|field	namaefield
+場所|map	basho|map	bashomap
+番号|input	banngou|input	banngouinput
+住所|form	juusho|form	juushoform
+料理|blog	ryouri|blog	ryouriblog
+旅行|plan	ryokou|plan	ryokouplan
+切符|code	kippu|code	kippucode
+地図|view	tizu|view	tizuview
+天気|report	tennki|report	tennkireport
+新聞|feed	sinnbunn|feed	sinnbunnfeed
+雑誌|cover	zassi|cover	zassicover
+映画|trailer	eiga|trailer	eigatrailer
+野球|game	yakyuu|game	yakyuugame
+練習|log	rennshuu|log	rennshuulog
+試験|score	sikenn|score	sikennscore
+宿題|sheet	shukudai|sheet	shukudaisheet
+辞書|lookup	zisho|lookup	zisholookup
+単語|card	tanngo|card	tanngocard
+文法|check	bunnpou|check	bunnpoucheck
+発音|guide	hatuonn|guide	hatuonnguide
+漢字|quiz	kannzi|quiz	kannziquiz
+翻訳|tool	honnyaku|tool	honnyakutool
+質問|box	situmonn|box	situmonnbox
+返事|mail	hennzi|mail	hennzimail
+相談|desk	soudann|desk	soudanndesk
+契約|file	keiyaku|file	keiyakufile
+会社|profile	kaisha|profile	kaishaprofile
+社員|badge	shainn|badge	shainnbadge
+給料|slip	kyuuryou|slip	kyuuryouslip
+休暇|request	kyuuka|request	kyuukarequest
+## japanese_verbs ｜ 主測：切點 ｜ 來源：使用者實測＋人工
+# 混合語言測資（第五組）：日文動詞活用
+#
+# 使用者提供的十個中英日混雜句，取其中的日文段落。刻意挑難的文法：
+# 使役受身、受身進行形、てもらう、なければ+受身+てしまう、
+# わけにはいかない——但全都是日常會用到的範圍，不是文語或方言。
+#
+# 這組的職責在新架構下改變了。
+#
+# 舊架構有個 conjugation.rs 專門展開活用形，這組是為了驗證它而做的
+# ——mozc 詞庫只收動詞原形（買う），變化形（買って、買われた）查不到。
+# 新架構（phase12-rework）沒有那個模組，也不需要：切點引擎的職責是
+# **切語言**，不是切詞。同一個語言內部不切，詞與詞的邊界是選詞模組的事。
+#
+# 跟排序的「相鄰同語言不切」規則一致。它們現在驗的是：
+# 長串日文不會被英文或注音搶走。
+#
+#
+#
+# 句1：昨晚被老闆叫去加班（使役受身）
+上司に残業させられた	joushinizanngyousaserareta	joushinizanngyousaserareta
+# 句2：如果早知道會塞車，早點出發就好了（た形+ておけば良かった）
+もっと早く出発しておけば	mottohayakushuppatsushiteokeba	mottohayakushuppatsushiteokeba
+# 句3：報告反覆被修改（受身+てもらう）
+何度も直されても	nanndomonaosaretemo	nanndomonaosaretemo
+なかなか満足してもらえない	nakanakamannzokushitemoraenai	nakanakamannzokushitemoraenai
+# 句4：結果等了一小時（使役受身+羽目になる）
+一時間も待たされる	ichijikannmomatasareru	ichijikannmomatasareru
+羽目になった	hameninatta	hameninatta
+# 句5：請大家吃飯（てあげる）
+みんなに奢ってあげる	minnnaniogotteageru	minnnaniogotteageru
+# 句6：每次都被推工作（受身進行形）
+仕事を押し付けられている	shigotowooshitsukerareteiru	shigotowooshitsukerareteiru
+# 句7：週五前要交（なければ+受身+てしまう）
+金曜日までに提出しなければ	kinnyoubimadeniteishutsushinakereba	kinnyoubimadeniteishutsushinakereba
+単位を落とされてしまう	tanniwootosareteshimau	tanniwootosareteshimau
+# 句8：不能放棄（わけにはいかない）
+諦めるわけにはいかない	akirameruwakenihaikanai	akirameruwakenihaikanai
+頑張り続けるしかない	gannbaritsuzukerushikanai	gannbaritsuzukerushikanai
+# 句9：如果當初聽了建議（ていれば+はず）
+アドバイスを聞いていれば	adobaisuwokiiteireba	adobaisuwokiiteireba
+こんなことにはならなかった	konnnakotonihanaranakatta	konnnakotonihanaranakatta
+# 句10：被派去出差（使役受身）
+会社に出張させられて	kaishanishucchousaserarete	kaishanishucchousaserarete
+あまり乗り気じゃない	amarinorikijanai	amarinorikijanai
+
+
+#
+# ---- 2026-09-07 補 34 筆：更多活用形 ----
+# mozc 只收辭書形（買う），變化形查不到——所以按鍵是從**假名**產的
+# （mkkeys --sent 的 ja: 段，讀音就是它自己）。
+# 期望用寬容-列舉列兩種表記：漢字混寫與全假名（審核表 A6）。
+# **期望寫正解不寫現況**——引擎現在把「よんでもらった」打成
+# 「4でmorあった」，那正是要它紅著的東西。
+食べられなかった || たべられなかった	taberarenakatta	taberarenakatta
+読んでもらった || よんでもらった	yonndemoratta	yonndemoratta
+書かせている || かかせている	kakaseteiru	kakaseteiru
+行かなければならない || いかなければならない	ikanakerebanaranai	ikanakerebanaranai
+話しかけられた || はなしかけられた	hanasikakerareta	hanasikakerareta
+待たされている || またされている	matasareteiru	matasareteiru
+調べておいた || しらべておいた	sirabeteoita	sirabeteoita
+忘れてしまった || わすれてしまった	wasuretesimatta	wasuretesimatta
+見つからなかった || みつからなかった	mitukaranakatta	mitukaranakatta
+考えさせられる || かんがえさせられる	kanngaesaserareru	kanngaesaserareru
+間に合わなかった || まにあわなかった	maniawanakatta	maniawanakatta
+引き受けてくれた || ひきうけてくれた	hikiuketekureta	hikiuketekureta
+片付けておきます || かたづけておきます	kataduketeokimasu	kataduketeokimasu
+出しておいてください || だしておいてください	dasiteoitekudasai	dasiteoitekudasai
+確認してもらえますか || かくにんしてもらえますか	kakuninnsitemoraemasuka	kakuninnsitemoraemasuka
+気をつけてください || きをつけてください	kiwotuketekudasai	kiwotuketekudasai
+手伝ってくれない || てつだってくれない	tetudattekurenai	tetudattekurenai
+教えていただけますか || おしえていただけますか	osieteitadakemasuka	osieteitadakemasuka
+預かってもらえる || あずかってもらえる	azukattemoraeru	azukattemoraeru
+届けてくれた || とどけてくれた	todoketekureta	todoketekureta
+助かりました || たすかりました	tasukarimasita	tasukarimasita
+間違えてしまいました || まちがえてしまいました	matigaetesimaimasita	matigaetesimaimasita
+選んでください || えらんでください	eranndekudasai	eranndekudasai
+始めましょう || はじめましょう	hazimemasyou	hazimemasyou
+終わりました || おわりました	owarimasita	owarimasita
+続けていく || つづけていく	tuduketeiku	tuduketeiku
+止めておこう || とめておこう	tometeokou	tometeokou
+進めていきます || すすめていきます	susumeteikimasu	susumeteikimasu
+任せてください || まかせてください	makasetekudasai	makasetekudasai
+急いでいる || いそいでいる	isoideiru	isoideiru
+落ち着いてきた || おちついてきた	otituitekita	otituitekita
+慣れてきました || なれてきました	naretekimasita	naretekimasita
+よろしくお願いします || よろしくおねがいします	yorosikuonegaisimasu	yorosikuonegaisimasu
+ありがとうございました	arigatougozaimasita	arigatougozaimasita
+# ---- 2026-09-07 補 50 筆：動詞分類還原（romaji::inflect）----
+# 這批對應 `romaji/inflect.rs`——引擎改成**照動詞分類反推辭書形**再查詞典，
+# 取代原本「語尾長得像活用形就算」的後綴判斷。測資按那三類動詞鋪開：
+#
+#   一段（23 筆）  起きる・浴びる型，語幹直接接語尾，不音變
+#   五段·ます形（8 筆）  曾被一段規則攔截，還原成「あるきる→アルキル」這種
+#                        碰巧在詞典裡的假辭書形（非動詞）
+#   五段·音便（19 筆）   促音便って／った、撥音便んだ、イ音便いた／いだ
+#
+# 按鍵一樣從**假名**產（mkkeys --sent 的 ja: 段），因為 mozc 只收辭書形。
+# 期望用寬容-列舉列漢字混寫與全假名兩種（審核表 A6）。
+# **寫正解不寫現況**——引擎現在把「たべて」打成「tab得て」、「はいった」
+# 打成「ha言った」，那正是要它紅著的東西。
+起きた || おきた	okita	okita
+起きて || おきて	okite	okite
+起きない || おきない	okinai	okinai
+起きられる || おきられる	okirareru	okirareru
+浴びた || あびた	abita	abita
+浴びて || あびて	abite	abite
+浴びない || あびない	abinai	abinai
+食べた || たべた	tabeta	tabeta
+食べて || たべて	tabete	tabete
+寝た || ねた	neta	neta
+寝て || ねて	nete	nete
+寝ない || ねない	nenai	nenai
+出た || でた	deta	deta
+出て || でて	dete	dete
+見て || みて	mite	mite
+教えた || おしえた	osieta	osieta
+教えて || おしえて	osiete	osiete
+覚えた || おぼえた	oboeta	oboeta
+忘れた || わすれた	wasureta	wasureta
+調べた || しらべた	sirabeta	sirabeta
+考えた || かんがえた	kanngaeta	kanngaeta
+疲れた || つかれた	tukareta	tukareta
+入れた || いれた	ireta	ireta
+歩きます || あるきます	arukimasu	arukimasu
+話します || はなします	hanasimasu	hanasimasu
+待ちます || まちます	matimasu	matimasu
+遊びます || あそびます	asobimasu	asobimasu
+書きます || かきます	kakimasu	kakimasu
+飲みます || のみます	nomimasu	nomimasu
+読みます || よみます	yomimasu	yomimasu
+使います || つかいます	tukaimasu	tukaimasu
+入った || はいった	haitta	haitta
+入って || はいって	haitte	haitte
+帰った || かえった	kaetta	kaetta
+走った || はしった	hasitta	hasitta
+切った || きった	kitta	kitta
+知った || しった	sitta	sitta
+読んだ || よんだ	yonnda	yonnda
+飲んだ || のんだ	nonnda	nonnda
+住んだ || すんだ	sunnda	sunnda
+泳いだ || およいだ	oyoida	oyoida
+書いた || かいた	kaita	kaita
+待った || まった	matta	matta
+取った || とった	totta	totta
+買った || かった	katta	katta
+話した || はなした	hanasita	hanasita
+負けた || まけた	maketa	maketa
+終わった || おわった	owatta	owatta
+始まった || はじまった	hazimatta	hazimatta
+続けた || つづけた	tuduketa	tuduketa
+
+# ---- 2026-09-07 補 20 筆：五段例外（iru／eru 結尾卻是五段）----
+# 一段動詞的辭書形都以 iru／eru 結尾，但**反過來不成立**——帰る・走る・
+# 入る・切る・知る 都是五段。這批是 `romaji::inflect` 最脆弱的地方：
+# 一段／五段判斷寫錯就整批失效（一段直接接語尾，五段要先音便）。
+#
+# 全部用過去形（促音便），因為那正是兩類分得開的地方：
+#   帰った（五段·促音便）  ／  変えた（一段·直接接）
+#
+# 其中兩筆是實測抓出來的洞：まいった（詞典首選「マイル」）、
+# ほてった（首選「ホテル」）——片假名首選一度把整批動詞擋掉，
+# 修在 commit 0339f63。
+帰った || かえった	kaetta	kaetta
+走った || はしった	hasitta	hasitta
+入った || はいった	haitta	haitta
+切った || きった	kitta	kitta
+知った || しった	sitta	sitta
+滑った || すべった	subetta	subetta
+蹴った || けった	ketta	ketta
+減った || へった	hetta	hetta
+限った || かぎった	kagitta	kagitta
+散った || ちった	titta	titta
+握った || にぎった	nigitta	nigitta
+下った || くだった	kudatta	kudatta
+捻った || ひねった	hinetta	hinetta
+参った || まいった	maitta	maitta
+火照った || ほてった	hotetta	hotetta
+擦った || こすった	kosutta	kosutta
+罵った || ののしった	nonositta	nonositta
+覆った || くつがえった	kutugaetta	kutugaetta
+蘇った || よみがえった	yomigaetta	yomigaetta
+翻った || ひるがえった	hirugaetta	hirugaetta
+
+# 這三筆測的是**歧義**：同一串按鍵對得上好幾個動詞。
+#
+# **有歧義的顯示不算錯，但候選一定要有**（使用者的裁決）：
+#   いった  行く／言う／要る 都成立，寬容-列舉列出來
+#   てった  照る 是罕用字，顯示假名合理，但「照った」要選得到
+#   まじった 交じる／交る 是同一個五段動詞的兩種送假名寫法，字面上
+#            跟一段的「起きる」分不開——靠「長短並存」認出來（commit 見下）
+#
+# 候選是否齊全由 `inflect` 的單元測試把關（漢字候選 要含得到），
+# 漏斗只量顯示。
+行った || 言った || 要った || いった	itta	itta
+てった || 照った	tetta	tetta
+交じった || まじった	mazitta	mazitta
+
+## kana_fragment ｜ 主測：切點 ｜ 來源：人工
+# 假名碎片測資：中文裡長得像單一假名的那幾個音
+#
+# 這組測的是**切點**，不是選字。
+#
+# 大千鍵盤上，「聲母＋介音ㄧ」有五組剛好拼成合法假名，而它們後面接
+# 韻母的三拼字，剩下的「韻母＋聲調」本身也是合法音節——於是整句中文
+# 會被切成「日文假名｜注音」：
+#
+#   ㄐㄧ = ru = る   就、見、進、家、將、經
+#   ㄋㄧ = su = す   年、鳥、娘
+#   ㄑㄧ = fu = ふ   前、求、強
+#   ㄒㄧ = vu        想、小、先
+#   ㄌㄧ = xu        六、兩、連
+#
+# 例：「就」ㄐㄧㄡˋ = `ru.4` → `日:ru`（る）＋`注:.4`（噢）。
+#
+# 這一類在舊測資裡完全沒有被覆蓋到（2026-09-05 補）。單獨打一個字時
+# 沒事（整串是一個音節時有別的規則擋著），**只有放進句子裡才會發作**，
+# 所以這裡的句子一律是完整的短句。
+#
+# 採集方式：句子手寫，**按鍵一律程式產生**（詞查 BPMFMappings、
+# 單字查 BPMFBase 的按鍵欄），避開了會查到別的讀音的多音字。
+#
+# **選字錯的列故意留著**（例：「他今天就回來」引擎給「救回來」，
+# 因為「救回」是詞）——那是選詞層的另一條線，不在這組的範圍，依
+# 期望基準審核.md 的 A5（排序錯，不寬容）。
+#
+#
+他今天就回來	w8 rup wu0 ru.4cjo6x96	w8 rup wu0 ru.4cjo6x96
+我明天就過去	ji3au/6wu0 ru.4eji4fm4	ji3au/6wu0 ru.4eji4fm4
+這件事很重要	5k4ru04g4cp35j/4ul4	5k4ru04g4cp35j/4ul4
+我看見那隻鳥	ji3d04ru04s8 5 sul3	ji3d04ru04s8 5 sul3
+小明想要兩個	vul3au/6vu;3ul4xu;3ek4	vul3au/6vu;3ul4xu;3ek4
+明年就有錢	au/6su06ru.4u.3fu06	au/6su06ru.4u.3fu06
+前面那台車	fu06au04s8 w96tk 	fu06au04s8 w96tk 
+六點要下班	xu.42u03ul4vu8410 	xu.42u03ul4vu8410 
+先把東西放下	vu0 1832j/ vu z;4vu84	vu0 1832j/ vu z;4vu84
+我進辦公室	ji3rup4104ej/ g4	ji3rup4104ej/ g4
+將來再說	ru; x96y94gji 	ru; x96y94gji 
+經過那個路口	ru/ eji4s8 ek4xj4d.3	ru/ eji4s8 ek4xj4d.3
+他家離這裡很遠	w8 ru8 xu65k4xu3cp3m03	w8 ru8 xu65k4xu3cp3m03
+連續下三天雨	xu06vm4vu84n0 wu0 m3	xu06vm4vu84n0 wu0 m3
+求你幫個忙	fu.6su31; ek4a;6	fu.6su31; ek4a;6
+小心前面有水	vul3vup fu06au04u.3gjo3	vul3vup fu06au04u.3gjo3
+我們一起去吃飯	ji3ap6u fu3fm4t z04	ji3ap6u fu3fm4t z04
+想想看再決定	vu;3vu;3d04y94rm,62u/4	vu;3vu;3d04y94rm,62u/4
+今年就要畢業	rup su06ru.4ul41u4u,4	rup su06ru.4ul41u4u,4
+他很強	w8 cp3fu;6	w8 cp3fu;6
+他就那樣	w8 ru.4s8 u;4	w8 ru.4s8 u;4
+你就知道	su3ru.45 2l4	su3ru.45 2l4
+我先進去	ji3vu0 rup4fm4	ji3vu0 rup4fm4
+那年冬天	s8 su062j/ wu0 	s8 su062j/ wu0 
+他想了想	w8 vu;3xk7vu;3	w8 vu;3xk7vu;3
+小小的鳥	vul3vul32k7sul3	vul3vul32k7sul3
+兩三年前	xu;3n0 su06fu06	xu;3n0 su06fu06
+六七個人	xu.4fu ek4bp6	xu.4fu ek4bp6
+他見過你	w8 ru04eji4su3	w8 ru04eji4su3
+求求你	fu.6fu.6su3	fu.6fu.6su3
+強強的	fu;6fu;62k7	fu;6fu;62k7
+今天就這樣	rup wu0 ru.45k4u;4	rup wu0 ru.45k4u;4
+明天見	au/6wu0 ru04	au/6wu0 ru04
+先走了	vu0 y.3xk7	vu0 y.3xk7
+你想太多	su3vu;3w942ji 	su3vu;3w942ji 
+再六天	y94xu.4wu0 	y94xu.4wu0 
+那件事	s8 ru04g4	s8 ru04g4
+天天見面	wu0 wu0 ru04au04	wu0 wu0 ru04au04
+我進去看看	ji3rup4fm4d04d04	ji3rup4fm4d04d04
+就快好了	ru.4dj94cl3xk7	ru.4dj94cl3xk7
+我喜歡|寿司	ji3vu3cj0 |sushi	ji3vu3cj0 sushi
+明天見|桜	au/6wu0 ru04|sakura	au/6wu0 ru04sakura
+就去買|アニメ	ru.4fm4a93|anime	ru.4fm4a93anime
+就是|vtuber	ru.4g4|vtuber	ru.4g4vtuber
+兩個|ramen	xu;3ek4|ramen	xu;3ek4ramen
+
+
+#
+# ---- 2026-09-07 補 5 筆：五組地雷（ru su fu vu xu）各再一句 ----
+見面|再說	ru04au04y94gji 	ru04au04y94gji 
+進去|看看	rup4fm4|d04d04	rup4fm4d04d04
+年紀|大了	su06ru4|284xk7	su06ru4284xk7
+強調|重點	fu;62ul45j/42u03	fu;62ul45j/42u03
+連續|三天	xu06vm4|n0 wu0 	xu06vm4n0 wu0 
+## en_bopomofo ｜ 主測：切點 ｜ 來源：人工
+# 混合語言測資（第七組）：英文詞的結尾偷走注音音節的開頭
+#
+# 這組測的是一個結構性陷阱——「常用英文詞 ＋ 一個字母 = 也是常用
+# 英文詞」的組合在 en_50k 裡有 1265 組：
+#
+#   the → them / then / they      for → ford / fork / form / fort
+#   you → your                    know → known / knows
+#
+# 於是英文段會多吃一個字元，而剩下的注音殘段往往仍然合法：
+#
+#   file ＋ d9（開，結尾是一聲空白） → 英:filed | 注:9  ← 9+空白是ㄡˉ，也合法
+#   the  ＋ yl3（早）                → 英:they  | 注:l3
+#
+# 「英文詞＋注音」是這個輸入法的核心使用情境，而前六組測資只覆蓋到
+# 3 句這種模式——那是測資的盲點，不是問題不存在。這組把它補起來。
+#
+# 每一句都是「一個英文詞 ＋ 一個中文詞」，30 個不同的英文詞。
+# 選詞的標準是「英文詞＋注音的第一個鍵」也在英文詞典裡，也就是
+# 一定會觸發這個陷阱。
+#
+#
+#   第二、三欄的空白是**真的空白**（注音的一聲），不是符號
+file|開	file|d9 	filed9 
+for|開	for|d9 	ford9 
+not|改	not|e93	note93
+can|改	can|e93	cane93
+was|成	was|t/6	wast/6
+the|改	the|e93	thee93
+you|開	you|d9 	youd9 
+know|你	know|su3	knowsu3
+are|你	are|su3	aresu3
+and|早	and|yl3	andyl3
+have|你	have|su3	havesu3
+that|你	that|su3	thatsu3
+what|你	what|su3	whatsu3
+use|開	use|d9 	used9 
+take|你	take|su3	takesu3
+make|你	make|su3	makesu3
+time|開	time|d9 	timed9 
+home|早	home|yl3	homeyl3
+name|開	name|d9 	named9 
+work|你	work|su3	worksu3
+look|早	look|yl3	lookyl3
+want|你	want|su3	wantsu3
+come|你	come|su3	comesu3
+call|改	call|e93	calle93
+part|早	part|yl3	partyl3
+play|你	play|su3	playsu3
+turn|你	turn|su3	turnsu3
+show|早	show|yl3	showyl3
+hand|早	hand|yl3	handyl3
+this|開	this|d9 	thisd9 
+
+
+#
+# ---- 2026-09-07 補 20 筆：更多「英文詞＋一個字母也是詞」的組合 ----
+for|改	for|e93	fore93
+you|早	you|yl3	youyl3
+know|走	know|y.3	knowy.3
+then|去	then|fm4	thenfm4
+they|好	they|cl3	theycl3
+from|買	from|a93	froma93
+with|看	with|d0 	withd0 
+this|開	this|d9 	thisd9 
+that|用	that|m/4	thatm/4
+what|成	what|t/6	whatt/6
+when|目	when|aj4	whenaj4
+some|認	some|bp4	somebp4
+more|要	more|ul 	moreul 
+time|已 || time|以	time|u3	timeu3
+make|大	make|284	make284
+take|小	take|vul3	takevul3
+come|多	come|2ji 	come2ji 
+said|天	said|wu0 	saidwu0 
+each|年	each|su06	eachsu06
+like|月	like|m,4	likem,4
+## en_split ｜ 主測：切點 ｜ 來源：人工
+# 混合語言測資（第八組）：英文詞被切成兩半
+#
+# 這組測的是 `fewer_split_word` 針對的模式——英文詞的前綴剛好是
+# 合法日文，於是整個詞被攔腰切開：
+#
+#   file ＋ d9（開）  →  日:fi | 英:led | 注:9
+#                        `fi` 是ふぃ、`led` 是英文詞，兩段各自都說得通，
+#                        但合起來 `filed` 才是真正的那個詞
+#
+# 這是「英文段偷注音的頭」（fewer_stolen）被罰之後，排序會改走的
+# 迴避路線——罰了一種錯法，它就換另一種。所以兩條規則要一起測。
+#
+# 每一句都是「一個英文詞 ＋ 一個中文詞」，選詞標準是英文詞的前兩個
+# 字母構成合法日文。十個中文詞輪流配，每個各 5 句。
+#
+#
+#   第二、三欄的空白是**真的空白**（注音的一聲），不是符號
+test|開	test|d9 	testd9 
+report|你	report|su3	reportsu3
+server|好	server|cl3	servercl3
+output|早	output|yl3	outputyl3
+format|去	format|fm4	formatfm4
+result|上	result|g;4	resultg;4
+delete|用	delete|m/4	deletem/4
+select|成	select|t/6	selectt/6
+search|天	search|wu0 	searchwu0 
+record|認	record|bp4	recordbp4
+file|開	file|d9 	filed9 
+data|你	data|su3	datasu3
+login|好	login|cl3	logincl3
+logout|早	logout|yl3	logoutyl3
+submit|去	submit|fm4	submitfm4
+filter|上	filter|g;4	filterg;4
+target|用	target|m/4	targetm/4
+source|成	source|t/6	sourcet/6
+merge|天	merge|wu0 	mergewu0 
+deploy|認	deploy|bp4	deploybp4
+review|開	review|d9 	reviewd9 
+button|你	button|su3	buttonsu3
+header|好	header|cl3	headercl3
+footer|早	footer|yl3	footeryl3
+layout|去	layout|fm4	layoutfm4
+module|上	module|g;4	moduleg;4
+number|用	number|m/4	numberm/4
+value|成	value|t/6	valuet/6
+table|天	table|wu0 	tablewu0 
+field|認	field|bp4	fieldbp4
+token|開	token|d9 	tokend9 
+route|你	route|su3	routesu3
+render|好	render|cl3	rendercl3
+widget|早	widget|yl3	widgetyl3
+parser|去	parser|fm4	parserfm4
+logger|上	logger|g;4	loggerg;4
+worker|用	worker|m/4	workerm/4
+socket|成	socket|t/6	sockett/6
+buffer|天	buffer|wu0 	bufferwu0 
+packet|認	packet|bp4	packetbp4
+handler|開	handler|d9 	handlerd9 
+manager|你	manager|su3	managersu3
+service|好	service|cl3	servicecl3
+monitor|早	monitor|yl3	monitoryl3
+backup|去	backup|fm4	backupfm4
+restore|上	restore|g;4	restoreg;4
+migrate|用	migrate|m/4	migratem/4
+request|成	request|t/6	requestt/6
+respond|天	respond|wu0 	respondwu0 
+message|認	message|bp4	messagebp4
+
+
+## en_vowel ｜ 主測：切點 ｜ 來源：人工
+# 混合語言測資（第九組）：英文詞 ＋ 母音開頭的注音音節
+#
+# 注音音節以母音鍵開頭時（a93 買、e93 改、u3 已、ul4 要、aj4 目、
+# el3 稿），前面英文詞的尾巴加上那個母音常常變成合法日文，
+# 於是被日文段吃走：
+#
+#   email ＋ a93（買）  →  英:em | 日:aila | 注:93
+#                          `aila` 是あいら，合法日文
+#   commit ＋ a93       →  英:com | 日:mita | 注:93
+#   server ＋ a93       →  英:ser | 日:vera | 注:93
+#
+# 這類組合有 5904 種——任何子音結尾的英文詞加母音都是合法日文，
+# 而「英文詞＋注音」是這個輸入法的核心使用情境。
+#
+# 這組是目前最弱的一環，加進來的時候第 1 名只有 8%、前 3 名 76%。
+# 保留失敗案例是刻意的：測資反映真實需求，不是反映目前的能力。
+#
+# 六個中文詞輪流配，每個 5～13 句。
+#
+# 2026-09-01 修正：原本的 e93 修、o4 我、i3 以、aj4 暗、el3 考
+# 文字與按鍵讀音對不上（check_testdata 抓出來的），引擎永遠不可能
+# 過。文字改成該按鍵真正的讀音——**這組的規格是按鍵**：音節必須
+# 母音字母開頭才會跟前面的英文詞黏成日文，照文字反推按鍵
+# （修 = vul ）就失去測試目的了。
+#
+# o4（ㄟˋ）與 i3（ㄛˇ）整個換掉：那兩個音幾乎沒有字（i3 一個都
+# 沒有），使用者裁決改用 u3 與 ul4。
+#
+# 2026-09-02 裁決：`u3`（ㄧˇ）那 13 列改標**寬容-列舉**「已 || 以」。
+#
+# 理由是這組測資的規格是按鍵，不是文字——中文那個字只是載體，前面是
+# 英文詞、後面是字串結尾，**沒有任何中文上下文**可以決定該是「已」還
+# 是「以」，兩個都是常用字。原本寫死「已」而引擎給「以」，等於拿一個
+# 硬幣的正反面在扣分：13 列裡有 8 列是這樣掛的（見 CLAUDE.md 的
+# 「已／以」未決項）。照期望基準審核.md 的 A4「中文同音詞（兩個都是
+# 真詞）→ 寬容-列舉」處理。引擎與 priority.txt 都沒有動。
+#
+# **考慮過補成「已經」，量完否決**：那樣答案會唯一（詞層蓋過單字排序，
+# 已/以 之爭直接消失），13 列的通過數也從 8 升到 10——但多的那 2 分是
+# 靠削弱難度換來的。`config`／`token`／`route` 的切法會從錯變對，而那
+# 三個正是這組要抓的「英文詞尾＋母音黏成日文」；`buffer` 反而倒退。
+# 這組的價值在於保留最難的案例，不在於分數好看。
+#
+#   第二、三欄的空白是**真的空白**（注音的一聲），不是符號
+email|買	email|a93	emaila93
+commit|改	commit|e93	commite93
+server|已 || server|以	server|u3	serveru3
+input|已 || input|以	input|u3	inputu3
+output|要	output|ul4	outputul4
+format|目	format|aj4	formataj4
+result|要	result|ul4	resultul4
+update|買	update|a93	updatea93
+delete|改	delete|e93	deletee93
+upload|已 || upload|以	upload|u3	uploadu3
+config|已 || config|以	config|u3	configu3
+file|要	file|ul4	fileul4
+data|目	data|aj4	dataaj4
+user|稿	user|el3	userel3
+admin|要	admin|ul4	adminul4
+login|買	login|a93	logina93
+logout|改	logout|e93	logoute93
+submit|已 || submit|以	submit|u3	submitu3
+filter|已 || filter|以	filter|u3	filteru3
+target|要	target|ul4	targetul4
+deploy|目	deploy|aj4	deployaj4
+review|稿	review|el3	reviewel3
+status|要	status|ul4	statusul4
+button|買	button|a93	buttona93
+header|改	header|e93	headere93
+footer|已 || footer|以	footer|u3	footeru3
+layout|已 || layout|以	layout|u3	layoutu3
+module|要	module|ul4	moduleul4
+number|目	number|aj4	numberaj4
+value|稿	value|el3	valueel3
+index|要	index|ul4	indexul4
+query|買	query|a93	querya93
+cache|改	cache|e93	cachee93
+token|已 || token|以	token|u3	tokenu3
+route|已 || route|以	route|u3	routeu3
+render|要	render|ul4	renderul4
+widget|目	widget|aj4	widgetaj4
+parser|稿	parser|el3	parserel3
+logger|要	logger|ul4	loggerul4
+worker|買	worker|a93	workera93
+socket|改	socket|e93	sockete93
+buffer|已 || buffer|以	buffer|u3	bufferu3
+stream|已 || stream|以	stream|u3	streamu3
+packet|要	packet|ul4	packetul4
+handler|目	handler|aj4	handleraj4
+manager|稿	manager|el3	managerel3
+monitor|要	monitor|ul4	monitorul4
+backup|買	backup|a93	backupa93
+restore|改	restore|e93	restoree93
+migrate|已 || migrate|以	migrate|u3	migrateu3
+
+
+#
+# ---- 2026-09-07 補 50 筆：更多「子音結尾英文詞＋母音注音」 ----
+# 這類組合有 5904 種。36/50 過——這節仍是最弱的一環，數字誠實記著。
+email|買	email|a93	emaila93
+commit|買	commit|a93	commita93
+server|買	server|a93	servera93
+module|要	module|ul 	moduleul 
+monitor|要	monitor|ul 	monitorul 
+router|要	router|ul 	routerul 
+parser|已	parser|u3	parseru3
+filter|已 || filter|以	filter|u3	filteru3
+folder|以	folder|u3	folderu3
+header|改	header|e93	headere93
+member|改	member|e93	membere93
+number|稿	number|el3	numberel3
+order|稿	order|el3	orderel3
+player|買	player|a93	playera93
+render|要	render|ul 	renderul 
+sender|已 || sender|以	sender|u3	senderu3
+banner|改	banner|e93	bannere93
+cursor|稿	cursor|el3	cursorel3
+driver|買	driver|a93	drivera93
+editor|要	editor|ul 	editorul 
+finder|已 || finder|以	finder|u3	finderu3
+helper|改	helper|e93	helpere93
+loader|稿	loader|el3	loaderel3
+marker|買	marker|a93	markera93
+packer|要	packer|ul 	packerul 
+reader|已 || reader|以	reader|u3	readeru3
+runner|改	runner|e93	runnere93
+sensor|稿	sensor|el3	sensorel3
+setter|買	setter|a93	settera93
+sorter|要	sorter|ul 	sorterul 
+tester|已 || tester|以	tester|u3	testeru3
+viewer|改	viewer|e93	viewere93
+worker|稿	worker|el3	workerel3
+writer|買	writer|a93	writera93
+anchor|要	anchor|ul 	anchorul 
+binder|已 || binder|以	binder|u3	binderu3
+caller|改	caller|e93	callere93
+docker|稿	docker|el3	dockerel3
+engine|買	engine|a93	enginea93
+filler|要	filler|ul 	fillerul 
+getter|已	getter|u3	getteru3
+handle|改	handle|e93	handlee93
+invoke|稿	invoke|el3	invokeel3
+joiner|買	joiner|a93	joinera93
+keeper|要	keeper|ul 	keeperul 
+linker|已	linker|u3	linkeru3
+mapper|改	mapper|e93	mappere93
+opener|稿	opener|el3	openerel3
+picker|買	picker|a93	pickera93
+queuer|要	queuer|ul 	queuerul 
+## symbol ｜ 主測：符號 ｜ 來源：人工
+# 符號輸入測資：`\名字\` 叫出一組符號。
+#
+# 這組測的是**符號那條路**，不是切點也不是選字。三件事：
+#
+#   一、同一組符號中日英三個名字都叫得到（`\星\`／`\hoshi\`／`\star\`）
+#   二、2026-09-05 重排之後，不同的東西各有各的名字（＋－×÷ 不再擠一組）
+#   三、名字之外的反斜線原樣留著（路徑、沒收尾的那些）
+#
+# 反斜線兩邊強制切一刀）。**但守住那條規則的不是這份測資**——這裡的
+# 名字都是詞典收得到的詞，規則壞掉第一名也不會變。實際守著它的是
+# `cutpoint::incremental::tests::反斜線一定自成一段`，那條會遍歷所有
+# 切法。量過：把規則關掉，這份測資 25/25 不動，單元測試立刻紅。
+#
+# 為什麼不放詞典收不到的名字（\noteq\ 那種、正是踩到坑的案例）：
+# 它在計分器這條路上**一種合法切法都沒有**（`prune` 的「英文段必須是
+# 詞」把它殺光），真正打字時是靠上層的退路才活著。放進來會是一列
+# 永遠紅的測資，紅的還不是它該測的東西。
+#
+# 日文名字在表裡是**羅馬字**（表裡寫 hoshi 不寫 ほし），因為名字先用
+# 組出來的文字查、查不到才用按鍵原文查，而羅馬字組出來的東西不可預期。
+# `sekibun`／`mugen` 那類切點層會切成兩段（日:seki｜英:bun），
+# 分段本身不影響輸出，就不寫進這裡綁死了——那幾條由單元測試
+# `compose::tests::日文名字用按鍵查得到` 守著。
+# 三種語言叫同一組符號
+★	\|star|\	\star\
+★	\|hoshi|\	\hoshi\
+★	\|vu/ |\	\vu/ \
+♥	\|heart|\	\heart\
+♥	\|kokoro|\	\kokoro\
+# 拆開之後各叫各的（2026-09-05 重排，不同東西不再擠在一組）
+＋	\|plus|\	\plus\
+×	\|times|\	\times\
+÷	\|waru|\	\waru\
+☀	\|sun|\	\sun\
+☀	\|taiyou|\	\taiyou\
+￥	\|yen|\	\yen\
+♂	\|male|\	\male\
+℃	\|celsius|\	\celsius\
+# 群組那一列還在，第一個符號直接出來
+＋	\|math|\	\math\
+☀	\|weather|\	\weather\
+# 中文名字看的是詞庫修正後的文字（逐字組出來不是那個詞）
+♪	\|up m,4|\	\up m,4\
+→	\|ru04w.6|\	\ru04w.6\
+☀	\|wu0 fu4|\	\wu0 fu4\
+\config\	\|config|\	\config\
+c:\users\	c|:|\|users|\	c:\users\
+c:\	c|:|\	c:\
+# 夾在句子裡
+你好★	su3cl3|\|star|\	su3cl3\star\
+★你好	\|star|\|su3cl3	\star\su3cl3
+# 邊界：收尾的反斜線被前一組吃掉，剩下的原樣（既有設計）
+★heart\	\|star|\|heart|\	\star\heart\
+# 路徑裡剛好有符號名字就會被換掉——**刻意接受的代價**（開發文件 §2.48）
+e:★	e|:|\|vu/ |\	e:\vu/ \
+
+
+#
+# ---- 2026-09-07 補 25 筆：更多名字、三種語言都叫得到 ----
+# 英文與日文羅馬字的名字按鍵就是名字本身（英文段 passthrough），
+# 中文名字要靠詞庫組出文字才查得到——那正是 5afd34e 修的地方。
+→	\|arrow|\	\arrow\
+→	\|yajirushi|\	\yajirushi\
+→	\|right|\	\right\
+←	\|left|\	\left\
+↑	\|up|\	\up\
+↓	\|down|\	\down\
+✓	\|check|\	\check\
+✓	\|chekku|\	\chekku\
+✗	\|cross|\	\cross\
+✗	\|batsu|\	\batsu\
+＋	\|plus|\	\plus\
+－	\|minus|\	\minus\
+×	\|times|\	\times\
+÷	\|divide|\	\divide\
+÷	\|waru|\	\waru\
+±	\|plusminus|\	\plusminus\
+＝	\|equal|\	\equal\
+≠	\|notequal|\	\notequal\
+≒ || ≈	\|approx|\	\approx\
+√	\|root|\	\root\
+√	\|ruuto|\	\ruuto\
+∞	\|infinity|\	\infinity\
+∞	\|mugen|\	\mugen\
+∫	\|integral|\	\integral\
+°	\|degree|\	\degree\
+## long ｜ 主測：長度 ｜ 來源：生成（tools/gen_long_testdata.py，可重產）
+# 長句壓力測資（平均 100 鍵 50 句、200 鍵 10 句）
+#
+# 為什麼需要這批：`ALIVE_LIMIT = 400` 當初是拿 570 句測資掃出來的，而那批
+# 最長只有 35 個按鍵、沒有一句中英交錯三次以上——正是會出事的區域
+# （見開發文件 §2.51.3）。這批補的就是那個盲點。
+#
+# 怎麼造的：**全部由人審過的既有測資片段組合而成**（tools/gen_long_testdata.py，
+# 固定亂數種子）。按鍵與期望文字都直接沿用原測資，只是用空白或標點把片段
+# 接起來——所以這批不引入任何新的人工判斷。
+#
+# 片段之間**只用空白與標點連接，不直接黏**：相鄰同語言的兩段黏起來之後
+# normalize 會合併成一段，期望欄若仍寫兩段就永遠比不中，那是測資的錯不是
+# 引擎的錯。中英黏接的難題既有測資（en_bopomofo 等）已經覆蓋，
+# 這批測的是**長度**。
+#
+# **跨語言的接縫不放逗號**：逗號要全形還是讀點由整句的書寫系統決定
+# （`compose::dominant_cjk` 數前面的中日段誰多），而隨機拼接的句子沒有
+# 語意主體，那道題沒有正確答案。同語言之間照樣用逗號。
+#
+# 每一句至少含兩種語言。
+#
+# 格式：文字期望 <TAB> 按鍵期望 <TAB> 按鍵序列
+design|_|improve|。|幫我|_|book|_|會議室|_|我進去看看|_|美味しい|_|頑張って|_|予定|table|，|the|改|_|問題資料	design| |improve|.|1; ji3| |book| |cjo4u4g4| |ji3rup4fm4d04d04| |oishii| |gannbatte| |yotei|table|,|the|e93| |jp4wu6y xul4	design improve.1; ji3 book cjo4u4g4 ji3rup4fm4d04d04 oishii gannbatte yoteitable,thee93 jp4wu6y xul4
+上傳|ありがとう|world|。|わかりました|file|開|_|です|_|email|_|commit|_|美味しい|。|data|_|大丈夫|_|測試|_|用|API|串接	g;4tj06|arigatou|world|.|wakarimashita|file|d9 | |desu| |email| |commit| |oishii|.|data| |daijoubu| |hk4g4| |m/4|API|tj04ru, 	g;4tj06arigatouworld.wakarimashitafiled9  desu email commit oishii.data daijoubu hk4g4 m/4APItj04ru, 
+token|_|要更新|。|買|_|失礼|_|review|，|学校|已經|world|，|admin|要|_|data|_|好|_|楽しい|_|電話|_|仕事	token| |ul e/ vup |.|a93| |shitsurei| |review|,|gakkou|u3ru/ |world|,|admin|ul4| |data| |cl3| |tanoshii| |dennwa| |shigoto	token ul e/ vup .a93 shitsurei review,gakkouu3ru/ world,adminul4 data cl3 tanoshii dennwa shigoto
+已經|ございます|update|。|問題|_|server|_|伺服器|，|應該|，|學生|_|bye|明天|，|output|早|_|電車|_|上傳	u3ru/ |gozaimasu|update|.|jp4wu6| |server| |n4zj6fu4|,|u/ e9 |,|vm,6g/ | |bye|au/6wu0 |,|output|yl3| |dennsha| |g;4tj06	u3ru/ gozaimasuupdate.jp4wu6 server n4zj6fu4,u/ e9 ,vm,6g/  byeau/6wu0 ,outputyl3 dennsha g;4tj06
+handler|開|。|world|_|こんにちは|_|queue|_|塞住了|_|hand|早|，|button|買|。|音楽|player|，|meeting|_|寿司	handler|d9 |.|world| |konnnichiha| |queue| |n9 5j4xk7| |hand|yl3|,|button|a93|.|onngaku|player|,|meeting| |sushi	handlerd9 .world konnnichiha queue n9 5j4xk7 handyl3,buttona93.onngakuplayer,meeting sushi
+明日|meeting|這個|_|明天|_|meeting|_|寿司|_|anchor|要|_|data|你|。|deploy|頑張って|檔案|。|同人誌|_|買了三本	ashita|meeting|5k4ek7| |au/6wu0 | |meeting| |sushi| |anchor|ul | |data|su3|.|deploy|gannbatte|2;304|.|douzinnsi| |a93xk7n0 1p3	ashitameeting5k4ek7 au/6wu0  meeting sushi anchorul  datasu3.deploygannbatte2;304.douzinnsi a93xk7n0 1p3
+会議|_|build|，|ok|走走|_|昨天|。|問題|_|server|，|限定版|_|賣完了|_|file|_|data|。|網站|，|明天|_|記得	kaigi| |build|,|ok|y.3y.3| |yji6wu0 |.|jp4wu6| |server|,|gennteibann| |a94j06xk7| |file| |data|.|j;3504|,|au/6wu0 | |ru42k6	kaigi build,oky.3y.3 yji6wu0 .jp4wu6 server,gennteibann a94j06xk7 file data.j;3504,au/6wu0  ru42k6
+javascript|。|定期|_|要|續約|_|好吃|_|file|_|失礼|。|抽到|_|推し|_|今日|test|_|want|你|_|書類|_|交出去了	javascript|.|teiki| |ul |vm4m, | |cl3t | |file| |shitsurei|.|t. 2l4| |osi| |kyou|test| |want|su3| |shorui| |rul tj fm4xk7	javascript.teiki ul vm4m,  cl3t  file shitsurei.t. 2l4 osi kyoutest wantsu3 shorui rul tj fm4xk7
+memory|_|不太夠|。|meeting|寿司|一下|，|they|好|_|ありがとうございます|_|あまり乗り気じゃない|_|each|年|_|excel|_|打不開	memory| |1j4w94e.4|.|meeting|sushi|u vu84|,|they|cl3| |arigatougozaimasu| |amarinorikijanai| |each|su06| |excel| |2831j4d9 	memory 1j4w94e.4.meetingsushiu vu84,theycl3 arigatougozaimasu amarinorikijanai eachsu06 excel 2831j4d9 
+沒問題|です|_|資料|_|檔案|。|剛剛|_|deploy|_|成功|，|同人|_|shop|，|看|_|配信|。|現在|_|やすみじかん	ao6jp4wu6|desu| |y xul4| |2;304|.|e; e; | |deploy| |seikou|,|douzinn| |shop|,|d0 | |haisinn|.|vu04y94| |yasumijikann	ao6jp4wu6desu y xul4 2;304.e; e;  deploy seikou,douzinn shop,d0  haisinn.vu04y94 yasumijikann
+check|記得|寿司|，|晚餐|_|ok|沒問題|。|ございます|update|。|日本|_|旅行|。|資料|folder|_|這個|_|bug|_|很好	check|ru42k6|sushi|,|j03h0 | |ok|ao6jp4wu6|.|gozaimasu|update|.|b41p3| |xm3vu/6|.|siryou|folder| |5k4ek7| |bug| |cp3cl3	checkru42k6sushi,j03h0  okao6jp4wu6.gozaimasuupdate.b41p3 xm3vu/6.siryoufolder 5k4ek7 bug cp3cl3
+明天|_|review|_|資料|，|update|_|進度|_|manager|稿|_|問題|頑張って|_|年紀|大了|。|linker|已|_|等|_|reply	au/6wu0 | |review| |siryou|,|update| |rup42j4| |manager|el3| |jp4wu6|gannbatte| |su06ru4|284xk7|.|linker|u3| |2/3| |reply	au/6wu0  review siryou,update rup42j4 managerel3 jp4wu6gannbatte su06ru4284xk7.linkeru3 2/3 reply
+開發|_|deployserver|_|面接|_|安排|好了|。|謝謝|_|你好|。|，|寿司|一下|notebook|，|這個|。|解決	d9 z8 | |deployserver| |mennsetu| |0 q96|cl3xk7|.|vu,4vu,4| |su3cl3|.|,|sushi|u vu84|notebook|,|5k4ek7|.|ru,3rm,6	d9 z8  deployserver mennsetu 0 q96cl3xk7.vu,4vu,4 su3cl3.,sushiu vu84notebook,5k4ek7.ru,3rm,6
+天天見面|_|六七個人|_|書類|_|交出去了|。|楽しい|問題|。|engine|買|_|這個|good|あります	wu0 wu0 ru04au04| |xu.4fu ek4bp6| |shorui| |rul tj fm4xk7|.|tanoshii|jp4wu6|.|engine|a93| |5k4ek7|good|arimasu	wu0 wu0 ru04au04 xu.4fu ek4bp6 shorui rul tj fm4xk7.tanoshiijp4wu6.enginea93 5k4ek7goodarimasu
+記得|_|commit|_|訊息|。|一下|_|notebook|_|です|。|アニメ|這個|_|因為|，|會議|_|cronjob|_|沒跑|_|天天見面	ru42k6| |commit| |vmp4vu6|.|u vu84| |notebook| |desu|.|anime|5k4ek7| |up jo4|,|cjo4u4| |cronjob| |ai4ql3| |wu0 wu0 ru04au04	ru42k6 commit vmp4vu6.u vu84 notebook desu.anime5k4ek7 up jo4,cjo4u4 cronjob ai4ql3 wu0 wu0 ru04au04
+買|失礼|，|會議|，|生誕|live|_|コーヒー|。|button|買|，|開|大丈夫|_|that|用|，|仕事|report|工作	a93|shitsurei|,|cjo4u4|,|seitann|live| |ko-hi-|.|button|a93|,|d9 |daijoubu| |that|m/4|,|shigoto|report|ej/ yji4	a93shitsurei,cjo4u4,seitannlive ko-hi-.buttona93,d9 daijoubu thatm/4,shigotoreportej/ yji4
+have|你|_|什麼|，|運動|。|午後|_|demo|_|準備|_|push|_|討論|_|写真|_|server|友達|_|updatecheck	have|su3| |gk6ai7|,|mp42j/4|.|gogo| |demo| |5jp31o4| |push| |wl3xjp4| |shashinn| |server|tomodachi| |updatecheck	havesu3 gk6ai7,mp42j/4.gogo demo 5jp31o4 push wl3xjp4 shashinn servertomodachi updatecheck
+睡覺|_|請求書|_|寄過去|_|加班|_|電話|config|，|運動|，|確認|_|have|你|_|みんなに奢ってあげる	gjo4rul4| |seikyuusho| |ru4eji4fm4| |ru8 10 | |dennwa|config|,|mp42j/4|,|fm,4bp4| |have|su3| |minnnaniogotteageru	gjo4rul4 seikyuusho ru4eji4fm4 ru8 10  dennwaconfig,mp42j/4,fm,4bp4 havesu3 minnnaniogotteageru
+完成今天|_|amazing|。|放心|_|上傳|_|ありがとう|_|https|_|憑證|_|過期|，|原作|_|小說|_|banner|改	j06t/6rup wu0 | |amazing|.|z;4vup | |g;4tj06| |arigatou| |https| |qu/65/4| |eji4fu6|,|m06yji4| |vul3gji | |banner|e93	j06t/6rup wu0  amazing.z;4vup  g;4tj06 arigatou https qu/65/4 eji4fu6,m06yji4 vul3gji  bannere93
+楽しい|_|美味しい|_|sprint|_|結束|_|お疲れ|。|each|年|。|再見|_|功能|_|確認|_|電車|_|search|，|工作|merge|写真	tanoshii| |oishii| |sprint| |ru,6gj4| |otukare|.|each|su06|.|y94ru04| |ej/ s/6| |fm,4bp4| |dennsha| |search|,|ej/ yji4|merge|shashinn	tanoshii oishii sprint ru,6gj4 otukare.eachsu06.y94ru04 ej/ s/6 fm,4bp4 dennsha search,ej/ yji4mergeshashinn
+format|去|，|worker|用|_|number|稿|_|進去|看看|_|good|沒問題|です|。|先生|page|，|便當|_|還是|。|系統	format|fm4|,|worker|m/4| |number|el3| |rup4fm4|d04d04| |good|ao6jp4wu6|desu|.|sennsei|page|,|1u042; | |c96g4|.|vu4wj/3	formatfm4,workerm/4 numberel3 rup4fm4d04d04 goodao6jp4wu6desu.sennseipage,1u042;  c96g4.vu4wj/3
+火車|_|頑張って|_|client|。|mail|_|寄出去了|，|什麼|_|更新|。|draft|_|合約|_|習慣|_|兩三年前	cji3tk | |gannbatte| |client|.|mail| |ru4tj fm4xk7|,|gk6ai7| |e/ vup |.|draft| |ck6m, | |vu6ej04| |xu;3n0 su06fu06	cji3tk  gannbatte client.mail ru4tj fm4xk7,gk6ai7 e/ vup .draft ck6m,  vu6ej04 xu;3n0 su06fu06
+你就知道|，|config|時間|。|期末考|_|六七個人|_|push|_|討論|_|写真|_|download|_|確認	su3ru.45 2l4|,|config|g6ru0 |.|fu6ai4dl3| |xu.4fu ek4bp6| |push| |wl3xjp4| |shashinn| |download| |fm,4bp4	su3ru.45 2l4,configg6ru0 .fu6ai4dl3 xu.4fu ek4bp6 push wl3xjp4 shashinn download fm,4bp4
+友達|_|電話|。|加班|，|討論|_|build|_|keeper|要|，|麵包|_|時間|merge|_|push|_|上去|。|あまり乗り気じゃない	tomodachi| |dennwa|.|ru8 10 |,|wl3xjp4| |build| |keeper|ul |,|au041l | |jikann|merge| |push| |g;4fm4|.|amarinorikijanai	tomodachi dennwa.ru8 10 ,wl3xjp4 build keeperul ,au041l  jikannmerge push g;4fm4.amarinorikijanai
+電話|call|_|午後|_|demo|_|準備|_|確認|_|budget|_|見積|_|出來了|_|ファイル|。|返事|mail|_|工作|merge|写真	dennwa|call| |gogo| |demo| |5jp31o4| |fm,4bp4| |budget| |mitumo| |tj x94xk7| |fairu|.|hennzi|mail| |ej/ yji4|merge|shashinn	dennwacall gogo demo 5jp31o4 fm,4bp4 budget mitumo tj x94xk7 fairu.hennzimail ej/ yji4mergeshashinn
+六七個人|，|好|_|測試|。|已經|ございます|update|_|merge|天|，|那個|_|release|_|延期|_|時間|_|時間|_|merge	xu.4fu ek4bp6|,|cl3| |hk4g4|.|u3ru/ |gozaimasu|update| |merge|wu0 |,|s84ek7| |release| |u06fu6| |g6ru0 | |jikann| |merge	xu.4fu ek4bp6,cl3 hk4g4.u3ru/ gozaimasuupdate mergewu0 ,s84ek7 release u06fu6 g6ru0  jikann merge
+when|目|，|render|好|_|report|工作|会議|，|good|_|沒問題|_|hello|。|網路|。|amazing|_|記得|_|commit|_|訊息	when|aj4|,|render|cl3| |report|ej/ yji4|kaigi|,|good| |ao6jp4wu6| |hello|.|j;3xj4|.|amazing| |ru42k6| |commit| |vmp4vu6	whenaj4,rendercl3 reportej/ yji4kaigi,good ao6jp4wu6 hello.j;3xj4.amazing ru42k6 commit vmp4vu6
+特典|_|很讚|。|附上|_|invoice|，|header|改|_|お願い|開|。|go|出去|，|draft|_|合約|_|ok|走走|，|admin|要	tokutenn| |cp3y04|.|zj4g;4| |invoice|,|header|e93| |onegai|d9 |.|go|tj fm4|,|draft| |ck6m, | |ok|y.3y.3|,|admin|ul4	tokutenn cp3y04.zj4g;4 invoice,headere93 onegaid9 .gotj fm4,draft ck6m,  oky.3y.3,adminul4
+あまり乗り気じゃない|。|練習|log|_|and|早|。|完成|こんにちは|_|需要可以|。|你想太多|，|你好|@	amarinorikijanai|.|rennshuu|log| |and|yl3|.|j06t/6|konnnichiha| |vm ul4dk3u3|.|su3vu;3w942ji |,|su3cl3|@	amarinorikijanai.rennshuulog andyl3.j06t/6konnnichiha vm ul4dk3u3.su3vu;3w942ji ,su3cl3@
+他很強|，|友達|list|_|ありがとうございました|_|玩|_|乙女ゲーム|_|再六天|。|アニメ|這個|，|test|_|わかりました|_|買	w8 cp3fu;6|,|tomodati|list| |arigatougozaimasita| |j04| |otomege-mu| |y94xu.4wu0 |.|anime|5k4ek7|,|test| |wakarimashita| |a93	w8 cp3fu;6,tomodatilist arigatougozaimasita j04 otomege-mu y94xu.4wu0 .anime5k4ek7,test wakarimashita a93
+緊張|，|want|你|，|今天|_|明日|_|review|楽しい|。|engine|買|，|我看見那隻鳥|_|order|稿|。|朋友	rup35; |,|want|su3|,|rup wu0 | |ashita| |review|tanoshii|.|engine|a93|,|ji3d04ru04s8 5 sul3| |order|el3|.|q/6u.3	rup35; ,wantsu3,rup wu0  ashita reviewtanoshii.enginea93,ji3d04ru04s8 5 sul3 orderel3.q/6u.3
+respond|天|，|我明天就過去|。|開好|，|我看見那隻鳥|。|performance|。|play|你|，|現在|_|可以|_|merge	respond|wu0 |,|ji3au/6wu0 ru.4eji4fm4|.|d9 cl3|,|ji3d04ru04s8 5 sul3|.|performance|.|play|su3|,|vu04y94| |dk3u3| |merge	respondwu0 ,ji3au/6wu0 ru.4eji4fm4.d9 cl3,ji3d04ru04s8 5 sul3.performance.playsu3,vu04y94 dk3u3 merge
+こんにちは|_|明天|_|configreport|。|search|ありがとう|_|上傳|_|_|已經|_|logger|上|_|漫画|_|很好看	konnnichiha| |au/6wu0 | |configreport|.|search|arigatou| |g;4tj06| | |u3ru/ | |logger|g;4| |mannga| |cp3cl3d0 	konnnichiha au/6wu0  configreport.searcharigatou g;4tj06  u3ru/  loggerg;4 mannga cp3cl3d0 
+route|你|，|記得這個|_|フォーク|。|去|_|秋葉原|_|質問|box|_|review|_|測試|。|六點要下班|_|兩三年前	route|su3|,|ru42k65k4ek7| |fo-ku|.|fm4| |akihabara| |situmonn|box| |review| |hk4g4|.|xu.42u03ul4vu8410 | |xu;3n0 su06fu06	routesu3,ru42k65k4ek7 fo-ku.fm4 akihabara situmonnbox review hk4g4.xu.42u03ul4vu8410  xu;3n0 su06fu06
+年紀|大了|，|買|data|_|六點要下班|，|server|買|，|你好|。|_|come|你|。|アドバイスを聞いていれば|。|那個|_|release|_|延期	su06ru4|284xk7|,|a93|data| |xu.42u03ul4vu8410 |,|server|a93|,|su3cl3|.| |come|su3|.|adobaisuwokiiteireba|.|s84ek7| |release| |u06fu6	su06ru4284xk7,a93data xu.42u03ul4vu8410 ,servera93,su3cl3. comesu3.adobaisuwokiiteireba.s84ek7 release u06fu6
+照片|_|then|去|_|一下|_|notebook|_|です|。|応援|_|上映|。|cronjob|_|沒跑|_|number|目|，|見面好吃	5l4qu04| |then|fm4| |u vu84| |notebook| |desu|.|ouenn| |g;4u/4|.|cronjob| |ai4ql3| |number|aj4|,|ru04au04cl3t 	5l4qu04 thenfm4 u vu84 notebook desu.ouenn g;4u/4.cronjob ai4ql3 numberaj4,ru04au04cl3t 
+我進去看看|_|アニメ|這個|，|単位を落とされてしまう|。|take|你|。|握手会|_|要抽選|_|hello|.|_|明天|_|記得	ji3rup4fm4d04d04| |anime|5k4ek7|,|tanniwootosareteshimau|.|take|su3|.|akushukai| |ul t. vm03| |hello|.| |au/6wu0 | |ru42k6	ji3rup4fm4d04d04 anime5k4ek7,tanniwootosareteshimau.takesu3.akushukai ul t. vm03 hello. au/6wu0  ru42k6
+hello|.|.|.|_|剩下|_|test|_|還沒跑|。|兩個|ramen|，|電車|search|，|這個|_|bug|_|很好|_|sensor|稿|_|見面|_|email	hello|.|.|.| |g/4vu84| |test| |c96ai4ql3|.|xu;3ek4|ramen|,|dennsha|search|,|5k4ek7| |bug| |cp3cl3| |sensor|el3| |ru04au04| |email	hello... g/4vu84 test c96ai4ql3.xu;3ek4ramen,dennshasearch,5k4ek7 bug cp3cl3 sensorel3 ru04au04 email
+check|_|meeting|。|header|好|。|server|_|再起動|_|一下|。|明天|_|meeting|_|寿司|。|print|_|兩份|_|地図|view	check| |meeting|.|header|cl3|.|server| |saikidou| |u vu84|.|au/6wu0 | |meeting| |sushi|.|print| |xu;3zp4| |tizu|view	check meeting.headercl3.server saikidou u vu84.au/6wu0  meeting sushi.print xu;3zp4 tizuview
+密碼|，|number|用|_|コーヒー|。|明日|記得|。|報告書|_|寫完了|，|郵便|_|寄到了|，|改成|_|draft	au4a83|,|number|m/4| |ko-hi-|.|ashita|ru42k6|.|houkokusho| |vu,3j06xk7|,|yuubinn| |ru42l4xk7|,|e93t/6| |draft	au4a83,numberm/4 ko-hi-.ashitaru42k6.houkokusho vu,3j06xk7,yuubinn ru42l4xk7,e93t/6 draft
+banner|改|_|pipeline|_|過了|_|parser|去|_|会議|_|改到|_|friday|，|記得|_|backup|。|電話|_|仕事|。|已經|ございます|update	banner|e93| |pipeline| |eji4xk7| |parser|fm4| |kaigi| |e932l4| |friday|,|ru42k6| |backup|.|dennwa| |shigoto|.|u3ru/ |gozaimasu|update	bannere93 pipeline eji4xk7 parserfm4 kaigi e932l4 friday,ru42k6 backup.dennwa shigoto.u3ru/ gozaimasuupdate
+問題|server|友達|，|生誕|live|。|search|天|_|name|開|。|可以|_|休み|_|module|要|。|餐廳|_|food	jp4wu6|server|tomodachi|,|seitann|live|.|search|wu0 | |name|d9 |.|dk3u3| |yasumi| |module|ul |.|h0 wu/ | |food	jp4wu6servertomodachi,seitannlive.searchwu0  named9 .dk3u3 yasumi moduleul .h0 wu/  food
+吃飯|，|学校|_|hello|_|映画|trailer|_|commit|問題|頑張って|_|world|_|今天|_|明日|_|commit|_|問題	t z04|,|gakkou| |hello| |eiga|trailer| |commit|jp4wu6|gannbatte| |world| |rup wu0 | |ashita| |commit| |jp4wu6	t z04,gakkou hello eigatrailer commitjp4wu6gannbatte world rup wu0  ashita commit jp4wu6
+辛苦|_|computer|_|學生|_|專案|_|伺服器|，|那台|_|server|_|重開|_|明天見|桜|_|merge|_|写真|_|修改	vup dj3| |computer| |vm,6g/ | |5j0 04| |n4zj6fu4|,|s84w96| |server| |5j/4d9 | |au/6wu0 ru04|sakura| |merge| |shashinn| |vu. e93	vup dj3 computer vm,6g/  5j0 04 n4zj6fu4,s84w96 server 5j/4d9  au/6wu0 ru04sakura merge shashinn vu. e93
+主題歌|_|超好聽|_|明天|_|記得|。|can|改|，|幫忙|_|debug|_|一下|_|bug|_|一下|_|あります|_|build|電車	shudaika| |tl cl3wu/ | |au/6wu0 | |ru42k6|.|can|e93|,|1; a;6| |debug| |u vu84| |bug| |u vu84| |arimasu| |build|dennsha	shudaika tl cl3wu/  au/6wu0  ru42k6.cane93,1; a;6 debug u vu84 bug u vu84 arimasu builddennsha
+review|楽しい|。|修改上傳|_|何度も直されても|。|わかりました|_|file|_|target|要|。|やすみじかん	review|tanoshii|.|vu. e93g;4tj06| |nanndomonaosaretemo|.|wakarimashita| |file| |target|ul4|.|yasumijikann	reviewtanoshii.vu. e93g;4tj06 nanndomonaosaretemo.wakarimashita file targetul4.yasumijikann
+commit|問題|頑張って|。|for|開|，|cronjob|_|沒跑|。|cronjob|_|沒跑|。|他很強|。|player|買|，|電話|call	commit|jp4wu6|gannbatte|.|for|d9 |,|cronjob| |ai4ql3|.|cronjob| |ai4ql3|.|w8 cp3fu;6|.|player|a93|,|dennwa|call	commitjp4wu6gannbatte.ford9 ,cronjob ai4ql3.cronjob ai4ql3.w8 cp3fu;6.playera93,dennwacall
+美味しい|資料|client|_|play|你|。|cache|_|清一下|，|你好|@|_|手機|_|這個|_|backup|去|_|router|要|。|資料|_|client|_|電話	oishii|y xul4|client| |play|su3|.|cache| |fu/ u vu84|,|su3cl3|@| |g.3ru | |5k4ek7| |backup|fm4| |router|ul |.|y xul4| |client| |dennwa	oishiiy xul4client playsu3.cache fu/ u vu84,su3cl3@ g.3ru  5k4ek7 backupfm4 routerul .y xul4 client dennwa
+backup|買|。|可以|_|休み|_|merge|_|写真|_|修改|_|需求|。|那件事|_|時間|push|。|あります|_|test|_|好吃	backup|a93|.|dk3u3| |yasumi| |merge| |shashinn| |vu. e93| |vm fu.6|.|s8 ru04g4| |g6ru0 |push|.|arimasu| |test| |cl3t 	backupa93.dk3u3 yasumi merge shashinn vu. e93 vm fu.6.s8 ru04g4 g6ru0 push.arimasu test cl3t 
+特典|_|很讚|，|安排|_|interview|。|今天|_|明日|_|check|_|記得|。|hello|,|_|記得|寿司|_|buggood|。|書類|_|交出去了	tokutenn| |cp3y04|,|0 q96| |interview|.|rup wu0 | |ashita| |check| |ru42k6|.|hello|,| |ru42k6|sushi| |buggood|.|shorui| |rul tj fm4xk7	tokutenn cp3y04,0 q96 interview.rup wu0  ashita check ru42k6.hello, ru42k6sushi buggood.shorui rul tj fm4xk7
+學生|，|handler|目|，|剩下|_|test|_|還沒跑|_|時間|limit|，|友達|list|，|報告|_|同人誌|_|買了三本|_|小明想要兩個|，|排|_|整理券|。|好吃|_|お願い|_|介面|，|sensor|稿|，|status|要|_|upload|_|報告	vm,6g/ |,|handler|aj4|,|g/4vu84| |test| |c96ai4ql3| |zikann|limit|,|tomodati|list|,|1l4el4| |douzinnsi| |a93xk7n0 1p3| |vul3au/6vu;3ul4xu;3ek4|,|q96| |seirikenn|.|cl3t | |onegai| |ru,4au04|,|sensor|el3|,|status|ul4| |upload| |1l4el4	vm,6g/ ,handleraj4,g/4vu84 test c96ai4ql3 zikannlimit,tomodatilist,1l4el4 douzinnsi a93xk7n0 1p3 vul3au/6vu;3ul4xu;3ek4,q96 seirikenn.cl3t  onegai ru,4au04,sensorel3,statusul4 upload 1l4el4
+這個|。|這個|_|bug|_|很好|_|我進辦公室|_|save|_|檔案|。|notebook|_|test|_|我喜歡|寿司|，|file|_|失礼|。|旅行|plan|，|午餐|_|環境|_|等|_|新刊|，|推薦|_|這個|_|遊戲|_|天氣|。|test|_|わかりました|_|買	5k4ek7|.|5k4ek7| |bug| |cp3cl3| |ji3rup4104ej/ g4| |save| |2;304|.|notebook| |test| |ji3vu3cj0 |sushi|,|file| |shitsurei|.|ryokou|plan|,|j3h0 | |cj06ru/4| |2/3| |sinnkann|,|wjo ru04| |5k4ek7| |u.6vu4| |wu0 fu4|.|test| |wakarimashita| |a93	5k4ek7.5k4ek7 bug cp3cl3 ji3rup4104ej/ g4 save 2;304.notebook test ji3vu3cj0 sushi,file shitsurei.ryokouplan,j3h0  cj06ru/4 2/3 sinnkann,wjo ru04 5k4ek7 u.6vu4 wu0 fu4.test wakarimashita a93
+契約|file|_|record|認|_|value|稿|。|ありがとうございました|。|notebook|_|です|。|buffer|天|_|data|_|大丈夫|_|測試|_|runner|改|_|あります|test|_|一起|_|東京|_|好玩|_|print|_|兩份|。|剛剛|_|deploy|_|成功|。|這個|_|query|_|很慢	keiyaku|file| |record|bp4| |value|el3|.|arigatougozaimasita|.|notebook| |desu|.|buffer|wu0 | |data| |daijoubu| |hk4g4| |runner|e93| |arimasu|test| |u fu3| |2j/ ru/ | |cl3j06| |print| |xu;3zp4|.|e; e; | |deploy| |seikou|.|5k4ek7| |query| |cp3a04	keiyakufile recordbp4 valueel3.arigatougozaimasita.notebook desu.bufferwu0  data daijoubu hk4g4 runnere93 arimasutest u fu3 2j/ ru/  cl3j06 print xu;3zp4.e; e;  deploy seikou.5k4ek7 query cp3a04
+捷運|。|webhook|_|沒觸發|_|環境|_|那個|_|job|_|失敗|。|viewer|改|_|format|去|_|主管|_|commit|改|，|migrate|用|。|email|買|。|submit|_|表單|，|message|認|。|時間|_|討論|。|password|_|license|_|到期|，|希望|，|什麼	ru,6mp4|.|webhook| |ai4tj4z8 | |cj06ru/4| |s84ek7| |job| |g 194|.|viewer|e93| |format|fm4| |5j3ej03| |commit|e93|,|migrate|m/4|.|email|a93|.|submit| |1ul320 |,|message|bp4|.|jikann| |wl3xjp4|.|password| |license| |2l4fu6|,|vu j;4|,|gk6ai7	ru,6mp4.webhook ai4tj4z8  cj06ru/4 s84ek7 job g 194.viewere93 formatfm4 5j3ej03 commite93,migratem/4.emaila93.submit 1ul320 ,messagebp4.jikann wl3xjp4.password license 2l4fu6,vu j;4,gk6ai7
+辞書|lookup|，|review|_|文件|_|editor|要|。|楽しい|deploy|_|出張|_|下週|。|commit|美味しい|資料|_|年紀|大了|，|設定|，|what|你|_|this|開|_|番号|input|。|file|開|大丈夫|，|player|買|，|早安|_|通知|_|team|_|經過那個路口	zisho|lookup|,|review| |jp6ru04| |editor|ul |.|tanoshii|deploy| |shucchou| |vu845. |.|commit|oishii|y xul4| |su06ru4|284xk7|,|gk42u/4|,|what|su3| |this|d9 | |banngou|input|.|file|d9 |daijoubu|,|player|a93|,|yl30 | |wj/ 5 | |team| |ru/ eji4s8 ek4xj4d.3	zisholookup,review jp6ru04 editorul .tanoshiideploy shucchou vu845. .commitoishiiy xul4 su06ru4284xk7,gk42u/4,whatsu3 thisd9  banngouinput.filed9 daijoubu,playera93,yl30  wj/ 5  team ru/ eji4s8 ek4xj4d.3
+今日|test|。|data|_|大丈夫|_|測試|，|先|_|merge|_|確認|_|writer|買|_|特典|_|很讚|，|先|_|merge|_|確認|_|生誕|沒問題|，|網路|。|楽しい|_|deploy|_|資料|_|想想看再決定|，|質問|box|，|widget|目|。|time|開	kyou|test|.|data| |daijoubu| |hk4g4|,|vu0 | |merge| |kakuninn| |writer|a93| |tokutenn| |cp3y04|,|vu0 | |merge| |kakuninn| |seitann|ao6jp4wu6|,|j;3xj4|.|tanoshii| |deploy| |y xul4| |vu;3vu;3d04y94rm,62u/4|,|situmonn|box|,|widget|aj4|.|time|d9 	kyoutest.data daijoubu hk4g4,vu0  merge kakuninn writera93 tokutenn cp3y04,vu0  merge kakuninn seitannao6jp4wu6,j;3xj4.tanoshii deploy y xul4 vu;3vu;3d04y94rm,62u/4,situmonnbox,widgetaj4.timed9 
+明天|_|call|_|客戶|，|下午|_|会議|確認|login|，|写真|修改|_|deploy|資料|_|沒問題見面|，|仕事|_|report|_|時間|_|push|_|会議|_|一起|_|あります|_|です|_|会議|build|修改|_|好吃|_|お願い|_|照片|_|我進辦公室	au/6wu0 | |call| |dk4cj4|,|vu84j3| |kaigi|fm,4bp4|login|,|shashinn|vu. e93| |deploy|y xul4| |ao6jp4wu6ru04au04|,|shigoto| |report| |g6ru0 | |push| |kaigi| |u fu3| |arimasu| |desu| |kaigi|build|vu. e93| |cl3t | |onegai| |5l4qu04| |ji3rup4104ej/ g4	au/6wu0  call dk4cj4,vu84j3 kaigifm,4bp4login,shashinnvu. e93 deployy xul4 ao6jp4wu6ru04au04,shigoto report g6ru0  push kaigi u fu3 arimasu desu kaigibuildvu. e93 cl3t  onegai 5l4qu04 ji3rup4104ej/ g4
+world|_|今天|_|明日|。|picker|買|_|server|_|再起動|_|一下|，|明天見|桜|。|request|成|，|時間|limit|，|他很強|_|data|_|好|_|楽しい|。|明日|_|記得|_|bug|_|cancel|_|訂單|。|見面|わかりました|_|merge|確認	world| |rup wu0 | |ashita|.|picker|a93| |server| |saikidou| |u vu84|,|au/6wu0 ru04|sakura|.|request|t/6|,|zikann|limit|,|w8 cp3fu;6| |data| |cl3| |tanoshii|.|ashita| |ru42k6| |bug| |cancel| |2u/420 |.|ru04au04|wakarimashita| |merge|fm,4bp4	world rup wu0  ashita.pickera93 server saikidou u vu84,au/6wu0 ru04sakura.requestt/6,zikannlimit,w8 cp3fu;6 data cl3 tanoshii.ashita ru42k6 bug cancel 2u/420 .ru04au04wakarimashita mergefm,4bp4
+沒問題|test|，|他想了想|，|queue|_|塞住了|，|index|要|。|辞書|lookup|_|所以|，|幫我|_|book|_|會議室|，|他見過你|_|for|開|。|会社|profile|，|今天|_|明日|_|notebook|_|test|。|alert|_|一直響|_|質問|box|，|明日|_|記得|_|bug	ao6jp4wu6|test|,|w8 vu;3xk7vu;3|,|queue| |n9 5j4xk7|,|index|ul4|.|zisho|lookup| |nji3u3|,|1; ji3| |book| |cjo4u4g4|,|w8 ru04eji4su3| |for|d9 |.|kaisha|profile|,|rup wu0 | |ashita| |notebook| |test|.|alert| |u 56vu;3| |situmonn|box|,|ashita| |ru42k6| |bug	ao6jp4wu6test,w8 vu;3xk7vu;3,queue n9 5j4xk7,indexul4.zisholookup nji3u3,1; ji3 book cjo4u4g4,w8 ru04eji4su3 ford9 .kaishaprofile,rup wu0  ashita notebook test.alert u 56vu;3 situmonnbox,ashita ru42k6 bug
+then|去|，|漫画|_|很好看|。|good|_|notebook|_|runner|改|_|what|成|，|update|_|進度|_|ありがとうございました|_|sso|_|登入失敗|_|file|失礼|好|。|確認|_|login|_|学校|。|今天就這樣|。|hello|,|_|bug|一下|，|server|_|再起動|_|一下	then|fm4|,|mannga| |cp3cl3d0 |.|good| |notebook| |runner|e93| |what|t/6|,|update| |rup42j4| |arigatougozaimasita| |sso| |2/ bj4g 194| |file|shitsurei|cl3|.|fm,4bp4| |login| |gakkou|.|rup wu0 ru.45k4u;4|.|hello|,| |bug|u vu84|,|server| |saikidou| |u vu84	thenfm4,mannga cp3cl3d0 .good notebook runnere93 whatt/6,update rup42j4 arigatougozaimasita sso 2/ bj4g 194 fileshitsureicl3.fm,4bp4 login gakkou.rup wu0 ru.45k4u;4.hello, bugu vu84,server saikidou u vu84
+
+## zh_words ｜ 主測：選字 ｜ 來源：人工
+# 注音常用詞（第十一組）：100 個日常與工作用詞
+#
+# 這一組**只有中文**，測的是選詞層而不是切點——「打得出這個詞嗎」。
+# 前十組都是混合語言，注音段多半只有一兩個字，量不到同音詞排序。
+#
+# 2026-09-01 加入。
+#
+# 【詞怎麼來的】人工寫的，依領域分佈：時間、招呼、工作、技術、
+# 生活、食物、交通、情緒、虛詞、名物。**不從詞庫抽樣**——抽樣只會
+# 抽到詞庫已經收好的東西，測不出真實使用的樣子（同 mixed_otaku 的
+# 說明）。刻意放了同音陷阱：一般／一班、測試／策士、東京／東經、
+# 休息／修習、這個、可以。
+#
+# 【按鍵怎麼來的】**程式產生，不手敲**——從 BPMFMappings.txt 的
+# 「詞層讀音」推導（`data/` 的詞庫檔＋ keymap.rs 的鍵位表）。
+# 逐字查會踩多音字：「下午」的「下」在別的詞裡是 ㄒㄧㄚˋ 也可能是
+# ㄒㄧㄚˊ，只有詞層讀音才知道這個詞裡讀哪個。之前的 100 組測資
+# 就是因為手敲注音而毀掉，不重蹈覆轍。
+#
+# 產生器：scratchpad 的 gen_words.py（詞 -> 詞層讀音 -> 鍵位）。
+# 產出後用 check_testdata 驗過，100 列全部文字與按鍵對得上。
+#
+#
+#   第二、三欄的空白是**真的空白**（注音的一聲），不是符號
+今天	rup wu0 	rup wu0 
+明天	au/6wu0 	au/6wu0 
+昨天	yji6wu0 	yji6wu0 
+下午	vu84j3	vu84j3
+週末	5. ai4	5. ai4
+現在	vu04y94	vu04y94
+以後	u3c.4	u3c.4
+剛才	e; h96	e; h96
+早安	yl30 	yl30 
+晚安	j030 	j030 
+謝謝	vu,4vu,4	vu,4vu,4
+對不起	2jo41j4fu3	2jo41j4fu3
+再見	y94ru04	y94ru04
+會議	cjo4u4	cjo4u4
+報告	1l4el4	1l4el4
+專案	5j0 04	5j0 04
+需求	vm fu.6	vm fu.6
+討論	wl3xjp4	wl3xjp4
+確認	fm,4bp4	fm,4bp4
+完成	j06t/6	j06t/6
+檔案	2;304	2;304
+系統	vu4wj/3	vu4wj/3
+問題	jp4wu6	jp4wu6
+解決	ru,3rm,6	ru,3rm,6
+主管	5j3ej03	5j3ej03
+同事	wj/6g4	wj/6g4
+加班	ru8 10 	ru8 10 
+出差	tj t9 	tj t9 
+上班	g;410 	g;410 
+下班	vu8410 	vu8410 
+測試	hk4g4	hk4g4
+開發	d9 z8 	d9 z8 
+網路	j;3xj4	j;3xj4
+伺服器	n4zj6fu4	n4zj6fu4
+版本	1031p3	1031p3
+設定	gk42u/4	gk42u/4
+更新	e/ vup 	e/ vup 
+錯誤	hji4j4	hji4j4
+功能	ej/ s/6	ej/ s/6
+介面	ru,4au04	ru,4au04
+密碼	au4a83	au4a83
+帳號	5;4cl4	5;4cl4
+登入	2/ bj4	2/ bj4
+搜尋	n. vmp6	n. vmp6
+吃飯	t z04	t z04
+睡覺	gjo4rul4	gjo4rul4
+運動	mp42j/4	mp42j/4
+洗澡	vu3yl3	vu3yl3
+打掃	283nl3	283nl3
+休息	vu. vu6	vu. vu6
+出門	tj ap6	tj ap6
+回家	cjo6ru8 	cjo6ru8 
+習慣	vu6ej04	vu6ej04
+早餐	yl3h0 	yl3h0 
+午餐	j3h0 	j3h0 
+晚餐	j03h0 	j03h0 
+便當	1u042; 	1u042; 
+水果	gjo3eji3	gjo3eji3
+蛋糕	204el 	204el 
+麵包	au041l 	au041l 
+捷運	ru,6mp4	ru,6mp4
+公車	ej/ tk 	ej/ tk 
+火車	cji3tk 	cji3tk 
+開車	d9 tk 	d9 tk 
+機場	ru t;3	ru t;3
+車站	tk 504	tk 504
+旅行	xm3vu/6	xm3vu/6
+開心	d9 vup 	d9 vup 
+生氣	g/ fu4	g/ fu4
+緊張	rup35; 	rup35; 
+放心	z;4vup 	z;4vup 
+辛苦	vup dj3	vup dj3
+希望	vu j;4	vu j;4
+擔心	20 vup 	20 vup 
+一般	u 10 	u 10 
+一起	u fu3	u fu3
+因為	up jo4	up jo4
+所以	nji3u3	nji3u3
+但是	204g4	204g4
+應該	u/ e9 	u/ e9 
+還是	c96g4	c96g4
+而且	-6fu,3	-6fu,3
+如果	bj6eji3	bj6eji3
+這個	5k4ek7	5k4ek7
+什麼	gk6ai7	gk6ai7
+怎麼	yk3ai7	yk3ai7
+電話	2u04cj84	2u04cj84
+手機	g.3ru 	g.3ru 
+網站	j;3504	j;3504
+照片	5l4qu04	5l4qu04
+影片	u/3qu04	u/3qu04
+音樂	up m,4	up m,4
+天氣	wu0 fu4	wu0 fu4
+環境	cj06ru/4	cj06ru/4
+朋友	q/6u.3	q/6u.3
+家人	ru8 bp6	ru8 bp6
+學生	vm,6g/ 	vm,6g/ 
+醫院	u m04	u m04
+銀行	up6c;6	up6c;6
+超市	tl g4	tl g4
+
+
+## zh_sentences ｜ 主測：選字 ｜ 來源：生成（gen_sent.py／mkkeys --sent，人工斷詞）
+# 注音長句（第十二組）：50 句純中文，測分詞
+#
+# 【為什麼要這一組】前面十一組的注音段有 93.3% 只有 1～2 個音節——
+# 混合語言輸入天然會把中文切碎，而 1～2 個音節根本沒有分詞歧異。
+# 選詞層的分詞演算法（貪婪最長匹配 vs 全域最佳化）在那種長度上
+# 量不出差別。這組專門補這個盲點：每句 7～14 個音節連續不斷。
+#
+# 2026-09-01 加入，起因是研究 libchewing 的轉換引擎。
+#
+# 【句子怎麼來的】人工寫的日常與工作句，**不從詞庫抽樣**。
+#
+# 【按鍵怎麼來的】程式產生。先人工斷詞（空白分隔），每個詞查
+# BPMFMappings 的詞層讀音；單字只接受「只有一種讀音」的，多音字
+# 一律要標註（例如「的」寫成 的(ㄉㄜ˙)）否則產生器直接報錯——不猜。
+# 50 句裡有 16 句因為多音字被擋下來過（要／有／會／多／看／信／
+# 太／好／把／難／說），標註後才產出。
+#
+# 產生器：scratchpad 的 gen_sent.py。產出後用 check_testdata 驗過。
+#
+#
+#   第二、三欄的空白是**真的空白**（注音的一聲），不是符號
+我今天早上去公司開會	ji3rup wu0 yl3g;4fm4ej/ n d9 cjo4	ji3rup wu0 yl3g;4fm4ej/ n d9 cjo4
+這個專案的進度有點落後	5k4ek75j0 042k7rup42j4u.32u03xji4c.4	5k4ek75j0 042k7rup42j4u.32u03xji4c.4
+明天下午要跟客戶討論需求	au/6wu0 vu84j3ul4ep dk4cj4wl3xjp4vm fu.6	au/6wu0 vu84j3ul4ep dk4cj4wl3xjp4vm fu.6
+請幫我確認這份資料有沒有問題	fu/31; ji3fm,4bp45k4zp4y xul4u.3ao6u.3jp4wu6	fu/31; ji3fm,4bp45k4zp4y xul4u.3ao6u.3jp4wu6
+系統更新之後效能明顯改善	vu4wj/3e/ vup 5 c.4vul4s/6au/6vu03e93g04	vu4wj/3e/ vup 5 c.4vul4s/6au/6vu03e93g04
+我們需要重新設計這個功能的介面	ji3ap6vm ul4tj/6vup gk4ru45k4ek7ej/ s/62k7ru,4au04	ji3ap6vm ul4tj/6vup gk4ru45k4ek7ej/ s/62k7ru,4au04
+昨天的會議記錄已經寄給大家	yji6wu0 2k7cjo4u4ru4xj4u3ru/ ru4eo3284ru8 	yji6wu0 2k7cjo4u4ru4xj4u3ru/ ru4eo3284ru8 
+如果有任何問題隨時跟我聯絡	bj6eji3u.3bp4ck6jp4wu6njo6g6ep ji3xu06xji4	bj6eji3u.3bp4ck6jp4wu6njo6g6ep ji3xu06xji4
+這次的版本修正了幾個錯誤	5k4h42k71031p3vu. 5/4xk7ru3ek7hji4j4	5k4h42k71031p3vu. 5/4xk7ru3ek7hji4j4
+測試環境跟正式環境的設定不一樣	hk4g4cj06ru/4ep 5/4g4cj06ru/42k7gk42u/41j4u u;4	hk4g4cj06ru/4ep 5/4g4cj06ru/42k7gk42u/41j4u u;4
+我覺得這個方案比較可行	ji3rm,62k65k4ek7z; 041u3rul3dk3vu/6	ji3rm,62k65k4ek7z; 041u3rul3dk3vu/6
+今年的目標是提升產品品質	rup su062k7aj41ul g4wu6g/ t03qup3qup356	rup su062k7aj41ul g4wu6g/ t03qup3qup356
+他已經完成所有的工作	w8 u3ru/ j06t/6nji3u.32k7ej/ yji4	w8 u3ru/ j06t/6nji3u.32k7ej/ yji4
+公司決定增加研發人員	ej/ n rm,62u/4y/ ru8 u06z8 bp6m06	ej/ n rm,62u/4y/ ru8 u06z8 bp6m06
+這份報告需要主管簽名	5k4zp41l4el4vm ul45j3ej03fu0 au/6	5k4zp41l4el4vm ul45j3ej03fu0 au/6
+我明天早上會準時到	ji3au/6wu0 yl3g;4cjo45jp3g62l4	ji3au/6wu0 yl3g;4cjo45jp3g62l4
+天氣越來越冷記得多穿衣服	wu0 fu4m,4x96m,4x/3ru42k62ji tj0 u zj6	wu0 fu4m,4x96m,4x/3ru42k62ji tj0 u zj6
+週末我們一起去看電影	5. ai4ji3ap6u fu3fm4d042u04u/3	5. ai4ji3ap6u fu3fm4d042u04u/3
+這家餐廳的東西很好吃	5k4ru8 h0 wu/ 2k72j/ vu cp3cl3t 	5k4ru8 h0 wu/ 2k72j/ vu cp3cl3t 
+你有沒有收到我寄的信	su3u.3ao6u.3g. 2l4ji3ru42k7vup4	su3u.3ao6u.3g. 2l4ji3ru42k7vup4
+下班之後我想去運動	vu8410 5 c.4ji3vu;3fm4mp42j/4	vu8410 5 c.4ji3vu;3fm4mp42j/4
+最近工作太忙沒有時間休息	yjo4rup4ej/ yji4w94a;6ao6u.3g6ru0 vu. vu6	yjo4rup4ej/ yji4w94a;6ao6u.3g6ru0 vu. vu6
+希望明天不會下雨	vu j;4au/6wu0 1j4cjo4vu84m3	vu j;4au/6wu0 1j4cjo4vu84m3
+我已經買好車票了	ji3u3ru/ a93cl3tk qul4xk7	ji3u3ru/ a93cl3tk qul4xk7
+學校附近新開了一家書店	vm,6vul4zj4rup4vup d9 xk7u ru8 gj 2u04	vm,6vul4zj4rup4vup d9 xk7u ru8 gj 2u04
+媽媽今天煮了很多好吃的菜	a8 a8 rup wu0 5j3xk7cp32ji cl3t 2k7h94	a8 a8 rup wu0 5j3xk7cp32ji cl3t 2k7h94
+這本書的內容非常有趣	5k41p3gj 2k7so4bj/6zo t;6u.3fm4	5k41p3gj 2k7so4bj/6zo t;6u.3fm4
+他們正在討論明年的計畫	w8 ap65/4y94wl3xjp4au/6su062k7ru4cj84	w8 ap65/4y94wl3xjp4au/6su062k7ru4cj84
+請把門關好	fu/3183ap6ej0 cl3	fu/3183ap6ej0 cl3
+我需要一台新的電腦	ji3vm ul4u w96vup 2k72u04sl3	ji3vm ul4u w96vup 2k72u04sl3
+資料庫的查詢速度變慢了	y xul4dj42k7t86vmp6nj42j41u04a04xk7	y xul4dj42k7t86vmp6nj42j41u04a04xk7
+這個錯誤應該是設定造成的	5k4ek7hji4j4u/ e9 g4gk42u/4yl4t/62k7	5k4ek7hji4j4u/ e9 g4gk42u/4yl4t/62k7
+我會在明天之前完成這個任務	ji3cjo4y94au/6wu0 5 fu06j06t/65k4ek7bp4j4	ji3cjo4y94au/6wu0 5 fu06j06t/65k4ek7bp4j4
+使用者反應這個功能很難使用	g3m/45k3z03u/45k4ek7ej/ s/6cp3s06g3m/4	g3m/45k3z03u/45k4ek7ej/ s/6cp3s06g3m/4
+我們應該先確認需求再開始開發	ji3ap6u/ e9 vu0 fm,4bp4vm fu.6y94d9 g3d9 z8 	ji3ap6u/ e9 vu0 fm,4bp4vm fu.6y94d9 g3d9 z8 
+這段程式的邏輯有點複雜	5k42j04t/6g42k7xji6ru6u.32u03zj4y86	5k42j04t/6g42k7xji6ru6u.32u03zj4y86
+他的想法跟我完全不同	w8 2k7vu;3z83ep ji3j06fm061j4wj/6	w8 2k7vu;3z83ep ji3j06fm061j4wj/6
+今天的天氣很適合出去走走	rup wu0 2k7wu0 fu4cp3g4ck6tj fm4y.3y.3	rup wu0 2k7wu0 fu4cp3g4ck6tj fm4y.3y.3
+記得明天帶傘出門	ru42k6au/6wu0 294n03tj ap6	ru42k6au/6wu0 294n03tj ap6
+這個問題我想了很久	5k4ek7jp4wu6ji3vu;3xk7cp3ru.3	5k4ek7jp4wu6ji3vu;3xk7cp3ru.3
+公司提供很好的福利	ej/ n wu6ej/ cp3cl32k7zj6xu4	ej/ n wu6ej/ cp3cl32k7zj6xu4
+新的版本下週就會上線	vup 2k71031p3vu845. ru.4cjo4g;4vu04	vup 2k71031p3vu845. ru.4cjo4g;4vu04
+我已經跟他說過這件事	ji3u3ru/ ep w8 gji eji45k4ru04g4	ji3u3ru/ ep w8 gji eji45k4ru04g4
+這個網站的設計很漂亮	5k4ek7j;35042k7gk4ru4cp3qul4xu;4	5k4ek7j;35042k7gk4ru4cp3qul4xu;4
+請告訴我你的想法	fu/3el4nj4ji3su32k7vu;3z83	fu/3el4nj4ji3su32k7vu;3z83
+明天的會議改到下午三點	au/6wu0 2k7cjo4u4e932l4vu84j3n0 2u03	au/6wu0 2k7cjo4u4e932l4vu84j3n0 2u03
+我覺得這樣做比較安全	ji3rm,62k65k4u;4yji41u3rul30 fm06	ji3rm,62k65k4u;4yji41u3rul30 fm06
+這些資料需要重新整理	5k4vu, y xul4vm ul4tj/6vup 5/3xu3	5k4vu, y xul4vm ul4tj/6vup 5/3xu3
+他是我們部門最資深的工程師	w8 g4ji3ap61j4ap6yjo4y gp 2k7ej/ t/6g 	w8 g4ji3ap61j4ap6yjo4y gp 2k7ej/ t/6g 
+謝謝你的幫忙	vu,4vu,4su32k71; a;6	vu,4vu,4su32k71; a;6
+
+
+#
+# ---- 2026-09-07 補 50 句：更多日常與工作長句 ----
+# 一樣是**逐詞查詞層讀音**產的（mkkeys --sent 每個詞一段），再把純中文的
+# 相鄰段併成一段——中文相鄰同語言不切。
+# 為什麼一定要逐詞：整句丟給工具會逐字拼，多音字全錯（會議→悔意、
+# 報告→報故、提前→十錢）。那是測資錯，不是引擎錯。
+今天的會議延到下午三點	rup wu0 2k7cjo4u4u062l4vu84j3n0 2u03	rup wu0 2k7cjo4u4u062l4vu84j3n0 2u03
+這份報告需要重新整理	5o4zp41l4el4vm ul4tj/6vup 5/3xu3	5o4zp41l4el4vm ul4tj/6vup 5/3xu3
+我們明天再討論這個問題	ji3ap6au/6wu0 y94wl3xjp45k4ek7jp4wu6	ji3ap6au/6wu0 y94wl3xjp45k4ek7jp4wu6
+請幫我確認一下庫存數量	fu/31; ji3fm,4bp4u vu84dj4hjp6gj4xu;4	fu/31; ji3fm,4bp4u vu84dj4hjp6gj4xu;4
+他昨天已經把資料寄出去了	w8 yji6wu0 u3ru/ 183y xul4ru4tj fm4xk7	w8 yji6wu0 u3ru/ 183y xul4ru4tj fm4xk7
+公司決定調整明年的預算	ej/ n rm,62u/4wul65/3au/6su062k7m4nj04	ej/ n rm,62u/4wul65/3au/6su062k7m4nj04
+這個功能還在測試階段	5k4ek7ej/ s/6c96y94hk4g4ru, 2j04	5k4ek7ej/ s/6c96y94hk4g4ru, 2j04
+客戶希望提前一週交件	dk4cj4vu j;4wu6fu06u 5. rul ru04	dk4cj4vu j;4wu6fu06u 5. rul ru04
+我覺得這樣安排比較合理	ji3rm,62k65k4u;40 q961u3rul3ck6xu3	ji3rm,62k65k4u;40 q961u3rul3ck6xu3
+記得提醒他準備簡報	ru42k6wu6vu/3w8 5jp31o4ru031l4	ru42k6wu6vu/3w8 5jp31o4ru031l4
+週末的天氣看起來不錯	5. ai42k7wu0 fu4d04fu3x961j6hji4	5. ai42k7wu0 fu4d04fu3x961j6hji4
+那家餐廳的服務很周到	s8 ej h0 wu/ 2k7zj6j4cp35. 2l4	s8 ej h0 wu/ 2k7zj6j4cp35. 2l4
+最近工作壓力有點大	yjo4rup4ej/ yji4u8 xu4u.32u03284	yjo4rup4ej/ yji4u8 xu4u.32u03284
+他們正在規劃新的專案	w8 ap65/4y94ejo cj84vup 2k75j0 04	w8 ap65/4y94ejo cj84vup 2k75j0 04
+這條路線比較不會塞車	5o4wul6xj4vu041u3rul31j6cjo4n9 tk 	5o4wul6xj4vu041u3rul31j6cjo4n9 tk 
+老師說下週要交作業	xl3g gji vu845. ul rul yji4u,4	xl3g gji vu845. ul rul yji4u,4
+我打算下個月開始運動	ji3283nj04vu84ek4m,4d9 g3mp42j/4	ji3283nj04vu84ek4m,4d9 g3mp42j/4
+這台電腦的效能還可以	5o4w962u04sl32k7vul4s/6c96dk3u3	5o4w962u04sl32k7vul4s/6c96dk3u3
+他對這個領域很有研究	w8 2jo45k4ek7xu/3m4cp3u.3u06ru.4	w8 2jo45k4ek7xu/3m4cp3u.3u06ru.4
+請問還有其他問題嗎	fu/3jp4c96u.3fu6w8 jp4wu6a8 	fu/3jp4c96u.3fu6w8 jp4wu6a8 
+今年的目標已經達成一半	rup su062k7aj41ul u3ru/ 286t/6u 104	rup su062k7aj41ul u3ru/ 286t/6u 104
+那本書我看到第三章	s831p3gj ji3d042l42u4n0 5; 	s831p3gj ji3d042l42u4n0 5; 
+我們需要更多的時間準備	ji3ap6vm ul4e/42ji 2k7g6ru0 5jp31o4	ji3ap6vm ul4e/42ji 2k7g6ru0 5jp31o4
+這個價格已經很優惠了	5k4ek7ru84ek6u3ru/ cp3u. cjo4xk7	5k4ek7ru84ek6u3ru/ cp3u. cjo4xk7
+他的建議值得參考	w8 2k7ru04u4562k6h0 dl3	w8 2k7ru04u4562k6h0 dl3
+明天記得帶身分證過來	au/6wu0 ru42k6294gp zp 5/4eji4x96	au/6wu0 ru42k6294gp zp 5/4eji4x96
+這件事情要盡快處理	5k4ru04g4fu/6ul rup4dj94tj3xu3	5k4ru04g4fu/6ul rup4dj94tj3xu3
+公司附近有很多餐廳	ej/ n zj4rup4u.3cp32ji h0 wu/ 	ej/ n zj4rup4u.3cp32ji h0 wu/ 
+他每天都會提早到公司	w8 ao3wu0 2. cjo4wu6yl32l4ej/ n 	w8 ao3wu0 2. cjo4wu6yl32l4ej/ n 
+這次的活動辦得很成功	5k4h42k7cji62j/41042k6cp3t/6ej/ 	5k4h42k7cji62j/41042k6cp3t/6ej/ 
+我還沒收到你的回覆	ji3c96ao6g. 2l4su32k7cjo6zj4	ji3c96ao6g. 2l4su32k7cjo6zj4
+那個系統昨天當機了	s84ek7vu4wj/3yji6wu0 2;4ru xk7	s84ek7vu4wj/3yji6wu0 2;4ru xk7
+請把檔案存到共用資料夾	fu/31832;304hjp62l4ej/4m/4y xul4ru86	fu/31832;304hjp62l4ej/4m/4y xul4ru86
+我們應該先確認需求	ji3ap6u/ e9 vu0 fm,4bp4vm fu.6	ji3ap6u/ e9 vu0 fm,4bp4vm fu.6
+這份合約需要主管簽名	5o4zp4ck6m, vm ul45j3ej03fu0 au/6	5o4zp4ck6m, vm ul45j3ej03fu0 au/6
+他負責整個團隊的管理	w8 zj4yk65/3ek7wj062jo42k7ej03xu3	w8 zj4yk65/3ek7wj062jo42k7ej03xu3
+今年冬天特別冷	rup su062j/ wu0 wk41u,6x/3	rup su062j/ wu0 wk41u,6x/3
+那間店的東西不太便宜	s83ru0 2u042k72j/ vu 1j6w94qu06u6	s83ru0 2u042k72j/ vu 1j6w94qu06u6
+我想申請下週的假期	ji3vu;3gp fu/3vu845. 2k7ru84fu6	ji3vu;3gp fu/3vu845. 2k7ru84fu6
+這個設計看起來很專業	5k4ek7gk4ru4d04fu3x96cp35j0 u,4	5k4ek7gk4ru4d04fu3x96cp35j0 u,4
+他們已經搬到新辦公室	w8 ap6u3ru/ 10 2l4vup 104ej/ g4	w8 ap6u3ru/ 10 2l4vup 104ej/ g4
+請問這附近有停車場嗎	fu/3jp45o4zj4rup4u.3wu/6tk t;3a8 	fu/3jp45o4zj4rup4u.3wu/6tk t;3a8 
+這道菜的味道很特別	5o42l4h942k7jo42l4cp3wk41u,6	5o42l4h942k7jo42l4cp3wk41u,6
+我對這個提案有些疑問	ji32jo45k4ek7wu604u.3vu, u6jp4	ji32jo45k4ek7wu604u.3vu, u6jp4
+公司政策最近有些調整	ej/ n 5/4hk4yjo4rup4u.3vu, wul65/3	ej/ n 5/4hk4yjo4rup4u.3vu, wul65/3
+他很快就適應了新環境	w8 cp3dj94ru.4g4u/4xk7vup cj06ru/4	w8 cp3dj94ru.4g4u/4xk7vup cj06ru/4
+這批貨物預計明天到達	5o4qu cji4j4m4ru4au/6wu0 2l4286	5o4qu cji4j4m4ru4au/6wu0 2l4286
+我們一起想辦法解決	ji3ap6u fu3vu;3104z83ru,3rm,6	ji3ap6u fu3vu;3104z83ru,3rm,6
+那場演講的內容很精彩	s8 t;3u03ru;32k7so4bj/6cp3ru/ h93	s8 t;3u03ru;32k7so4bj/6cp3ru/ h93
+請務必在期限內完成	fu/3j41u4y94fu6vu04so4j06t/6	fu/3j41u4y94fu6vu04so4j06t/6
+## regression ｜ 主測：回歸 ｜ 來源：使用者實測
+# 實測回報過、已經修好的錯——**每修一個 bug 就在這裡加一筆**。
+#
+# 為什麼要這一節：修完不鎖住，下次改排序就可能默默退回去。而這類
+# 案例最便宜也最有價值——它們是真實踩到的，不是想像出來的。
+#
+# 每一筆後面標的是修它的 commit。
+#
+# ---- 輕聲別名：ㄕㄣˊㄇㄛˊ 不該打出「什麼」（8612edc）----
+# 什麼是 ㄕㄣˊㄇㄛ˙（輕聲）、神魔是 ㄕㄣˊㄇㄛˊ（二聲），讀音完全不同。
+# 一鍵多詞的別名放寬過，接上 bigram 之後「什麼」分數壓倒性地高，
+# 一有機會競爭就贏。改回只填空位。
+神魔	gp6ai6	gp6ai6
+什麼	gk6ai7	gk6ai7
+什麼|_|意思	gk6ai7| |u4n 	gk6ai7 u4n 
+#
+# ---- 同讀音的詞靠上下文挑（a0d58dd）----
+# 詞層原本取 words_for 的第一個，而那個順序是靜態詞頻排的——它不知道
+# 這句話在講什麼。「救回來」／「就回來」讀音完全相同，詞頻永遠讓前者贏。
+救回來	ru.4cjo6x96	ru.4cjo6x96
+我不曉得	ji31j4vul32k6	ji31j4vul32k6
+#
+# ---- 詞層擋掉「好得」「大的」這類搭配（4cbd276）----
+# BPMFMappings 是語料統計出來的，把高頻搭配也收成了詞。詞層是強證據，
+# 只要它開口字頻就沒機會發言。清單 356 個，人工複查過。
+# **真詞不可以被一起殺掉**——懂得／顯得／省得／樂得／懶得／來得。
+好的	cl32k7	cl32k7
+大的	2842k7	2842k7
+懂得	2j/32k7	2j/32k7
+顯得	vu032k7	vu032k7
+#
+# ---- 單一假名一律算碎片，中文不再被切走（4399a86）----
+# 大千鍵盤上「聲母＋介音ㄧ」剛好拼成合法假名的五組：ru(る) su fu vu xu，
+# 而它們底下全是高頻字。原本要求「不在詞典裡」才罰，但 mozc 收了大量
+# 單假名詞條，那道門形同虛設。
+就	ru.4	ru.4
+年	su06	su06
+想	vu;3	vu;3
+六	xu.4	xu.4
+前	fu06	fu06
+#
+# ---- 符號名字要在詞庫修正之後才比對（5afd34e）----
+# merge_symbols 跑在 apply_word_context 之前，那時每一格還是逐字的
+# 字頻第一名，「音樂」其實是「因月」，查不到符號名字。
+♪ || 🎵	\|up m,4|\	\up m,4\
+☎ || 📞	\|2u04cj84|\	\2u04cj84\
+#
+# ---- 反斜線不參與切分競爭（8b24b34）----
+# 打 \noteq\ 什麼都沒發生：第一名切法把收尾的反斜線吞進英文段，
+# 符號比對找不到獨立成段的收尾反斜線，整個功能靜靜失效。
+# noteq 不是符號名字。這一筆**不放進來**：它在計分器這條路上一種合法切法
+# 都沒有（prune 的「英文段必須是詞」把它殺光），真正打字時是靠上層的退路
+# 才活著——實測打得出來。放進來會是永遠紅的一列，而紅的還不是它該測的
+# 東西。守著這條規則的是單元測試 cutpoint::incremental::tests::反斜線一定自成一段。
+★	\|vu/ |\	\vu/ \
+⭐ || ★	\|star|\	\star\
+# ---- 小數點被當成注音的ㄥ（本次）----
+# `.` 在鍵盤上就是ㄥ，`.3`／`.4`／`.6` 剛好都是完整音節（ㄥˇ／ㄥˋ／ㄥˊ），
+# 於是 `2.64` 被切成「英:2|注:.6|英:4」打出「2吽4」。
+# 病因三層，全部修完（§2.66）：
+#   1. clean_word 把小數點當標點（swallowed）
+#   2. prune 只放行「整段都是數字」，0.49 含小數點被判死，整段那條切法
+#      在生成階段就沒產出
+#   3. passthrough 罰整串 4 分，輸給拆開的 2 分
+# 第 3 層要**只豁免含小數點的**——連純數字一起豁免會讓數字在句子裡變成
+# 免費的分隔符，實測淨退 6 句。
+#
+# 「圓周率3.14」同一句裡有兩種 `.`——`5.` 是注音的一部分、`3.14` 是小數。
+版本|1.39	1031p3|1.39	1031p31.39
+圓周率|3.14	m065. xm4|3.14	m065. xm43.14
+誤差|0.49|公尺	j4t8 |0.49|ej/ t3	j4t8 0.49ej/ t3
+大約|1.69|倍	284m, |1.69|1o4	284m, 1.691o4
+# 下面這筆的數字已經對了，剩句首「看」被「刊」壓過——選字問題，不是切點。
+看|2.64|現在|可以|做|什麼	d0 |2.64|vu04y94|dk3u3|yji4|gk6ai7	d0 2.64vu04y94dk3u3yji4gk6ai7
+# 詞被另一種語言的短段從中間剖開（`rank::split_sandwich`）。
+# 兩個方向都要守：日文詞被英文剖開、英文詞被日文剖開。
+# review 被 `ie`（いえ）剖開成 rev|家|we
+review|稿	review|el3	reviewel3
+# アドバイス 被 `is` 剖開成 あどば|is|うを
+# ——要夠長觸發分區凍結才重現得出來，所以整句照抄 long 節那一句
+年紀|大了|，|買|data|_|六點要下班|，|server|買|，|你好|。|_|come|你|。|アドバイスを聞いていれば|。|那個|_|release|_|延期	su06ru4|284xk7|,|a93|data| |xu.42u03ul4vu8410 |,|server|a93|,|su3cl3|.| |come|su3|.|adobaisuwokiiteireba|.|s84ek7| |release| |u06fu6	su06ru4284xk7,a93data xu.42u03ul4vu8410 ,servera93,su3cl3. comesu3.adobaisuwokiiteireba.s84ek7 release u06fu6
+
+
+
+## number ｜ 主測：數字 ｜ 來源：人工
+# 數字後面接三種語言。**這一節多數是紅的，那是刻意的。**
+#
+# 為什麼要這一節：主鍵盤十個數字鍵**全部都是注音鍵**（3467 是聲調，
+# 其餘在大千鍵盤上也都有對應符號），所以「3個」「2026年」這類輸入
+# 在引擎裡根本沒有數字的概念——整串不是合法注音就掉到英文直出。
+#
+# 實測分三種情況：
+#
+#   數字＋英文   win11 / 3c / iphone15 / 2026 report      → 現在就對
+#   數字＋中文   3個 / 2026年 / 第3版 / 下午3點           → 現在全錯
+#   數字＋日文   3時間 / 2回 / 5分 / 1番                  → 現在全錯
+#
+# 產品現在的答案是「用數字鍵盤打」，但數字鍵盤那條路（NumpadInput）
+# **完全繞過 core**：先把組字送出、數字直接塞進宿主。所以「數字後面
+# 接中文」在引擎裡沒有互動可測，這一節記的是**主鍵盤**打的情況。
+#
+# 期望照真實需求寫，不照現況——測資反映需求不是能力。紅著才看得到
+# 有沒有修好。
+#
+# 英文詞裡的數字（win11、mp3、utf8）**不切開**：英文段是 passthrough，
+# 那本來就是一個詞。第一版把它們切成兩段，被引擎打臉——那是測資錯。
+#
+# 按鍵用 mkkeys --sent 產：結構由人指定，第二欄不是引擎的答案。
+3|個|_|bug	3|ek4| |bug	3ek4 bug
+2026|年	2026|su06	2026su06
+第|3|版	2u4|3|103	2u43103
+下午|3|點	vu84j3|3|2u03	vu84j332u03
+5|分鐘	5|zp 5j/ 	5zp 5j/ 
+10|個|人	10|ek4|bp6	10ek4bp6
+第|1|名	2u4|1|au/6	2u41au/6
+100|元	100|m06	100m06
+3|天	3|wu0 	3wu0 
+2|次	2|h4	2h4
+上午|9|點	g;4j3|9|2u03	g;4j392u03
+第|2|季	2u4|2|ru4	2u42ru4
+50|公斤	50|ej/ rup 	50ej/ rup 
+7|月	7|m,4	7m,4
+15|號	15|cl4	15cl4
+編號|38	1u0 cl4|38	1u0 cl438
+大約|20|分	284m, |20|zp 	284m, 20zp 
+3|年|前	3|su06|fu06	3su06fu06
+剩|5|天	g/4|5|wu0 	g/45wu0 
+12|月|25|號	12|m,4|25|cl4	12m,425cl4
+第|3|章	2u4|3|5; 	2u435; 
+2|樓	2|x.6	2x.6
+共|48|人	ej/ |48|bp6	ej/ 48bp6
+滿|18|歲	a03|18|njo4	a0318njo4
+折扣|8|折	5k6d.4|8|5k 	5k6d.485k 
+等|10|分鐘	2/3|10|zp 5j/ 	2/310zp 5j/ 
+大約|3|成	284m, |3|t/6	284m, 3t/6
+第|4|題	2u4|4|wu6	2u44wu6
+6|號|出口	6|cl4|tj d.3	6cl4tj d.3
+第|7|週	2u4|7|5. 	2u475. 
+3|時間	3|zikann	3zikann
+2|回	2|kai	2kai
+5|分	5|hunn	5hunn
+1|番	1|bann	1bann
+3|人	3|zinn	3zinn
+10|個	10|ko	10ko
+1000|円	1000|enn	1000enn
+7|月	7|gatu	7gatu
+15|日	15|niti	15niti
+2|枚	2|mai	2mai
+3|本	3|honn	3honn
+5|才	5|sai	5sai
+2|台	2|dai	2dai
+4|階	4|kai	4kai
+6|歳	6|sai	6sai
+8|時	8|zi	8zi
+20|代	20|dai	20dai
+3|週間	3|shuukann	3shuukann
+2|年	2|nenn	2nenn
+30|秒	30|byou	30byou
+5|回|目	5|kai|moku	5kaimoku
+2|番|目	2|bann|moku	2bannmoku
+3|日|間	3|niti|aida	3nitiaida
+10|分|間	10|hunn|aida	10hunnaida
+1|時|半	1|zi|nakaba	1zinakaba
+win11	win11	win11
+iphone15	iphone15	iphone15
+3c	3c	3c
+2026|_|report	2026| |report	2026 report
+python3	python3	python3
+http2	http2	http2
+mp3	mp3	mp3
+covid19	covid19	covid19
+version2	version2	version2
+5g	5g	5g
+4k	4k	4k
+windows10	windows10	windows10
+usb3	usb3	usb3
+type|_|c	type| |c	type c
+ipv6	ipv6	ipv6
+3d	3d	3d
+2fa	2fa	2fa
+sha256	sha256	sha256
+base64	base64	base64
+utf8	utf8	utf8
+top10	top10	top10
+page2	page2	page2
+step3	step3	step3
+phase1	phase1	phase1
+level5	level5	level5
+round2	round2	round2
+2026|_|年度|_|report	2026| |su062j4| |report	2026 su062j4 report
+3|個|_|寿司	3|ek4| |susi	3ek4 susi
+買|2|個	a93|2|ek4	a932ek4
+5|_|items	5| |items	5 items
+訂|3|張|票	2u/4|3|5; |qul4	2u/435; qul4
+2|個|_|file	2|ek4| |file	2ek4 file
+今天|_|meeting|_|3|點	rup wu0 | |meeting| |3|2u03	rup wu0  meeting 32u03
+10kg	10kg	10kg
+第|1|_|page	2u4|1| |page	2u41 page
+3|時|_|開會	3|zi| |d9 cjo4	3zi d9 cjo4
+發|2|_|email	z8 |2| |email	z8 2 email
+100|_|percent	100| |percent	100 percent
+等|5|_|minutes	2/3|5| |minutes	2/35 minutes
+1|月|1|號	1|m,4|1|cl4	1m,41cl4
+排|3|小時	q96|3|vul3g6	q963vul3g6
+2|週|_|sprint	2|5. | |sprint	25.  sprint
+剩|1|個	g/4|1|ek4	g/41ek4
+大約|15|_|km	284m, |15| |km	284m, 15 km
+6|個|月	6|ek4m,4	6ek4m,4
+第|9|課	2u4|9|dk4	2u49dk4

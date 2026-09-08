@@ -152,6 +152,8 @@ fn main() {
     let en = t.elapsed();
     let t = Instant::now();
     ime_core::dict::load_bopomofo(&data);
+    // 選字的中文 bigram——計分器一定要載，不然量到的是「關掉模型」的行為
+    ime_core::lm::load(&data, ime_core::dict::char_freq_map(&data));
     let bo = t.elapsed();
     let t = Instant::now();
     ime_core::dict::load_japanese(&data);

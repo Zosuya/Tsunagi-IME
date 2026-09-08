@@ -14,6 +14,7 @@ target/
 .idea/
 Thumbs.db
 Desktop.ini
+.DS_Store
 *.swp
 
 # 詞庫原始檔（約 119MB，不進版控，用 data/download.ps1 下載）
@@ -62,3 +63,21 @@ doc/backup/
 # 編輯器的本機工作區狀態。Obsidian 把「開了哪些分頁、面板怎麼排」寫在
 # 這裡，每動一下就變——進版控只會製造雜訊，而且那是每個人各自的東西。
 .obsidian/
+
+# 示範影片的原始檔（doc/gif/ 的來源素材）。GIF 才是成品，原影片
+# 只留在本機——性質同 doc/af file 的設計原始檔。
+doc/video/
+
+# 自己加的領域包不進版控——那是個人化的內容（常打的遊戲名、慣用的
+# 符號名字），每台電腦、每個使用者都不一樣。而且擴充包規劃上要走
+# 獨立 repo（見 CLAUDE.md 與開發文件 §2.49），主 repo 只留內建的兩個。
+#
+# 用 `packs/*` 而非 `packs/`：後者會讓 Git 跳過整個目錄，下面的
+# `!` 例外就永遠不生效（檔案開頭 data/bopomofo 那段已經記過這個坑）。
+packs/*
+!packs/內建emoji.txt
+!packs/內建符號.txt
+# 台語包是例外：它不是個人化內容，而是安裝時可勾選的元件（見
+# installer/tsunagi.iss 的 [Components]），建包時要抓得到。
+# 上游更新後重跑 spike_taigi_pack 重產，見 tools/取台語資料.md。
+!packs/台語.txt

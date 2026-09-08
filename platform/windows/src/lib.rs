@@ -22,11 +22,10 @@ mod keymap;
 mod keyprobe;
 mod lang_bar;
 mod lang_menu;
+mod preview_window;
 mod registration;
-mod slide;
 mod text_service;
 mod theme;
-mod width_bar;
 mod width_window;
 
 use core::ffi::c_void;

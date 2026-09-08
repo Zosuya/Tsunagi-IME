@@ -1,0 +1,769 @@
+# name: 內建emoji
+# description: 表情、手勢、動物、食物、天氣、交通這些 emoji，中日英三種名字都叫得出來
+# version: 1.0
+# license: CC0
+# updated: 2026-09-07
+#
+# 633 組、涵蓋 1061 個 emoji（Unicode 主要區段的 61%）。
+# 沒收的四成是刻意跳過的：占星相位、易經卦象、鍊金術符號、族譜記號
+# 這類「一輩子不會打」的東西，塞進來只會讓候選變擠。
+#
+# 【格式】第三欄的符號用**空白分隔**（跟 內建符號.txt 4.0 同一套）。
+# 不能靠「一個字元就是一個符號」——👨‍👩‍👧 是五個字元（中間夾零寬
+# 連接符）組成的一個圖，逐字元拆會拆出三個人加兩個看不見的字元。
+# 膚色（👍🏽＝手＋色票）、變體選擇符（☀️）也一樣。
+#
+# 【分組哲學】沿用內建符號.txt 那條：
+#   同一個東西的不同寫法 → 留在一組，方向鍵翻
+#   根本是不同東西       → 各給各的名字，一次到位
+# emoji 的難處在邊界比符號模糊，所以這裡多一層：
+#   粗組（\笑\）當瀏覽入口，想不起來叫什麼時翻一遍
+#   細名（\大笑\ \苦笑\）給知道自己要哪個的人，一次到位
+# 兩者平行存在，不是階層——執行期只有一張平表。
+#
+# 【跟內建符號包撞名是刻意的】\音樂\ 兩邊都有，打一次 ♪♫♬♩ 和
+# 🎵🎶🎤 都在候選裡（符號包的排前面，那份先載）。對使用者來說
+# 「音樂的符號」本來就是一件事，不該因為技術上分兩個檔案就要記兩個
+# 名字。合併規則在 pack::build_index。
+#
+# 【國旗不收】🇹🇼 在 Windows 上顯示成「TW」兩個字母——Segoe UI Emoji
+# 故意不含國旗字形，這是微軟的既定政策，不是我們能修的。實測見
+# 開發文件 §2.51。
+#
+# 【組合用 + 寫】`👩+💻` 載入時會展開成真正的 ZWJ 組合。
+# 為什麼不直接寫：那中間夾的是零寬連接符（看不見的字元），而包裡
+# 一律不准有不可見字元——那道防線擋的是惡意包拿它偽裝輸出。寫成
+# `+` 兩邊都成立：檔案肉眼可審、防線不動、組合照樣打得出來。
+# 真的要放半形加號的話寫 `++`。
+
+
+# ══════════════════════════════════════════════
+# 一、表情
+# ══════════════════════════════════════════════
+
+# 粗組：想不起來叫什麼時翻這個
+sym	笑,warai,smile	😀 😃 😄 😁 😆 🙂 😊 🤣 😂
+sym	哭,naki,cry	😢 😭 🥲 😥 😰 😨
+sym	怒,ikari,angry	😠 😡 🤬 😤 👿
+sym	表情,kaomoji,face	😀 😂 🥰 🤔 😅 😭 😡 😱 🥺 😴
+
+# 細名：知道要哪個的人一次到位
+sym	微笑,hohoemi,grin	🙂
+sym	大笑,bakushou,lol	😂
+sym	苦笑,kushou,sweat	😅
+sym	爆笑,daibakushou,rofl	🤣
+sym	眨眼,uinku,wink	😉
+sym	愛心眼,meromero,loveeyes	🥰 😍
+sym	親親,kisu,kiss	😘 😗 😙
+sym	思考,kangaeru,thinking	🤔
+sym	無言,mugon,neutral	😐 😑 😶
+sym	翻白眼,shirame,eyeroll	🙄
+sym	吐舌,shita,tongue	😛 😝 😜 🤪
+sym	墨鏡,sangurasu,cool	😎
+sym	驚訝,odoroki,surprised	😮 😲 😯
+sym	尖叫,himei,scream	😱
+sym	睏,nemui,sleepy	😪 😴 🥱
+sym	生病,byouki,sick	🤒 🤧 🤢 🤮 😷
+sym	拜託,onegai,pleading	🥺
+sym	難過,kanashii,sad	😞 😔 🙁 ☹
+sym	擔心,shinpai,worried	😟 😕 😬
+sym	錢眼,kanegao,moneyface	🤑
+sym	派對臉,iwaigao,partyface	🥳
+sym	噓,shizuka,shush	🤫
+sym	鬼臉,akanbe,silly	😋 🤗
+sym	惡魔,akuma,devil	😈 👿
+sym	骷髏,dokuro,skull	💀 ☠
+sym	鬼,obake,ghost	👻
+sym	外星人,uchuujin,alien	👽 🛸
+sym	機器人,robotto,robot	🤖
+sym	大便,unko,poop	💩
+sym	小丑,piero,clown	🤡
+
+# ══════════════════════════════════════════════
+# 二、手勢
+# ══════════════════════════════════════════════
+
+sym	手,te,hand	👋 👌 ✌ 🤞 👍 👎 👏 🙏 💪 🤝
+
+sym	讚,ii,thumbsup	👍
+sym	爛,dame,thumbsdown	👎
+sym	揮手,teofuru,wave	👋
+sym	OK,ookee,ok	👌
+sym	勝利,pisu,victory	✌
+sym	祈禱,inoru,pray	🙏
+sym	鼓掌,hakushu,clap	👏
+sym	肌肉,kinniku,muscle	💪
+sym	握手,akushu,handshake	🤝
+sym	交叉手指,yubikiri,fingerscrossed	🤞
+sym	比中指,nakayubi,middlefinger	🖕
+sym	舉手,teoageru,raisehand	🙋 ✋ 🤚
+sym	指,yubisasu,point	👆 👇 👈 👉 ☝
+sym	寫,kaku,writing	✍
+sym	耳朵,mimi,ear	👂
+sym	眼睛,me,eyes	👀 👁
+sym	嘴巴,kuchi,mouth	👄 👅
+sym	腦,nou,brain	🧠
+
+# ══════════════════════════════════════════════
+# 二之二、人與職業（ZWJ 組合，用 + 寫）
+# ══════════════════════════════════════════════
+
+sym	人,hito,person	🧑 👨 👩 🧒 👶 🧓 👴 👵
+sym	家庭,kazoku,family	👨+👩+👧 👨+👩+👦 👩+👦 👨+👧 👪
+sym	情侶,kappuru,couple	👩+❤️+👨 👨+❤️+👨 👩+❤️+👩 💑 💏
+sym	工程師,puroguramaa,dev	👩+💻 👨+💻 🧑+💻
+sym	廚師,shefu,cook	👨+🍳 👩+🍳 🧑+🍳
+sym	醫生,isha,doctor	👨+⚕️ 👩+⚕️ 🧑+⚕️
+sym	老師,sensei,teacher	👨+🏫 👩+🏫 🧑+🏫
+sym	科學家,kagakusha,scientist	👨+🔬 👩+🔬 🧑+🔬
+sym	學生,gakusei,student	👨+🎓 👩+🎓 🧑+🎓
+sym	農夫,noufu,farmer	👨+🌾 👩+🌾 🧑+🌾
+sym	歌手,kashu,singer	👨+🎤 👩+🎤 🧑+🎤
+sym	藝術家,geijutsuka,artist	👨+🎨 👩+🎨 🧑+🎨
+sym	消防員,shouboushi,firefighter	👨+🚒 👩+🚒 🧑+🚒
+sym	飛行員,pairotto,pilot	👨+✈️ 👩+✈️ 🧑+✈️
+sym	太空人,uchuuhikoushi,astronaut	👨+🚀 👩+🚀 🧑+🚀
+sym	技師,gishi,mechanic	👨+🔧 👩+🔧 🧑+🔧
+sym	捂臉,gakkari,facepalm	🤦 🤦+♀️ 🤦+♂️
+sym	聳肩,shirouto,shrug	🤷 🤷+♀️ 🤷+♂️
+sym	不行,dame,no	🙅 🙅+♀️ 🙅+♂️
+sym	可以,ii,yes	🙆 🙆+♀️ 🙆+♂️
+sym	鞠躬,ojigi,bow	🙇 🙇+♀️ 🙇+♂️
+sym	魔法師,mahoutsukai,mage	🧙 🧙+♀️ 🧙+♂️
+sym	彩虹旗,reinboo,pride	🏳️+🌈
+sym	殭屍,zonbi,zombie	🧟 🧟+♀️ 🧟+♂️
+sym	美人魚,ningyo,mermaid	🧜 🧜+♀️ 🧜+♂️
+
+# ══════════════════════════════════════════════
+# 三、心與愛
+# ══════════════════════════════════════════════
+
+# `\心\`（♥♡❤❥）在符號包那邊，這裡用 `\愛心\` 是因為彩色的那批
+# 本來就是另一組東西（九種顏色），不是 ♥ 的不同寫法。
+sym	愛心,haato,loveheart	❤ 🧡 💛 💚 💙 💜 🖤 🤍 🤎
+sym	紅心,akaihaato,redheart	❤
+sym	心碎,shitsuren,brokenheart	💔
+sym	閃亮心,kirakiraheart,sparklingheart	💖 💗 💓 💞 💕
+sym	愛,ai,love	💘 💝 💟 ❣
+
+# ══════════════════════════════════════════════
+# 四、動物
+# ══════════════════════════════════════════════
+
+sym	動物,doubutsu,animal	🐱 🐶 🐰 🐻 🐼 🦊 🐯 🦁 🐮 🐷
+
+sym	貓,neko,cat	🐱 🐈 😺 😸 😹 😻 😼 😽 🙀 😿 😾
+sym	狗,inu,dog	🐶 🐕 🦮 🐩
+sym	兔,usagi,rabbit	🐰 🐇
+sym	熊,kuma,bear	🐻 🧸
+sym	熊貓,panda,panda	🐼
+sym	狐狸,kitsune,fox	🦊
+sym	老虎,tora,tiger	🐯 🐅
+sym	獅子,raion,lion	🦁
+sym	牛,ushi,cow	🐮 🐄 🐂
+sym	豬,buta,pig	🐷 🐖 🐗
+sym	馬,uma,horse	🐴 🐎 🦄
+sym	羊,hitsuji,sheep	🐑 🐏 🐐
+sym	猴,saru,monkey	🐵 🐒 🙈 🙉 🙊
+sym	雞,niwatori,chicken	🐔 🐓 🐣 🐤 🐥
+sym	鳥,tori,bird	🐦 🕊 🦅 🦆 🦉
+sym	企鵝,pengin,penguin	🐧
+sym	魚,sakana,fish	🐟 🐠 🐡 🦈
+sym	鯨魚,kujira,whale	🐳 🐋
+sym	章魚,tako,octopus	🐙
+sym	蝦,ebi,shrimp	🦐 🦞
+sym	螃蟹,kani,crab	🦀
+sym	蛇,hebi,snake	🐍
+sym	龍,ryuu,dragon	🐉 🐲
+sym	蟲,mushi,bug	🐛 🐜 🐝 🦋 🐞
+sym	蜘蛛,kumo,spider	🕷 🕸
+sym	象,zou,elephant	🐘
+sym	鼠,nezumi,mouse	🐭 🐹 🐁 🐀
+sym	青蛙,kaeru,frog	🐸
+sym	恐龍,kyouryuu,dinosaur	🦕 🦖
+sym	腳印,ashiato,pawprints	🐾
+
+# ══════════════════════════════════════════════
+# 五、食物
+# ══════════════════════════════════════════════
+
+sym	食物,tabemono,food	🍎 🍞 🍜 🍕 🍔 🍰 🍺 ☕ 🍣 🍚
+
+sym	飯,gohan,rice	🍚 🍙 🍘
+sym	麵,men,noodle	🍜 🍝
+sym	壽司,sushi,sushi	🍣
+sym	拉麵,raamen,ramen	🍜
+sym	披薩,piza,pizza	🍕
+sym	漢堡,hanbaagaa,burger	🍔
+sym	薯條,poteto,fries	🍟
+sym	熱狗,hottodoggu,hotdog	🌭
+sym	三明治,sandoicchi,sandwich	🥪
+sym	肉,niku,meat	🍖 🍗 🥩 🥓
+sym	蛋,tamago,egg	🥚 🍳
+sym	麵包,pan,bread	🍞 🥐 🥖 🥯
+sym	蛋糕,keeki,cake	🍰 🎂 🧁
+sym	甜點,dezaato,dessert	🍩 🍪 🍫 🍬 🍭 🍮 🍯
+sym	冰淇淋,aisu,icecream	🍦 🍨 🍧
+sym	水果,kudamono,fruit	🍎 🍊 🍋 🍌 🍉 🍇 🍓 🍑 🍒 🥝
+sym	蘋果,ringo,apple	🍎 🍏
+sym	香蕉,banana,banana	🍌
+sym	草莓,ichigo,strawberry	🍓
+sym	西瓜,suika,watermelon	🍉
+sym	葡萄,budou,grape	🍇
+sym	蔬菜,yasai,vegetable	🥕 🌽 🥦 🥬 🍅 🥒 🍆 🥔
+sym	咖啡,koohii,coffee	☕
+sym	茶,ocha,tea	🍵
+sym	啤酒,biiru,beer	🍺 🍻
+sym	酒,osake,alcohol	🍷 🍸 🍹 🥂 🍾 🥃 🍶
+sym	果汁,juusu,juice	🧃 🥤
+sym	水,mizu,water	💧 🚰
+sym	牛奶,gyuunyuu,milk	🥛
+
+# ══════════════════════════════════════════════
+# 六、慶祝與常用記號
+# ══════════════════════════════════════════════
+
+sym	慶祝,oiwai,celebrate	🎉 🎊 🎈 🎁 🎂 🥳 ✨ 🎆 🎇
+sym	派對,paatii,party	🎉 🎊
+sym	禮物,purezento,gift	🎁
+sym	生日,tanjoubi,birthday	🎂 🎈 🎁
+sym	聖誕,kurisumasu,christmas	🎄 🎅 🤶 ⛄ 🎁
+sym	煙火,hanabi,fireworks	🎆 🎇 ✨
+sym	閃亮,kirakira,sparkles	✨ 💫 ⭐ 🌟
+sym	火,hi,fire	🔥
+sym	爆炸,bakuhatsu,boom	💥
+sym	讚嘆,sugoi,hundred	💯
+sym	警告,keikoku,warning	⚠ 🚨 ❗ ❓
+sym	禁止,kinshi,prohibited	🚫 ⛔
+sym	正確,seikai,correct	✅ ☑ ✔
+sym	錯誤,machigai,wrong	❌ ✖
+sym	問號,hatena,question	❓ ❔
+sym	驚嘆號,bikkuri,exclamation	❗ ❕ ‼ ⁉
+sym	燈泡,denkyuu,idea	💡
+sym	鈴鐺,beru,bell	🔔 🔕
+sym	音樂,ongaku,music	🎵 🎶 🎼 🎤 🎧 🎸 🎹 🥁
+sym	時鐘,tokei,clock	🕐 ⏰ ⌚ ⏳ ⌛
+sym	錢,okane,money	💰 💵 💴 💶 💷 💸 💳
+sym	電腦,pasokon,computer	💻 🖥 ⌨ 🖱
+sym	手機,keitai,phone	📱 📲 ☎ 📞
+sym	信,tegami,mail	✉ 📧 📨 📩 📮
+sym	書,hon,book	📖 📚 📕 📗 📘 📙 📔
+sym	筆,pen,pen	✏ 🖊 🖋 ✒ 🖍 📝
+sym	剪刀,hasami,scissors	✂
+sym	鎖,kagi,lock	🔒 🔓 🔐 🔑 🗝
+sym	搜尋,kensaku,search	🔍 🔎
+sym	垃圾桶,gomibako,trash	🗑
+sym	相機,kamera,camera	📷 📸 📹 🎥
+sym	電視,terebi,tv	📺
+sym	遊戲,geemu,game	🎮 🕹 🎲 🃏 🎯
+sym	運動,supootsu,sports	⚽ 🏀 ⚾ 🎾 🏐 🏈 🎱 🏓 🏸
+sym	獎盃,torofii,trophy	🏆 🥇 🥈 🥉 🏅
+sym	天氣,tenki,weather	☀ ⛅ ☁ 🌧 ⛈ ❄ 🌈 🌪
+sym	太陽,taiyou,sun	☀ 🌞 🌤
+sym	月亮,tsuki,moon	🌙 🌕 🌛 🌜 🌝
+sym	星星,hoshi,star	⭐ 🌟 ✨ 💫
+sym	雨,ame,rain	🌧 ☔ 💧
+sym	雪,yuki,snow	❄ ⛄ 🌨
+sym	彩虹,niji,rainbow	🌈
+sym	花,hana,flower	🌸 🌺 🌻 🌹 🌷 💐 🏵
+sym	樹,ki,tree	🌲 🌳 🌴 🎋 🎍
+sym	地球,chikyuu,earth	🌍 🌎 🌏 🌐
+sym	車,kuruma,car	🚗 🚕 🚙 🚌 🚓 🚑 🚒 🏎
+sym	飛機,hikouki,airplane	✈ 🛫 🛬 🛩
+sym	船,fune,ship	🚢 ⛵ 🛥 🚤
+sym	火車,densha,train	🚃 🚄 🚅 🚂 🚇
+sym	腳踏車,jitensha,bike	🚲 🛴 🛵
+sym	房子,ie,house	🏠 🏡 🏘 🏢 🏬
+sym	愛心眼貓,haatoneko,heartcat	😻
+
+# ══════════════════════════════════════════════
+# 植物與自然
+# ══════════════════════════════════════════════
+
+sym	植物,shokubutsu,plant	🌱 🌿 🪴 🌵 🪷 🪻 🌼 🍀 🍁 🍄
+sym	葉子,ha,leaf,牙齒,tooth	🌿 🍃 🍂 🍁 🦷
+sym	落葉,ochiba,fallenleaf	🍂
+sym	楓葉,momiji,maple	🍁
+sym	幼苗,mebae,seedling	🌱
+sym	盆栽,kanyoushokubutsu,pottedplant	🪴
+sym	仙人掌,saboten,cactus	🌵
+sym	蓮花,hasu,lotus	🪷
+sym	風信子,hiyashinsu,hyacinth	🪻
+sym	小花,ohana,blossom	🌼
+sym	幸運草,yotsuba,clover	🍀
+sym	香菇,kinoko,mushroom	🍄
+sym	栗子,kuri,chestnut	🌰
+sym	辣椒,tougarashi,chili	🌶
+sym	南瓜燈,kabocha,jackolantern	🎃
+sym	木頭,ki,wood	🪵
+sym	珊瑚,sango,coral	🪸
+sym	水母,kurage,jellyfish	🪼
+sym	羽毛,hane,feather	🪶
+sym	翅膀,tsubasa,wing	🪽
+sym	鵝,gachou,goose	🪿
+sym	鳥巢,su,nest	🪹 🪺
+sym	昆蟲,konchuu,insect	🪲 🪳 🪰 🪱
+sym	甲蟲,kabutomushi,beetle	🪲
+sym	蟑螂,gokiburi,roach	🪳
+sym	蒼蠅,hae,fly	🪰
+sym	蚯蚓,mimizu,worm	🪱
+
+# ══════════════════════════════════════════════
+# 天體與天氣
+# ══════════════════════════════════════════════
+
+sym	天氣,tenki,weather	🌥 🌦 🌩 🌫 🌬 ⛆ ☃ 🌀
+sym	月相,tsukinomichikake,moonphase	🌑 🌒 🌓 🌔 🌖 🌗 🌘 🌚
+sym	新月,shingetsu,newmoon	🌑 🌚
+sym	半月,hangetsu,halfmoon	🌓 🌗
+sym	彎月,mikazuki,crescent	🌒 🌘
+sym	月亮臉,tsukigao,moonface	🌚
+sym	流星,nagareboshi,shootingstar	🌠
+sym	彗星,suisei,comet	☄
+sym	銀河,ginga,galaxy	🌌
+sym	晴天,hare,sunny	🌣
+sym	晴時多雲,kumorizora,partlycloudy	🌥
+sym	太陽雨,ameagari,sunshower	🌦
+sym	閃電雲,inazuma,lightning,閃電,kaminari	🌩 ⚡
+sym	下雨,ame,raining	⛆ 🌦
+sym	水滴,shizuku,droplet	🌢
+sym	起霧,kiri,fog	🌫 🌁
+sym	颱風,taifuu,typhoon	🌀
+sym	吹風,kaze,wind	🌬
+sym	雪人,yukidaruma,snowman	☃ ⛇
+sym	雨傘,amagasa,umbrella	☂ 🌂
+sym	溫度計,ondokei,thermometer	🌡
+sym	海浪,nami,wave	🌊
+sym	火山,kazan,volcano	🌋
+sym	日出,hinode,sunrise	🌅 🌄
+sym	日落,yuuhi,sunset	🌇
+sym	黃昏,yuugure,dusk	🌆
+sym	夜景,yakei,nightview	🌃 🌉
+sym	夜橋,yorunohashi,nightbridge	🌉
+sym	風景,keshiki,scenery	🌅 🌄 🌇 🌆 🌃 🌉 🌁
+
+# ══════════════════════════════════════════════
+# 身體與人物
+# ══════════════════════════════════════════════
+
+sym	身體,karada,body	👃 👂 🦻 🦵 🦶 🦷 🦴 🫀 🫁 🧠
+sym	鼻子,hanabashira,nose	👃
+sym	腿,ashi,leg	🦵
+sym	腳掌,tsumasaki,foot	🦶
+sym	骨頭,hone,bone	🦴
+sym	心臟,shinzou,heartorgan	🫀
+sym	肺,hai,lungs	🫁
+sym	助聽器,hochouki,hearingaid	🦻
+sym	義肢,gishu,prosthetic	🦾 🦿
+sym	髮型,kamigata,hairstyle	🦰 🦱 🦲 🦳
+sym	拳頭,genkotsu,fist,劍,ken,sword	👊 ⚔ ✊ 🤛 🤜
+sym	張開手,hiraita,openhands	👐
+sym	捧手,sasageru,palmsup	🤲
+sym	剪影,shiruetto,silhouette	👤 👥
+sym	抱抱,hagu,hug	🫂
+sym	牽手,tetsunagi,holdinghands	👫 👬 👭
+sym	警察,keisatsu,police	👮 👮+♀️ 👮+♂️
+sym	工人,sagyouin,worker	👷 👷+♀️ 👷+♂️
+sym	衛兵,eihei,guard	💂 💂+♀️ 💂+♂️
+sym	新娘,hanayome,bride	👰 👰+♀️ 👰+♂️
+sym	新郎,hanamuko,groom	🤵 🤵+♀️ 🤵+♂️
+sym	公主,ohimesama,princess	👸
+sym	王子,ouji,prince	🤴
+sym	國王,ousama,king	🫅
+sym	金髮,kinpatsu,blondhair	👱 👱+♀️ 👱+♂️
+sym	頭巾,taaban,turban,hijabu,headscarf	👳 👳+♀️ 👳+♂️ 🧕
+sym	瓜皮帽,marubou,skullcap	👲
+sym	服務台,annai,infodesk	💁 💁+♀️ 💁+♂️
+sym	跳舞,odori,dance	💃 👯 👯+♀️ 👯+♂️
+sym	按摩,massaaji,massage	💆 💆+♀️ 💆+♂️
+sym	剪頭髮,katto,haircut	💇 💇+♀️ 💇+♂️
+sym	口紅,kuchibeni,lipstick	💄
+sym	指甲油,manikyua,nailpolish	💅
+sym	自拍,jidori,selfie	🤳
+sym	懷孕,ninshin,pregnant	🤰 🫄 🫃
+sym	餵奶,junyuu,breastfeeding	🤱
+sym	天使,tenshi,angel	👼
+sym	英雄,hiiroo,superhero	🦸 🦸+♀️ 🦸+♂️
+sym	壞蛋,warumono,supervillain	🦹 🦹+♀️ 🦹+♂️
+sym	妖怪,oni,ogre	👹 👺
+sym	小怪獸,inbeedaa,invader	👾
+sym	輪椅,kurumaisu,wheelchair	🦽 🦼 ♿
+sym	背心,besuto,vest	🦺
+sym	側翻,tekuten,cartwheel	🤸 🤸+♀️ 🤸+♂️
+sym	雜耍,jaguringu,juggling	🤹 🤹+♀️ 🤹+♂️
+sym	擊劍,fenshingu,fencing	🤺
+sym	摔角,resuringu,wrestling	🤼 🤼+♀️ 🤼+♂️
+sym	水球,suikyuu,waterpolo	🤽 🤽+♀️ 🤽+♂️
+sym	手球,handobooru,handball	🤾 🤾+♀️ 🤾+♂️
+sym	麋鹿,heraji,moose	🫎
+sym	驢,roba,donkey	🫏
+
+# ══════════════════════════════════════════════
+# 服飾與配件
+# ══════════════════════════════════════════════
+
+sym	衣服,fuku,clothes	👕 👚 👗 👖 👔 👘 🥻 🥼 👙
+sym	襯衫,shatsu,shirt	👕 👚
+sym	T恤,tiishatsu,tshirt	👕
+sym	上衣,burausu,blouse	👚
+sym	洋裝,wanpiisu,dress	👗
+sym	褲子,zubon,jeans	👖
+sym	領帶,nekutai,necktie	👔
+sym	和服,wafuku,kimono	👘
+sym	紗麗,sarii,sari	🥻
+sym	白袍,hakui,labcoat	🥼
+sym	泳衣,mizugi,bikini,swimsuit	👙 🩱
+sym	鞋子,kutsu,shoe	👞 👟 👠 👡 👢 🥾 🥿
+sym	皮鞋,kawagutsu,dressshoe	👞
+sym	球鞋,sunniikaa,sneaker	👟
+sym	高跟鞋,haihiiru,heels	👠
+sym	涼鞋,sandaru,sandal,夾腳拖,bicchisandaru	👡 🩴
+sym	靴子,buutsu,boot	👢 🥾
+sym	登山鞋,tozangutsu,hikingboot	🥾
+sym	平底鞋,bareeshuuzu,flats,芭蕾,balletshoes	🥿 🩰
+sym	包包,baggu,bag	👜 👛 👝
+sym	手提包,handobaggu,handbag	👜
+sym	錢包,saifu,wallet	👛
+sym	小包,pouchi,pouch	👝
+sym	帽子,boushi,hat,cap	👒 🧢
+sym	眼鏡,megane,glasses	👓
+sym	護目鏡,googuru,goggles	🥽
+
+# ══════════════════════════════════════════════
+# 建築與地標
+# ══════════════════════════════════════════════
+
+sym	建築,tatemono,building	🏛 🏥 🏦 🏨 🏪 🏭 🏰 🏯 ⛪ 🏟
+sym	城市,toshi,city	🏙
+sym	醫院,byouin,hospital	🏥
+sym	銀行,ginkou,bank	🏦
+sym	提款機,genkinjidouki,atm	🏧
+sym	旅館,hoteru,hotel	🏨 🏩
+sym	超商,konbini,store	🏪
+sym	郵局,yuubinkyoku,postoffice	🏣 🏤
+sym	工廠,koujou,factory	🏭
+sym	古蹟,shinden,classical	🏛
+sym	城堡,shiro,castle	🏰 🏯
+sym	教堂,kyoukai,church	⛪
+sym	神社,jinja,shrine	⛩
+sym	燈籠,chouchin,lantern	🏮
+sym	體育場,sutajiamu,stadium	🏟
+sym	工地,kouji,construction	🏗
+sym	廢墟,haikyo,ruin	🏚
+sym	露營,kyanpu,camping	🏕
+sym	海灘,biichi,beach	🏖
+sym	島,shima,island	🏝
+sym	沙漠,sabaku,desert	🏜
+sym	山,yama,mountain	🏔
+sym	公園,kouen,park	🏞
+
+# ══════════════════════════════════════════════
+# 交通工具
+# ══════════════════════════════════════════════
+
+sym	公車,basu,bus	🚍 🚎 🚐
+sym	計程車,takushii,taxi	🚖
+sym	車,kuruma,car	🚘
+sym	警車,patokaa,policecar	🚔
+sym	卡車,torakku,truck	🚚 🚛 🛻
+sym	消防車,shouboushiya,firetruck	🛱
+sym	曳引機,torakutaa,tractor	🚜
+sym	嘟嘟車,rikishaa,rickshaw	🛺
+sym	直升機,herikoputaa,helicopter	🚁
+sym	衛星,eisei,satellite	🛰 📡
+sym	軍機,gunyouki,warplane	🛦 🛧 🛨 🛪
+sym	電車,ressha,railcar	🚆 🚈 🚊 🚋 🚝 🚞 🚟 🛲
+sym	纜車,roopuwei,cablecar	🚠 🚡
+sym	車站,eki,station	🚉
+sym	公車站,basutei,busstop	🚏
+sym	公路,douro,road	🛣
+sym	鐵軌,senro,rails	🛤
+sym	郵輪,kyakusen,cruise	🛳
+sym	小船,booto,boat	🚣 🛶
+sym	滑板,sukeetobooto,skateboard	🛹
+sym	溜冰鞋,rooraasukeeto,rollerskate	🛼
+sym	雪橇,sori,sled	🛷
+sym	騎車,jitenshanoru,cycling	🚴 🚵
+sym	走路,aruku,walking	🚶
+sym	行人,hokousha,pedestrian	🚶 🚸
+sym	禁行,tsuukoukinshi,noentry	🚳 🚷
+sym	男廁,danseitoire,mensroom	🚹
+sym	女廁,joseitoire,women	🚺
+sym	廁所,toire,restroom	🚻 🚽 🚾
+sym	嬰兒,akachan,baby	🚼
+sym	淋浴,shawaa,shower	🚿
+sym	工具,dougu,tools	🛠 🧰 🔨 🔧 ⚒
+sym	盾牌,tate,shield	🛡
+sym	油桶,doramukan,oildrum	🛢
+
+# ══════════════════════════════════════════════
+# 運動與活動
+# ══════════════════════════════════════════════
+
+sym	球類,kyuugi,ballgame	🎳 🏉 🏏 🥍 🥎 🥏
+sym	保齡球,booringu,bowling	🎳
+sym	橄欖球,ragubii,rugby	🏉
+sym	板球,kuriketto,cricket	🏏
+sym	袋棍球,rakurosu,lacrosse	🥍
+sym	壘球,sofutobooru,softball	🥎
+sym	飛盤,furisubii,frisbee	🥏
+sym	跑步,hashiru,run	🏃 🏃+♀️ 🏃+♂️
+sym	游泳,suiei,swim	🏊 🏊+♀️ 🏊+♂️
+sym	衝浪,saafin,surf	🏄 🏄+♀️ 🏄+♂️
+sym	舉重,jouki,weightlifting	🏋 🏋+♀️ 🏋+♂️
+sym	高爾夫,gorufu,golf	🏌 🏌+♀️ 🏌+♂️
+sym	滑雪,sukii,ski	🎿
+sym	滑雪板,sunooboodo,snowboard	🏂
+sym	冰壺,kaaringu,curling	🥌
+sym	賽馬,keiba,horseracing	🏇
+sym	賽車,reesu,racing	🏍
+sym	拳擊,bokushingu,boxing	🥊
+sym	道服,dougi,karate	🥋
+sym	運動衣,yunifoomu,jersey	🎽
+sym	終點旗,gooru,finishflag	🏁
+sym	拉霸,surotto,slot	🎰
+sym	花牌,hanafuda,flowercards	🎴
+sym	薩克斯風,sakkusu,sax	🎷
+sym	小號,toranpetto,trumpet	🎺
+sym	小提琴,baiorin,violin	🎻
+
+# ══════════════════════════════════════════════
+# 物品與工具
+# ══════════════════════════════════════════════
+
+sym	手電筒,kaichuudentou,flashlight	🔦
+sym	鎚子,kanazuchi,hammer	🔨 ⚒ 🛠
+sym	工具箱,dougubako,toolbox	🧰
+sym	螺絲,neji,screw	🔩
+sym	菜刀,houchou,knife	🔪
+sym	槍,juu,gun,十,keycapten	🔫 🔟
+sym	錨,ankaa,anchor	⚓
+sym	天秤,tenbin,scales	⚖
+sym	燒瓶,furasuko,flask	⚗
+sym	齒輪,haguruma,gear	⚙
+sym	望遠鏡,bouenkyou,telescope	🔭
+sym	水晶球,suishoudama,crystalball	🔮
+sym	六芒星,rokubousei,hexagram	🔯
+sym	新手,shoshinsha,beginner	🔰
+sym	三叉戟,mitsumata,trident	🔱
+sym	磁鐵,jishaku,magnet	🧲
+sym	行李,nimotsu,luggage,包裹,package	🧳 📦
+sym	乳液,rooshon,lotion	🧴
+sym	線,ito,thread	🧵 🧶
+sym	別針,anzenpin,safetypin	🧷
+sym	掃把,houki,broom	🧹
+sym	籃子,kago,basket	🧺
+sym	衛生紙,toirettopeepaa,toiletpaper	🧻
+sym	肥皂,sekken,soap	🧼
+sym	海綿,suponji,sponge	🧽
+sym	收據,reshiito,receipt	🧾
+sym	護身符,omamori,amulet	🧿
+sym	磚塊,renga,brick	🧱
+sym	OK繃,bansoukou,bandage	🩹
+sym	聽診器,choushinki,stethoscope	🩺
+sym	X光,rentogen,xray	🩻
+sym	拐杖,matsubadue,crutch	🩼
+sym	花,hana,flower	⚘
+sym	圓形,maruikei,circle	🔴 🔵
+sym	正方形,seihoukei,squarebutton,正方,bigsquare	🔲 🔳 ⬛ ⬜ ⯀ ⬝ ⬞ ⬚ ⬒ ⬓ ⬔ ⬕
+sym	菱形,daiyagata,rhombus	🔶 🔷 🔸 🔹
+sym	三角形,sankakukei,triangle	🔺 🔻 🔼 🔽
+
+# ══════════════════════════════════════════════
+# 辦公與科技
+# ══════════════════════════════════════════════
+
+sym	辦公,jimu,office	💼 📁 📋 📎 📌 📊 📅 🖨 📠 📞
+sym	公事包,kaban,briefcase	💼
+sym	資料夾,foruda,folder	📁 📂
+sym	文件,shorui,document	📄 📃 📑 📜
+sym	日曆,karendaa,calendar	📅 📆
+sym	名片,meishi,namecard	📇 📛
+sym	圖表,gurafu,chart	📊 📈 📉
+sym	上升,joushou,uptrend	📈
+sym	下降,kakou,downtrend	📉
+sym	長條圖,bougurafu,bargraph	📊
+sym	剪貼簿,kurippubodo,clipboard	📋
+sym	圖釘,byou,pushpin	📌 📍
+sym	迴紋針,kurippu,paperclip	📎
+sym	尺,jougi,ruler	📏 📐
+sym	筆記本,nooto,notebook	📓 📒 📔
+sym	磁碟,disuku,disk	💾 💽 🖪 🖫 🖬
+sym	光碟,disuku2,cd	💿 📀
+sym	硬碟,haadodisuku,harddisk	🖴
+sym	磁帶,teepu,tape	🖭 📼 ✇
+sym	鍵盤,kiiboodo,keyboard	🖮 🖦
+sym	滑鼠,mausu,mouse2	🖰 🖯 🖲
+sym	印表機,purintaa,printer	🖨
+sym	計算機,dentaku,calculator	🖩
+sym	傳真,fakkusu,fax	📠
+sym	網路,nettowaaku,network	🖧
+sym	主機,dentakuki,pc	🖳
+sym	天線,antena,antenna	📡 📶
+sym	訊號,denpa,signal	📶
+sym	廣播,housou,broadcast	📢 📣 📻
+sym	喇叭,supiikaa,loudspeaker,speaker	📢 📣 🔊 🔉 🔈 🔇
+sym	收音機,rajio,radio,選鈕,raziobotan	📻 🔘
+sym	收件匣,juushinbako,inbox	📥
+sym	寄件匣,soushinbako,outbox	📤
+sym	郵筒,posuto,mailbox	📪 📫 📬 📭
+sym	號角,rappa,horn	📯
+sym	報紙,shinbun,newspaper	📰
+sym	震動,baiburehshon,vibrate	📳
+sym	關機,denngenoff,phoneoff	📴
+sym	禁用手機,keitaikinshi,nophone	📵
+sym	錄影帶,bideo,videotape	📼
+sym	放映機,eishaki,projector	📽
+sym	音響,ongakupureeyaa,stereo	📾
+sym	念珠,juzu,beads	📿
+sym	呼叫器,poketberu,pager	📟
+
+# ══════════════════════════════════════════════
+# 符號與記號
+# ══════════════════════════════════════════════
+
+sym	右,migi,right	⇒ ➡ ⮕ ⇨ ⭢ ⇢ ↝ ⇝ ↬ ⇉ ⇛ ⭆ ⮞ ⮚ ⭬ ⭲ ⭼ ⮆ ⮊ ⯮ ⇰
+sym	左,hidari,left	⇐ ⬅ ⇦ ⭠ ↞ ⇠ ↜ ⇜ ↢ ↤ ↫ ⇇ ⇚ ⭅ ⮜ ⮘ ⭪ ⭰ ⭺ ⮄ ⮈ ⯬ ⇍
+sym	上,ue,up	⇑ ⬆ ⇧ ⭡ ⇡ ↟ ↥ ⇈ ⇞ ⇮ ⇪ ⮝ ⮙ ⭫ ⭱ ⭻ ⮅ ⮉ ⯭ ⮹
+sym	下,shita,down	⇓ ⬇ ⇩ ⭣ ⇣ ↡ ↧ ⇊ ⇟ ⮟ ⮛ ⭭ ⭳ ⭽ ⮇ ⮋ ⯯ ↯ ⭍
+sym	右上,migiue,upright	↗ ⇗ ⬀ ⬈ ⭧ ⭷ ⭎ ⭚ ⭜
+sym	左上,hidariue,upleft	↖ ⇖ ⬁ ⬉ ⭦ ⭶ ↸ ⇱
+sym	右下,migishita,downright	↘ ⇘ ⬂ ⬊ ⭨ ⭸ ⇲ ⭏ ⭛ ⭝
+sym	左下,hidarishita,downleft	↙ ⇙ ⬃ ⬋ ⭩ ⭹
+sym	上下,jouge,updown	↕ ⇕ ⬍ ⇳ ⭥ ↨
+sym	左右,sayuu,leftright	⬌ ⬄ ⭤ ↭
+sym	雙向,ryouhou,bothways	⇄ ⇆ ⇅ ⇋ ⇌ ⮀ ⮂ ⮁ ⮃ ⭤ ⬍
+sym	轉彎,magaru,turn	↰ ↱ ↲ ↳ ⬎ ⬏ ⬐ ⬑ ↴ ⮠ ⮡ ⮢ ⮣ ⮤ ⮥ ⮦ ⮧ ⮨ ⮩ ⮪ ⮫ ⮬ ⮭ ⮮ ⮯ ⭞ ⭟
+sym	循環,junkan,cycle	🔄 🔃 ↻ ↺ ⭮ ⭯ ↷ ↶ ⮔ ⮌ ⮍ ⮎ ⮏ 🔁
+sym	返回,modoru,back	↩ ↪ ↵ ⮐ ⮑ ⮒ ⮓ 🔙
+sym	魚叉,mori,harpoon	↼ ↽ ↾ ↿ ⇀ ⇁ ⇂ ⇃
+sym	緞帶箭頭,ribonyajirushi,ribbon	⮰ ⮱ ⮲ ⮳ ⮴ ⮵ ⮶ ⮷
+sym	大寫鎖定,kyapusurokku,capslock	⇪ ⇫ ⇬ ⇭ ⇮ ⇯ ⮸
+sym	跳格,tabu,tab	⇥ ⇤ ↹ ⭾ ⭿
+sym	洗牌,shaffuru,shuffle	🔀
+sym	單曲循環,ichikyokuriipiito,repeatone	🔂
+sym	大圓,ookiimaru,bigcircle	⬤ ⭕ ⭘ ⭗ ⭖ ⯊ ⯋
+sym	五邊形,gokakkei,pentagon	⬟ ⬠ ⭓ ⭔ ⯂
+sym	六邊形,rokkakkei,hexagon	⬢ ⬡ ⬣
+sym	八邊形,hakkakkei,octagon	⯄ ⯃
+sym	橢圓,daen,ellipse	⬬ ⬭ ⬮ ⬯
+sym	稜形,ryoukei,lozenge	⬥ ⬦ ⬧ ⬨ ⬩ ⬪ ⬫ ⬖ ⬗ ⬘ ⬙ ⯁
+sym	小三角,kosankaku,smalltriangle	⯅ ⯆ ⯇ ⯈
+sym	重疊方塊,kasanaru,overlap	⮺ ⮻ ⮼
+sym	打叉圈,batsumaru,circledx	⮾ ⮿ ⭙
+sym	打叉框,batsubokkusu,xbox	⮽
+sym	小星,kohoshi,smallstar	⭑ ⭒ ⚝ ⯨ ⯩ ⯪ ⯫
+sym	靜音,myuuto,mute	🔇
+sym	亮度,akarusa,brightness	🔆 🔅
+sym	電池,denchi,battery	🔋
+sym	插頭,konsento,plug	🔌
+sym	連結,rinku,link	🔗
+sym	書籤,shiori,bookmark	🔖
+sym	結束,owari,end	🔚
+sym	開啟,onchuu,onmark	🔛
+sym	即將,mamonaku,soon	🔜
+sym	頂端,toppu,top	🔝
+sym	十八禁,juuhachikin,adult	🔞
+sym	大寫,oomoji,uppercase	🔠
+sym	小寫,komoji,lowercase	🔡
+sym	數字,suuji,numbers	🔢
+sym	輸入符號,nyuuryokukigou,inputsymbol	🔣
+sym	字母,arufabetto,abc	🔤 🔠 🔡
+sym	骰子,saikoro,dice	⚀ ⚁ ⚂ ⚃ ⚄ ⚅
+sym	旗子,hata,flag	⚐ ⚑
+sym	原子,genshi,atom	⚛
+sym	永久,eikyuu,permanent	♾
+sym	鳶尾花,yuri,fleurdelis	⚜
+sym	蛇杖,herumesu,caduceus	⚚
+sym	保密,himitsu,confidential	🔏
+sym	不確定,fukakujitsu,uncertain	⯑
+
+# ══════════════════════════════════════════════
+# 其他雜項
+# ══════════════════════════════════════════════
+
+sym	捏,tsumamu,pinch	🤌 🤏
+sym	閉嘴,kuchichakku,zipmouth	🤐
+sym	書呆子,otaku,nerd	🤓
+sym	受傷,kega,hurt	🤕
+sym	搖滾,rokku,rock	🤘
+sym	打電話,denwashite,callme	🤙
+sym	我愛你,aishiteru,iloveyou	🤟
+sym	牛仔,kaubooi,cowboy	🤠
+sym	流口水,yodare,drool	🤤
+sym	說謊,uso,liar	🤥
+sym	挑眉,mayuage,eyebrow	🤨
+sym	星星眼,kirakirame,stareyes	🤩
+sym	偷笑,kusukusu,giggle	🤭
+sym	腦爆,atamabakuhatsu,mindblown	🤯
+sym	單眼鏡,monokuru,monocle	🧐
+sym	起司,chiizu,cheese	🧀
+sym	鹽,shio,salt	🧂
+sym	大蒜,ninniku,garlic	🧄
+sym	洋蔥,tamanegi,onion	🧅
+sym	鬆餅,waffuru,waffle	🧇
+sym	奶油,bataa,butter	🧈
+sym	冰塊,koori,ice	🧊
+sym	珍奶,tapioka,bubbletea	🧋
+sym	中東料理,faraferu,falafel	🧆
+sym	瑪黛茶,mateccha,matedrink	🧉
+sym	站,tatsu,standing	🧍
+sym	跪,hizamazuku,kneeling	🧎
+sym	聽障,rousha,deaf	🧏
+sym	鬍子,hige,beard	🧔
+sym	三溫暖,sauna,steamroom	🧖
+sym	攀岩,kuraimingu,climbing	🧗
+sym	打坐,zazen,meditate	🧘
+sym	精靈,yousei,fairy	🧚 🧝
+sym	吸血鬼,kyuuketsuki,vampire	🧛
+sym	巨人,tororu,troll	🧌
+sym	神燈精靈,jinii,genie	🧞
+sym	圍巾,mafuraa,scarf	🧣
+sym	手套,tebukuro,gloves	🧤
+sym	外套,kooto,coat	🧥
+sym	襪子,kutsushita,socks	🧦
+sym	紅包,otoshidama,redenvelope	🧧
+sym	鞭炮,bakuchiku,firecracker	🧨
+sym	拼圖,pazuru,puzzle	🧩
+sym	試管,shikenkan,testtube	🧪 🧫
+sym	基因,idenshi,dna	🧬
+sym	指南針,konpasu,compass	🧭
+sym	算盤,soroban,abacus	🧮
+sym	滅火器,shoukaki,extinguisher	🧯
+sym	內褲,pantsu,underwear	🩲
+sym	短褲,tanpan,shorts	🩳
+sym	血,chi,blood	🩸
+sym	粉紅心,pinkuhaato,pinkheart	🩷
+sym	水藍心,mizuirohaato,lightblueheart	🩵
+sym	灰心,haiirohaato,greyheart	🩶
+sym	鉛筆,enpitsu2,pencil2	✎ ✐ ✑
+sym	打勾,chekku2,checkmark	✓ ☑
+sym	打叉,batsu2,xmark	✗ ✘ ✕ ❎
+sym	十字,juuji,cross2	✚ ✙ ✛ ✜
+sym	十字架,juujika,latincross	✝ ✞ ✟ ✠
+sym	大衛星,dabidenohoshi,starofdavid	✡
+sym	四角星,yonhoshi,fourstar	✦ ✧
+sym	八角星,happoushi,eightstar	✴ ✷ ✸ ✵
+sym	星形,hoshigata,starshape	✩ ✪ ✫ ✬ ✭ ✮ ✯ ✰ ✶ ✹
+sym	米字,asuta,asterisk	✱ ✲ ✳ ✺ ✢ ✣ ✤ ✥ ❉ ❊ ❋ ❃
+sym	花朵,hanagata,florette	✿ ❀ ❁ ✾ ✽ ✻ ✼
+sym	雪花,yukinokesshou,snowflake	❅ ❆ ❄
+sym	火花,sanpaku,sparkle	❇ ❈
+sym	方框,shikaku2,box	❏ ❐ ❑ ❒
+sym	圓框,marugata,circleshape	❍ ❂
+sym	直線,tatebou,verticalbar	❘ ❙ ❚
+sym	引號,inyouhu,quote	❛ ❜ ❝ ❞ ❟ ❠
+sym	驚嘆,kantan,heavyexclamation	❢
+sym	愛心裝飾,haatokazari,heartornament	❥ ❦ ❧
+sym	菱形裝飾,daiyakazari,diamondornament	❖
+sym	右箭頭,migiyajirushi,rightarrow	➡ ➔ ➙ ➜ ➝ ➞ ➟ ➠ ➛ ➧ ➨
+sym	粗箭頭,futoiyajirushi,fatarrow	➤ ➢ ➣ ➲ ➵ ➸ ➻ ➽ ➾
+sym	白箭頭,shiroyajirushi,whitearrow	➩ ➪ ➫ ➬ ➭ ➮ ➯ ➱ ➳
+sym	斜箭頭,nanameyajirushi,diagonalarrow	➚ ➘ ➶ ➴ ➹ ➷ ➺ ➼
+sym	彎箭頭,magaruyajirushi,curvearrow	➥ ➦
+sym	圈圈,kuruguru,loop	➰ ➿
+sym	粗加,futoiplus,heavyplus	➕
+sym	粗減,futoiminus,heavyminus	➖
+sym	粗除,futoiwaru,heavydivide	➗
+sym	電話符號,denwakigou,phonesign	✆
+sym	剪,kiru,cut	✂ ✀ ✁ ✃ ✄

@@ -31,6 +31,7 @@ pub mod english;
 pub mod input;
 pub mod language;
 pub mod learn;
+pub mod lm;
 pub mod pack;
 pub mod render;
 pub mod romaji;
@@ -38,6 +39,7 @@ pub mod sanitize;
 pub mod session;
 pub mod symbol;
 #[cfg(feature = "config")]
+pub mod theme;
 pub mod theme_preset;
 pub mod width;
 
@@ -75,6 +77,10 @@ pub fn preload(data_dir: &std::path::Path, engines: config::Engines) {
     english::load(data_dir);
     if engines.bopomofo {
         dict::load_bopomofo(data_dir);
+        // 選字要用的中文 bigram。**載不到不影響**——`compose::apply_lm`
+        // 看到沒有模型就整段跳過，選字退回原本的純字頻行為。
+        // 它跟詞庫是分開的兩份資料，缺一份不該讓另一份也不能用。
+        lm::load(data_dir, dict::char_freq_map(data_dir));
     }
     if engines.romaji {
         dict::load_japanese(data_dir);

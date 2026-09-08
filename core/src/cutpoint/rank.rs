@@ -40,6 +40,30 @@ use crate::romaji;
 /// 一種切法的分數。
 ///
 /// 欄位順序就是比較的優先順序（`derive(Ord)` 依序比較）。
+///
+/// # 為什麼點名式的懲罰排在計數式前面（2026-09-07 重排）
+///
+/// `stolen`／`split_word` 是**點名式**的——它們指得出「哪個字被誰偷走」、
+/// 「哪個詞被攔腰切開」，有具體證據。`passthrough` 是**計數式**的，
+/// 只數殘渣有幾個字元。計數式排前面時，字元數會壓過具體證據：
+///
+/// ```text
+/// 英:AP | 英:It    殘渣 2 個  ← 贏
+/// 英:API           殘渣 3 個  ← 正解，卻輸在數量
+/// ```
+///
+/// `same_lang` 退到最後也是同一個道理。同語言的兩段之間有沒有切點，
+/// 對最後輸出**根本沒有影響**（`normalize` 會黏回去），所以它是所有
+/// 懲罰裡證據最弱的一條。而它排在前面時會踩到一個要命的情況：
+/// **詞典沒收整個詞的時候，正解只能以拆開的樣子活下來**——`logout`
+/// 不在 en_50k 裡，整段那條在 `prune` 就死了，正解只剩
+/// `英:log | 英:out`，卻正好被這一欄扣分。罰它等於在罰「詞典沒收錄」。
+///
+/// 但 `same_lang` **不能整個拿掉**——它擋的是 `英:ma | 英:kes | 注:u3`
+/// 這種拿兩個短詞硬湊 `makes` 的切法。退到最後就夠了。
+///
+/// 只重排順序、一條規則沒加沒減，漏斗 1264→1277（+13，六節進步、
+/// 零節退步），前 2 名 1318→1340（+22）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Score {
     /// **整串就是一個注音音節時，把它切開的次數**（取相反數——越少越好）。
@@ -89,28 +113,6 @@ pub struct Score {
     /// 光靠 `clean_word` 不夠——那只讓它「不加分」，但吞掉之後段數
     /// 變少，在同分時反而勝出。這一欄直接罰它。
     pub fewer_swallowed: std::cmp::Reverse<usize>,
-    /// 相鄰同語言的切點數（取相反數——越少越好）。
-    ///
-    /// 同一個語言的兩段之間不該有切點——那是同一個詞列，本來就該
-    /// 連在一起。`注:su3 | 注:cl3` 是把「你好」硬拆成兩段。
-    ///
-    /// **最後一組例外**：最後一段可能是還在打的英文半成品
-    /// （`英:check | 英:c` 打到一半），那一刀不算錯。
-    ///
-    /// 實測 440 句：第一名有 41 個含這種切點，正解只有 6 個。
-    pub fewer_same_lang: std::cmp::Reverse<usize>,
-    /// **英文 passthrough 的字元數**（取相反數——越少越好）。
-    ///
-    /// 英文是瀑布的最後一站，收任何字元，所以垃圾段完全不扣分：
-    ///
-    /// ```text
-    /// 注:au/6wu0␣ | 英:ru42k6bringn03
-    ///                ↑ 14 個字元糊成一團，但 covered 只算「認領了幾個」
-    /// ```
-    ///
-    /// 前面撈到「明天」(8 分) 就贏了，後面接多少垃圾都免費。
-    /// 這一欄給那些「不是英文詞的英文段」記上代價。
-    pub fewer_passthrough: std::cmp::Reverse<usize>,
     /// **英文段偷走注音音節開頭**的次數（取相反數——越少越好）。
     ///
     /// 「英文詞 ＋ 一個字母 = 也是英文詞」的組合在 en_50k 裡有 1265 組
@@ -142,6 +144,30 @@ pub struct Score {
     /// 兩段都是英文的話不算（`review|commit` 是兩個詞，不是一個詞
     /// 被切開）。
     pub fewer_split_word: std::cmp::Reverse<usize>,
+    /// **一個詞被另一種語言的短段從中間剖開**的次數（越少越好）。
+    ///
+    /// `split_word` 只看相鄰兩段，擋不住三段的形狀——中間插一小段
+    /// 別的語言，兩側各自都合法，於是零懲罰勝出：
+    ///
+    /// ```text
+    /// 日:adoba | 英:is | 日:uwo…   アドバイス 被 `is` 剖開
+    /// 英:rev   | 日:ie | 英:we     review 被 `ie`（いえ）剖開
+    /// ```
+    ///
+    /// 兩個方向都罰，見 `split_sandwich`。
+    pub fewer_split_sandwich: std::cmp::Reverse<usize>,
+    /// **英文 passthrough 的字元數**（取相反數——越少越好）。
+    ///
+    /// 英文是瀑布的最後一站，收任何字元，所以垃圾段完全不扣分：
+    ///
+    /// ```text
+    /// 注:au/6wu0␣ | 英:ru42k6bringn03
+    ///                ↑ 14 個字元糊成一團，但 covered 只算「認領了幾個」
+    /// ```
+    ///
+    /// 前面撈到「明天」(8 分) 就贏了，後面接多少垃圾都免費。
+    /// 這一欄給那些「不是英文詞的英文段」記上代價。
+    pub fewer_passthrough: std::cmp::Reverse<usize>,
     /// **短的日文假名碎片**的段數（取相反數——越少越好）。
     ///
     /// 英文有三條懲罰（passthrough／stolen／split_word），日文一條都
@@ -154,11 +180,33 @@ pub struct Score {
     /// ```
     ///
     /// 中文越長越不可能是單一詞條，`covered` 就越接近 0，任何假名碎片
-    /// 都能贏。這一欄專罰「短、合法、但不在詞典裡」的日文段。
+    /// 都能贏。這一欄罰兩種短日文段：
+    ///
+    /// 1. **不在詞典裡**的（原本就有的）。
+    /// 2. **只有一個假名**的，不管在不在詞典裡（2026-09-05 補）。
+    ///
+    /// 第二條是因為第一條實際上幾乎濾不到東西：2～3 字母的合法假名
+    /// 組合裡，**984 個全在 mozc 詞典裡**。地雷只有五組（ㄅㄐㄧ＝`ru`＝る、
+    /// ㄋㄧ＝`su`、ㄑㄧ＝`fu`、ㄒㄧ＝`vu`、ㄌㄧ＝`xu`），但底下全是高頻字
+    /// ——就、見、進、年、想、小、前、六、兩。見「假名碎片」測資。
     ///
     /// **長度門檻不能省**——日文活用形句子正是「合法但不在詞典裡」
     /// （mozc 只收辭書形），那些段長 28～34 字元，不能被罰到。
+    ///
+    /// 但長度只擋得住長的活用形。`tabete`（食べて，6 字元）跟碎片
+    /// 長得一模一樣，所以還要再問一次 `romaji::inflect`——**真的還原
+    /// 得出辭書形的不算碎片**（2026-09-07 補，見計分處的註解）。
     pub fewer_kana_bits: std::cmp::Reverse<usize>,
+    /// 相鄰同語言的切點數（取相反數——越少越好）。
+    ///
+    /// 同一個語言的兩段之間不該有切點——那是同一個詞列，本來就該
+    /// 連在一起。`注:su3 | 注:cl3` 是把「你好」硬拆成兩段。
+    ///
+    /// **最後一組例外**：最後一段可能是還在打的英文半成品
+    /// （`英:check | 英:c` 打到一半），那一刀不算錯。
+    ///
+    /// 實測 440 句：第一名有 41 個含這種切點，正解只有 6 個。
+    pub fewer_same_lang: std::cmp::Reverse<usize>,
     /// 被詞典認領的字元數——越多越好。
     pub covered: usize,
     /// **完全沒有任何一段查得到詞典**的切法要排後面（取相反數）。
@@ -217,12 +265,6 @@ pub struct Score {
 /// 峰值在 12；超過 20 之後活用形句子開始被誤罰。不是刀鋒上的調參。
 const KANA_FRAGMENT: usize = 12;
 
-/// 「長到不可能是一個詞」的字元數。
-///
-/// 日文活用形句子都很長（28～34 字元），而被誤吞的英文詞組合很短
-/// （`sushitime` 9、`onegaidata` 10）。實測 12～24 之間結果完全相同。
-const LONG_SENTENCE: usize = 16;
-
 /// 算一種切法的分數。
 /// 一個段落算分時要問的幾件事。
 ///
@@ -249,6 +291,12 @@ struct SegFacts {
     /// 跟 `bad_head` 分開，是因為整串的最後一個音節可能只是**還在打**
     /// （聲調還沒按），那不該罰。
     bad_last: bool,
+    /// 這一段是**日文動詞的活用形**嗎（`romaji::inflect`）？
+    ///
+    /// **一定要走快取**——它要試各種還原規則、每次都查詞典，實測直接
+    /// 呼叫會讓 p99 從 6.6ms 衝到 24.3ms（排序每鍵要對上千個段落算分）。
+    /// 快取之後同一個段落只算一次。非日文段一律 false，連呼叫都省。
+    inflected: bool,
 }
 
 /// 段落判斷的快取。
@@ -290,6 +338,7 @@ impl Memo {
             common_en: crate::english::is_common_word(s.keys.trim()),
             bad_head,
             bad_last,
+            inflected: s.lang == Language::Romaji && crate::romaji::inflect::is_inflected(&s.keys),
         };
         by_lang.insert(s.keys.clone(), f);
         f
@@ -361,6 +410,10 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
     let split_word = (0..segs.len().saturating_sub(1))
         .filter(|&i| split_english_word(&segs[i], &segs[i + 1]))
         .count();
+    // 【SPIKE 乙】英文段夾在兩個日文段中間，三段合起來是日文詞？
+    let split_ja = (0..segs.len().saturating_sub(2))
+        .filter(|&i| split_sandwich(&segs[i], &segs[i + 1], &segs[i + 2]))
+        .count();
     // 英文段偷走了後面注音音節的開頭嗎？
     let stolen = (0..segs.len().saturating_sub(1))
         .filter(|&i| stole_head(&segs[i], &segs[i + 1]))
@@ -383,7 +436,27 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
                 && !s.is_mark
                 && f.n <= KANA_FRAGMENT
                 && f.claimed
-                && !f.in_dict
+                // **單一假名不管在不在詞典裡**。`!in_dict` 這道門本來很鬆：
+                // 2～3 字母的合法假名組合裡，**984 個都在 mozc 詞典裡**（它收了
+                // 大量單假名詞條，`る` 就是其一），於是碎片懲罰幾乎從來不生效。
+                && (!f.in_dict || single_mora(&s.keys))
+                // **真的是動詞活用形的不算碎片**。
+                //
+                // 碎片與短的活用形長得一模一樣——都是「合法、不在詞典裡、
+                // 又短」，光靠 `KANA_FRAGMENT` 這道長度門檻分不開：
+                //
+                // ```text
+                // 日:tabete（食べて，6 字元）   ← 正解，卻被當碎片罰
+                // 英:tab | 日:ete              ← `ete` 在詞典裡反而不罰，就贏了
+                // ```
+                //
+                // `romaji::inflect` 照文法把活用形還原成辭書形再查詞典，
+                // 分得開這兩者：`tabete` 還原得出 `taberu`，`ete` 還原不出。
+                //
+                // 用**後綴表**做這件事會賠——`goodarimasu`（good ＋ あります）
+                // 尾巴像 `masu` 就被當活用形保護起來，實測 japanese_verbs
+                // 賺 2 句、cutpoint 賠 2 句。分類法沒有這個問題。
+                && !f.inflected
         })
         .count();
     // 顯示不出來的音節數。**整串的最後一個音節不算**——那可能只是
@@ -394,7 +467,6 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
         .enumerate()
         .map(|(i, f)| usize::from(f.bad_head) + usize::from(f.bad_last && i != last_i))
         .sum();
-    let norm_len = super::normalize_len(segs);
     let total_len: usize = facts.iter().map(|f| f.n).sum();
     // **整串是一個注音音節卻被切開**了嗎？見 `Score::fewer_split_syllable`。
     //
@@ -407,12 +479,20 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
     } else {
         0
     };
-    // 不是英文詞的英文段——那是 passthrough 的殘渣
+    // 不是英文詞的英文段——那是 passthrough 的殘渣。
+    // **含小數點的數字串不算殘渣**：`0.49` 這種東西沒有別的解讀，
+    // 罰它 4 分會輸給 `英:0 | 注:.4 | 英:9` 的 2 分，打出「0噢9」。
+    // 只豁免含小數點的——純數字（`264`）不豁免，那個放寬過會讓數字
+    // 在句子裡變成免費的分隔符，實測淨退 6 句（§2.66.2）。
     let passthrough: usize = segs
         .iter()
         .zip(&facts)
         .filter(|(s, f)| {
-            s.lang == Language::English && !s.is_mark && s.keys != super::SEPARATOR && !f.common_en
+            s.lang == Language::English
+                && !s.is_mark
+                && s.keys != super::SEPARATOR
+                && !f.common_en
+                && !decimal_number(&s.keys)
         })
         .map(|(_, f)| f.n)
         .sum();
@@ -420,23 +500,51 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
         fewer_split_syllable: std::cmp::Reverse(split_syllable),
         fewer_unreadable: std::cmp::Reverse(unreadable),
         fewer_split_word: std::cmp::Reverse(split_word),
+        fewer_split_sandwich: std::cmp::Reverse(split_ja),
         fewer_kana_bits: std::cmp::Reverse(kana_bits),
         fewer_stolen: std::cmp::Reverse(stolen),
         fewer_passthrough: std::cmp::Reverse(passthrough),
         fewer_swallowed: std::cmp::Reverse(swallowed),
         fewer_same_lang: std::cmp::Reverse(same_lang),
         covered,
-        // **只有「單段且夠長」時才豁免**。
+        // **只有「單段且真的是活用形」時才豁免**。
         //
         // 豁免是為了保護日文活用形——mozc 只收辭書形，
         // `kinnyoubimadeniteishutsushinakereba`（金曜日までに提出
-        // しなければ，34 字元）整句一段、查不到詞，但那是正解。
+        // しなければ）整句一段、查不到詞，但那是正解。
         //
-        // 但沒有長度限制的話，`sushitime`（9 字元）也被保護了——
-        // 它該切成 `日:sushi | 英:time`。加上長度門檻之後
-        // 輸出正確從 95.5% 跳到 97.3%，而且 12～24 字元之間
-        // 結果完全相同，代表這個分界是真的。
-        has_dict_word: dict_chars > 0 || (norm_len <= 1 && total_len >= LONG_SENTENCE),
+        // 判準曾經是**長度**（≥16 字元就豁免），因為活用形句子通常很長。
+        // 那只是代理指標，會兩頭出錯：`mitukaranakatta`（見つからなかった，
+        // 15 字元）差一個字元就被判死，而 `sushitime`（9）這種
+        // 「日文詞＋英文詞」誤黏的又擋不乾淨。
+        //
+        // 現在改成問 `romaji::inflect`——它照文法把活用形**還原成辭書形**
+        // 再查詞典，還原得出來才算。誤觸從此歸零（`gakkousite`＝学校 site、
+        // `onegaidata`＝お願い data 都不會中），漏斗 1149 → 1155。
+        //
+        // # 為什麼不再限制「整句只有一段」
+        //
+        // 原本這條豁免多一道 `norm_len <= 1` 的閘（整句只有一段才算），
+        // 於是活用形**後面一接東西就失效**：
+        //
+        // ```text
+        // wakarimashita          → 日:wakarimashita          正解第 1
+        // wakarimashita a93 data → 日:wakari|英:mas|日:hita  正解不在池裡
+        // ```
+        //
+        // 後者段數是 4，豁免關掉、`わかりました` 拿 has_dict=0，輸給切碎
+        // 的 `wakari|mas|hita`（`wakari` 查得到詞）。而長句凍結會把當下
+        // 第一名定案，正解就此消失——那 3 筆「切不出來」是這樣來的。
+        //
+        // 判斷粒度本來就該在**段**：`f.inflected` 問的是「這一段是不是
+        // 活用形」，跟同句還有幾段無關。閘門拿掉後漏斗 1230 → 1231，
+        // 十七節無一退步。
+        //
+        // 試過更進一步「活用形段落也算進 `dict_chars`」（段落層級加分），
+        // 總分一樣是 1231，但 japanese_verbs 錯字率 4.7% → 5.3%、排名
+        // 1.02 → 1.03，**賠掉**。豁免停在 `has_dict_word` 這一欄就好，
+        // 那一欄本來就只判「有沒有」不判「有幾個」。
+        has_dict_word: dict_chars > 0 || facts.iter().any(|f| f.inflected),
         fewer_segments: std::cmp::Reverse(segs.len()),
         dict_chars,
     }
@@ -446,6 +554,54 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
 ///
 /// 條件：合起來是英文詞，而且**不是兩段都是英文**——兩段都是英文的
 /// 話那是兩個詞相接（`review|commit`），不是一個詞被切開。
+/// 【SPIKE 乙】一個詞被**另一種語言的短段**從中間剖開了嗎？
+///
+/// `split_word` 罰的是「相鄰兩段合起來是英文詞」，擋不住換成三段的
+/// 形狀——中間插一小段別的語言，兩側各自都合法，於是零懲罰勝出：
+///
+/// ```text
+/// 日:adoba | 英:is | 日:uwo…   `adobaisu`（アドバイス）被 `is` 剖開
+/// 英:rev   | 日:ie | 英:we     `review` 被 `ie`（いえ）剖開
+/// ```
+///
+/// **兩個方向都要認**：日文詞被英文剖開、英文詞被日文剖開，是同一
+/// 個病的兩面。兩側同語言、中間異語言且短（≤3 鍵）才算夾心——長的
+/// 那一段本來就該獨立成段。
+fn split_sandwich(a: &Segment, b: &Segment, c: &Segment) -> bool {
+    if a.is_mark || b.is_mark || c.is_mark {
+        return false;
+    }
+    // 兩側同語言、中間是另一種語言
+    if a.lang != c.lang || b.lang == a.lang {
+        return false;
+    }
+    // 注音不參與：它跟英日的按鍵集合語意不同，黏起來查詞沒有意義
+    if a.lang == Language::Bopomofo || b.lang == Language::Bopomofo {
+        return false;
+    }
+    if b.keys.chars().count() > 3 {
+        return false;
+    }
+    // 三段全黏、或黏到 c 的開頭（c 常是好幾個詞連在一起）
+    let cc: Vec<char> = c.keys.chars().collect();
+    for take in 1..=cc.len() {
+        let head: String = cc[..take].iter().collect();
+        let joined = format!("{}{}{}", a.keys, b.keys, head);
+        let hit = match a.lang {
+            Language::Romaji => crate::dict::is_japanese_word(&joined),
+            Language::English => crate::english::is_common_word(&joined),
+            Language::Bopomofo => false,
+        };
+        if hit {
+            return true;
+        }
+        if take >= 4 {
+            break;
+        }
+    }
+    false
+}
+
 fn split_english_word(a: &Segment, b: &Segment) -> bool {
     if a.is_mark || b.is_mark {
         return false;
@@ -562,9 +718,43 @@ fn clean_word(keys: &str) -> bool {
     // 日文的長音符號也不算——`fo-ku`（ふぉーく）整串是詞典裡的詞，
     // 把 `-` 當標點的話它拿 0 分，於是輸給 `日:fo | 英:-ku`。
     const CHOUON: char = '-';
-    !keys
-        .chars()
-        .any(|c| c == ' ' || (!c.is_ascii_alphanumeric() && c != APOSTROPHE && c != CHOUON))
+    let bytes = keys.as_bytes();
+    !keys.char_indices().any(|(i, c)| {
+        c == ' '
+            || (!c.is_ascii_alphanumeric()
+                && c != APOSTROPHE
+                && c != CHOUON
+                && !decimal_point(bytes, i, c))
+    })
+}
+
+/// 數字包夾的小數點不算標點（`2.64`、`1.39`）。
+///
+/// `.` 在鍵盤上就是注音的ㄥ，所以 `.3`／`.4`／`.6` 剛好都是完整的注音
+/// 音節（ㄥˇ／ㄥˋ／ㄥˊ）。於是 `2.64` 被切成 `英:2 | 注:.6 | 英:4`
+/// 打出「2吽4」，而正解 `英:2.64` 因為含標點被判 `swallowed`——那一欄
+/// 排第 3 順位，直接輸掉。
+///
+/// 判準要求**兩側都是數字**，所以 `5.␣`（第 7 週，`.` 是注音的一部分、
+/// 後面接空白）不受影響。實測現有 1416 筆測資的按鍵裡沒有任何一筆含
+/// 「數字.數字」，只有註解行有。
+/// 含小數點的數字串（`0.49`、`2.64`）——純數字不算，見計分處的註解。
+fn decimal_number(keys: &str) -> bool {
+    let b = keys.as_bytes();
+    keys.contains('.')
+        && !b.is_empty()
+        && b[0].is_ascii_digit()
+        && b[b.len() - 1].is_ascii_digit()
+        && keys
+            .char_indices()
+            .all(|(i, c)| c.is_ascii_digit() || decimal_point(b, i, c))
+}
+
+fn decimal_point(bytes: &[u8], i: usize, c: char) -> bool {
+    c == '.'
+        && i > 0
+        && bytes[i - 1].is_ascii_digit()
+        && bytes.get(i + 1).is_some_and(u8::is_ascii_digit)
 }
 
 /// 這一段有詞典認領嗎？
@@ -672,6 +862,15 @@ fn bopomofo_facts(keys: &str) -> (usize, bool, bool) {
         i += if hit > 0 { hit } else { 1 };
     }
     (covered, head_bad, last_bad)
+}
+
+/// 這段日文只有**一個假名**嗎？
+///
+/// 單一假名單獨成一段，幾乎一定是從中文串裡硬切出來的碎片（`就`的
+/// `ru.4` 前兩鍵剛好是 `ru`＝る）。真正要打的日文助詞（`wo`＝を）
+/// 在整句轉換裡是**日文段內部**的一部分，不會單獨成段，所以罰不到它。
+fn single_mora(keys: &str) -> bool {
+    romaji::split_moras(keys).is_some_and(|m| m.len() == 1)
 }
 
 fn claimed(keys: &str, lang: Language, n: usize) -> bool {
@@ -846,6 +1045,25 @@ mod tests {
         assert!(n2 > KANA_FRAGMENT, "活用形句子要在門檻之上（{n2} 字元）");
     }
 
+    /// **活用形後面接了東西，豁免不可以失效**。
+    ///
+    /// `わかりました` 不在 mozc 詞典裡（只收辭書形 `分かる`），靠
+    /// `has_dict_word` 的活用形豁免才贏得過切碎的 `wakari|mas|hita`
+    /// （`wakari` 查得到）。豁免原本多一道「整句只有一段」的閘，於是
+    /// 後面一接東西就關掉，正解直接掉出候選池。
+    #[test]
+    fn 活用形後面接東西也要保得住() {
+        if !load() {
+            return;
+        }
+        let cands = sort(Incremental::from_keys("wakarimashita a93 data").cuttings());
+        assert_eq!(
+            show(&cands[0]),
+            "日:wakarimashita | 英:␣ | 注:a93 | 英:␣ | 英:data",
+            "わかりました 買 data"
+        );
+    }
+
     #[test]
     fn 純注音排第一() {
         if !load() {
@@ -855,6 +1073,31 @@ mod tests {
         // 你好 = su3cl3
         let cands = sort(Incremental::from_keys("su3cl3").cuttings());
         assert_eq!(show(&cands[0]), "注:su3cl3");
+    }
+
+    /// **單一假名不可以吃掉中文**。
+    ///
+    /// ㄅㄐㄧ 系的三拼字（就、見、進…）前兩鍵剛好是 `ru`＝る，而剩下的
+    /// 韻母＋聲調本身也是合法音節（`.4`＝ㄡˋ），於是整句中文會被切成
+    /// 「日：ru ｜ 注：.4」——而那條切法因為 `る` 在 mozc 詞典裡，反而拿到
+    /// `covered`、`has_dict_word`、`dict_chars` 三項加分，贏過一整段合法但
+    /// 不成詞的注音（那種段落 `covered` 永遠是 0）。
+    #[test]
+    fn 單一假名不會吃掉中文() {
+        if !load() {
+            return;
+        }
+        // 閃就：ㄕㄢˇ ㄐㄧㄡˋ。整串不是詞，但也不該輸給「閃る噢」
+        let cands = sort(Incremental::from_keys("g03ru.4").cuttings());
+        assert_eq!(show(&cands[0]), "注:g03ru.4");
+        // 真正要打的日文不受影響——假名段不止一個假名就罰不到。
+        //
+        // 這裡**不比排序而比判準本身**：`sushi` 究竟是日文還是英文是
+        // 另一個已知歧義（見期望基準審核.md A3），綁進來會讓這個測試
+        // 在詞庫飄動時跟著壞。
+        assert!(single_mora("ru"), "る 是單一假名");
+        assert!(!single_mora("sushi"), "すし 不是");
+        assert!(!single_mora("tabemasu"), "整句日文更不是");
     }
 
     /// **`stole_head` 不可以誤判正解**。
@@ -971,5 +1214,36 @@ mod tests {
         ];
         // 標點那一段不該加分也不該扣分
         assert_eq!(score(&with_mark).covered, score(&with_mark).covered);
+    }
+
+    #[test]
+    fn 含小數點的數字串不算殘渣() {
+        assert!(decimal_number("0.49"));
+        assert!(decimal_number("2.64"));
+        assert!(!decimal_number("264"), "純數字不豁免——放寬過，淨退 6 句");
+        assert!(!decimal_number("5. "), "含空白");
+        assert!(!decimal_number("v2.0"), "開頭是字母");
+
+        // `英:0.49` 罰 4 分會輸給 `英:0|注:.4|英:9` 的 2 分
+        let whole = vec![Segment {
+            keys: "0.49".into(),
+            is_mark: false,
+            lang: Language::English,
+        }];
+        assert_eq!(score(&whole).fewer_passthrough, std::cmp::Reverse(0));
+    }
+
+    #[test]
+    fn 數字包夾的小數點不算標點() {
+        // `.` 就是注音的ㄥ，`.3`／`.4`／`.6` 都是完整音節（ㄥˇ／ㄥˋ／ㄥˊ），
+        // 於是 `2.64` 會被切成 `英:2 | 注:.6 | 英:4` 打出「2吽4」。
+        assert!(clean_word("2.64"), "小數點在數字中間，不算吞了標點");
+        assert!(clean_word("0.49"));
+        assert!(clean_word("264"), "純數字本來就乾淨");
+
+        // 兩側都要是數字——`5.␣`（第 7 週）的 `.` 是注音的一部分
+        assert!(!clean_word("5. "), "後面是空白，不是小數點");
+        assert!(!clean_word("hello."), "句點該自成一段");
+        assert!(!clean_word(".64"), "開頭就是點，不是小數");
     }
 }

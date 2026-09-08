@@ -18,6 +18,7 @@ Phase 1 三個語言引擎的詞庫原始檔。**這些檔案不進版控**（�
 | `japanese/` | [mozc](https://github.com/google/mozc) `src/data/dictionary_oss/dictionary0*.txt` | BSD-3-Clause | `讀音\t左id\t右id\t詞頻\t表記` |
 | `japanese/connection_single_column.txt` | mozc `src/data/dictionary_oss/` | BSD-3-Clause | 接續成本矩陣，單欄 2672×2672，`表[右id][左id]`；產品端尚未使用，給沙盒探索接續成本用 |
 | `english/` | [hermitdave/FrequencyWords](https://github.com/hermitdave/FrequencyWords) `content/2018/en/en_50k.txt` | MIT | `word 頻率數字` |
+| `bopomofo/zh_bigram.gram` | [RIME 八股文](https://github.com/lotem/rime-octagram-data) `zh-hant-t-essay-bgc.gram` | LGPL-3.0 | darts-clone double array，字級 bigram，值是 `int(ln(次數)×10000)`。版面與坑見 `core/src/lm.rs` |
 | `bopomofo/char_freq.txt` | [教育部字頻總表](https://language.moe.gov.tw/001/Upload/files/SITE_CONTENT/M0001/PIN/biau1.htm)（`BIAU1.zip`） | 創用 CC 姓名標示-禁止改作 3.0 臺灣 | `字 頻次`（由 download.ps1 從 Big5 表格轉出） |
 
 原計畫（見開發文件.md §2.3 修訂前版本）列的英文來源是 `wordfreq`，改用
@@ -64,8 +65,9 @@ McBopomofo 詞庫同樣的模式（`data/` 已在 `.gitignore`）。
 所以本專案只擷取「字」與「頻次」兩欄（丟掉部首、筆畫、累積頻次、
 百分比）沒有問題。
 
-剩下的義務是**散布時要標示出處**，詳見
-[開發文件.md §4.32](../開發文件.md#432-待辦詞庫的安裝與散布給一般使用者用之前必須解決)。
+剩下的義務是**散布時要標示出處**，已寫在 [CREDITS.md](../CREDITS.md)（隨安裝包
+一起裝進使用者的電腦）；盤點的完整經過見
+[開發文件.md §2.31](../開發文件.md#231-發布前的授權盤點資料比程式碼難2026-09-02)。
 
 ### 為什麼不用既有的 zh_tw_50k
 
