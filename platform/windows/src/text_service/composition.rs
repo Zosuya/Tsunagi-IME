@@ -151,7 +151,9 @@ pub(crate) fn end_composition(
     state: &mut State,
     kind: EndKind<'_>,
 ) -> Result<()> {
-    state.candidate_window = None;
+    // **兩個視窗要成對收**：預覽列跟候選清單是各自獨立的視窗，只收
+    // 候選的話預覽列會孤零零留在畫面上（Esc 取消組字時實測看得到）。
+    state.close_ime_windows();
     state.session.clear();
 
     let Some(composition) = state.composition.take() else {

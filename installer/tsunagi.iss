@@ -131,18 +131,32 @@ ja.CompTaigi=台湾語辞書パック
 en.CompTaigi=Taiwanese Hokkien pack
 
 [Types]
-; 只有一種安裝類型，但仍要宣告——沒有 [Types] 的話 Inno 會自己生一組
-; 預設值（完整／自訂），元件頁會多出使用者用不到的下拉選單。
-Name: "full"; Description: "{cm:CompMain}"
+; **[Types] 與 [Components] 是配套的，不能只留一半。**
+;
+; 元件的 `Types:` 參數是在說「這個元件預設在哪些安裝類型裡被選中」。
+; 少了 [Types]、元件也沒寫 `Types:` 的話，每個元件都不屬於任何類型，
+; 於是**預設全部沒選中，按下一步一個檔案都不會裝**——症狀是安裝到
+; 一半跳「register_tool.exe 找不到」（實測踩過，兩次都跟這段有關）。
+;
+; 只給一種類型並標 `iscustom`：這是 Inno 給「我只要勾選清單、不要安裝
+; 類型」的標準寫法。iscustom 的類型不會強制任何一組預設值，使用者的
+; 勾選會被保留，元件頁看起來就是一張乾淨的勾選清單。
+Name: "custom"; Description: "{cm:CompMain}"; Flags: iscustom
 
 [Components]
 ; **元件（Components）不是工作（Tasks）**：元件決定「裝哪些檔案」，
 ; 工作決定「做哪些動作」。台語包是檔案，所以走元件。
 ;
+; **台語預設不勾**：它是給特定族群的 1.7MB，多數人用不到，預設裝等於
+; 替所有人做決定。想要的人自己勾——`Types:` 不寫就是「不屬於任何安裝
+; 類型」，效果就是預設不選中。
+;
+; 主程式相反：掛在 custom 底下（預設選中）而且 `fixed`（取消不掉）。
+;
 ; 沒勾的人事後要補：重新執行安裝程式、把台語勾起來即可，Inno 的元件
 ; 選擇本來就可重入，已裝好的部分不受影響。
-Name: "main";  Description: "{cm:CompMain}";  Types: full; Flags: fixed
-Name: "taigi"; Description: "{cm:CompTaigi}"; Types: full
+Name: "main";  Description: "{cm:CompMain}";  Types: custom; Flags: fixed
+Name: "taigi"; Description: "{cm:CompTaigi}"
 
 [Files]
 ; 主程式：`Components: main` 而 main 是 fixed，使用者取消不掉。
@@ -211,7 +225,9 @@ Filename: "{app}\register_tool.exe"; Parameters: "register ""{app}\ime_tip_windo
 ; 會把輸入法加到 Administrator 的清單，而不是實際使用者的。
 Filename: "{app}\register_tool.exe"; Parameters: "enable"; Tasks: enableime; StatusMsg: "{cm:MsgEnabling}"; Flags: runhidden waituntilterminated runasoriginaluser
 
-Filename: "{app}\ime_settings.exe"; Description: "{cm:OpenSettings}"; Flags: postinstall nowait skipifsilent
+; 最後一頁的「開啟設定」。**預設不勾**（`unchecked`）：裝完最想做的事
+; 是去打字試試看，不是開設定頁。想看的人自己勾。
+Filename: "{app}\ime_settings.exe"; Description: "{cm:OpenSettings}"; Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallRun]
 ; **只做 unregister，不做 disable。**

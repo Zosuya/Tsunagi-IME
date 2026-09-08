@@ -1260,6 +1260,72 @@ impl State {
     }
 }
 
+/// 預覽列與候選清單**只能成對收**，這裡守著這件事。
+///
+/// 為什麼是掃原始碼而不是呼叫 `end_composition` 驗狀態：那條路需要真的
+/// TSF context 與 HWND，單元測試造不出來（`CandidateWindow` 內含視窗
+/// 代號，沒有可測的建構方式）。而這個 bug 的形狀本來就是「有人手寫
+/// `x_window = None` 繞過了 `close_ime_windows()`」——直接掃那個寫法，
+/// 比繞遠路模擬狀態更貼近病因。
+///
+/// 踩過一次：預覽列拆成獨立視窗之後，`end_composition` 沒跟上，還停在
+/// 只清 `candidate_window` 的舊寫法，按 Esc 預覽列會孤零零留在畫面上。
+#[cfg(test)]
+mod 視窗成對收掉 {
+    /// `close_ime_windows()` 自己那兩行以外，不可以再有人手動清單一個。
+    #[test]
+    fn 沒有人繞過_close_ime_windows() {
+        // text_service/ 底下每個檔案都要掃——那個 bug 就是出在
+        // composition.rs，只掃 mod.rs 的話正好漏掉它。
+        let files = [
+            ("mod.rs", include_str!("mod.rs")),
+            ("composition.rs", include_str!("composition.rs")),
+            ("ui.rs", include_str!("ui.rs")),
+            ("document.rs", include_str!("document.rs")),
+            ("background.rs", include_str!("background.rs")),
+        ];
+
+        let mut 違規 = Vec::new();
+        for (檔名, 內容) in files {
+            for (行號, 行) in 內容.lines().enumerate() {
+                let t = 行.trim();
+                // 註解不算（本檔的說明文字裡就寫著這些字串）
+                if t.starts_with("//") || t.starts_with("///") {
+                    continue;
+                }
+                // 比對實際的指派（`self.` / `state.` 開頭），不是字串
+                // 字面量——這個測試自己的訊息裡就寫著那些欄位名。
+                let 指派 = |欄位: &str| {
+                    t.starts_with(&format!("self.{欄位} = None"))
+                        || t.starts_with(&format!("state.{欄位} = None"))
+                };
+                if 指派("candidate_window") || 指派("preview_window") {
+                    違規.push(format!("{檔名}:{}: {t}", 行號 + 1));
+                }
+            }
+        }
+
+        // `close_ime_windows()` 的本體就是那兩行，是唯一合法的出現處。
+        assert_eq!(
+            違規.len(),
+            2,
+            "只有 close_ime_windows() 可以直接清視窗，其他地方一律呼叫它。\
+             實際出現在：\n  {}",
+            違規訊息(&違規)
+        );
+        for v in &違規 {
+            assert!(
+                v.starts_with("mod.rs:"),
+                "直接清視窗的程式碼跑到 mod.rs 以外了：{v}"
+            );
+        }
+    }
+
+    fn 違規訊息(v: &[String]) -> String {
+        v.join("\n  ")
+    }
+}
+
 #[cfg(test)]
 mod mode_tests {
     use super::*;
