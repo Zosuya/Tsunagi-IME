@@ -34,8 +34,8 @@
 | <kbd>↑</kbd> <kbd>↓</kbd>                   | 叫出那一格的候選——選字、選標點寫法、選符號都走這裡 |
 | <kbd>1</kbd>～<kbd>9</kbd>                   | 直接挑候選（清單打開時。數字鍵盤也可以）        |
 | <kbd>空白</kbd>                              | 選字時攤開全部候選，再按一次收回來             |
-| <kbd>Ctrl</kbd>（單按）                       | 鎖定語言：自動 → 注音 → 日文 → 英文           |
-| <kbd>Shift</kbd>+<kbd>空白</kbd>             | 全形／半形                                |
+| <kbd>Shift</kbd>+<kbd>空白</kbd>             | 鎖定語言：自動 → 注音 → 日文 → 英文           |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>空白</kbd> | 全形／半形（macOS 是 <kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>空白</kbd>） |
 | <kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd>  | 拉寬拉窄——選字時拉日文詞界，段選單裡推段的邊界   |
 | <kbd>↑</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>↓</kbd> | 快速設定（見下面「快速設定」）            |
 | <kbd>Enter</kbd>                            | 清單打開著的時候是「就選這個」，打字中才是送出    |
@@ -114,7 +114,7 @@
 
 台語**不會進學習層**——選過的台語詞不會被記住並取代華語詞，每次都是這一次的選擇。這是刻意的：不然打過一次「感恩」之後，「謝謝」就永遠出不來了。
 
-安裝程式裡是**可勾選的元件**，預設會裝。沒裝的話重新執行一次安裝程式勾起來即可；也可以自己[下載包檔](tools/取台語資料.md)丟進 `%APPDATA%\tsunagi-ime\packs\`。
+安裝程式裡是**可勾選的元件**，預設會裝。沒裝的話重新執行一次安裝程式勾起來即可；也可以自己[下載包檔](tools/取台語資料.md)丟進 `%APPDATA%\tsunagi-ime\packs\`（macOS 是 `~/Library/Application Support/tsunagi-ime/packs/`）。
 
 ### 語言學習
 
@@ -193,7 +193,7 @@
 - **所有資料皆存於本機**-你所透過本輸入法所輸入的任何文字皆存於本地電腦中，不會推送到任何網路伺服器中。
 # 現況
 
-**Beta 測試中**。目標平台是 Windows（TSF），核心引擎以 Rust 開發、與平台層分離，以利日後移植 macOS（IMK）與 Linux（Fcitx5）。
+**Beta 測試中**。支援 **Windows**（TSF）與 **macOS**（InputMethodKit）。核心引擎以 Rust 開發、與平台層分離，兩個平台共用同一套引擎與設定頁；Linux（Fcitx5）還沒開始。
 
 | 階段              | 狀態                                                        |
 | --------------- | --------------------------------------------------------- |
@@ -203,26 +203,52 @@
 | Phase 3　輸入 UX   | ✅ 候選視窗（自繪 Direct2D）、段選單、逐格選字、語言鎖定、全半形、主題與設定頁、工作列指示器、滑鼠選字 |
 | Phase 4　智慧化與個人化 | ✅ 選字學習與切詞學習（你選過的會記住）                                      |
 | Phase 5　穩定性與發佈  | 🚧 進行中——效能與記憶體已達標、崩潰隔離完成、安裝程式完成；程式碼簽章第一版先不做               |
-| Phase 6　跨平台     | 未開始                                                       |
+| Phase 6　跨平台     | 🚧 macOS 版已發布（Apple Silicon）；Linux 未開始                    |
 
 量得出來的部分：**按鍵延遲 p99 10.5ms**（目標 16ms）、**常駐記憶體 23MB**（目標 50MB，多開一個程式只多約 6MB）、**文字正確率 94%**。
 
 
 ## 安裝
 
+到 [Releases](../../releases) 下載對應平台的檔案。兩個平台都會問要不要裝**台語擴充包**（見下面的[台語](#台語)），不需要的話取消勾選即可，之後想補裝重跑一次同一個安裝程式勾起來就好。
+
+### Windows
+
 需要 **Windows 11 的 x64 版本**。ARM64 沒有提供——手上沒有測試機，寧可不出也不要盲發。Windows 10 沒測過。
 
-到 [Releases](../../releases) 下載 `tsunagi-ime-<版本>-setup.exe`，執行後照精靈走完即可。安裝程式會自動加進 Windows 的輸入法清單。
-
-安裝過程中會問要不要一起裝**台語擴充包**（1.7 MB，見下面的[台語](#台語)）。不需要的話取消勾選就好，之後想補裝**再執行一次同一個安裝程式、把它勾起來**即可，已經裝好的部分不受影響。
+下載 `tsunagi-ime-<版本>-setup.exe`，執行後照精靈走完即可。安裝程式會自動加進 Windows 的輸入法清單。
 
 > **會跳 SmartScreen 警告。** 這個版本還沒有程式碼簽章（憑證要另外申請），Windows 對沒簽章的安裝程式一律會擋一下。要繼續的話按「其他資訊」→「仍要執行」。不放心的話請直接從原始碼建置——下一節有步驟。
 
 解除安裝走「設定 → 應用程式」，會一併清掉註冊與資料夾。
 
+### macOS
+
+需要 **macOS 13 以上的 Apple Silicon（M 系列）**。Intel 版沒有提供。
+
+這個版本沒有 Apple 的簽章與公證，直接雙擊會被系統擋下。開「終端機」跑：
+
+```sh
+xattr -dr com.apple.quarantine ~/Downloads/tsunagi-ime-<版本>-macos-unsigned.pkg
+installer -pkg ~/Downloads/tsunagi-ime-<版本>-macos-unsigned.pkg -target CurrentUserHomeDirectory
+```
+
+第一行拿掉「從網路下載」的隔離標記，第二行安裝。只裝給目前這個使用者，不需要密碼。跑完第一行之後也可以改成直接雙擊。
+
+**安裝程式不會、也不能替你把輸入法打開**——macOS 規定輸入來源一定要使用者自己啟用。所以裝完要：
+
+1. **登出再登入**（或重新開機），系統要重新掃描才看得到新的輸入法
+2. **系統設定 → 鍵盤 → 輸入來源 → 編輯 → ＋ → 繁體中文 → 通譯-Tsunagi**
+
+解除安裝在設定頁的「關於」分頁，也可以直接跑 `~/Library/Input\ Methods/Tsunagi.app/Contents/Resources/uninstall.sh`。**先按解除安裝、再去系統設定移除輸入來源**——反過來的話輸入法一停用就進不去設定頁了。
+
+> **macOS 版少了什麼**：組字區的預覽列（組字中的文字由應用程式自己畫，輸入法插不了手）、候選視窗的背景圖／漸層／文字描邊／高光反白（設定頁上那些項目會直接隱藏）、以及「用 <kbd>Ctrl</kbd> + 那個鍵明講我要標點」——macOS 的輸入法收不到 <kbd>Ctrl</kbd> 組合鍵，這是系統的限制。
+
 ## 自己建置
 
-不裝安裝程式也可以自己建。需要 **Windows 11** 與 **Rust**（2021 edition）。
+不裝安裝程式也可以自己建。兩個平台都需要 **Rust**（2021 edition）。
+
+### Windows
 
 ```powershell
 # 1. 下載詞庫原始檔並編譯成二進位格式（只要做一次，完成後 data\ 約 180MB）
@@ -242,6 +268,22 @@
 裝好之後在 Windows 的輸入法清單裡就看得到。反安裝把 `register` 換成 `unregister`。
 
 > 改了程式碼**不需要重新註冊**，重跑 `.\build-ime.ps1` 即可——但**宿主程式要整個關掉重開**才會載到新版（開新分頁不夠）。
+
+### macOS
+
+需要 **Xcode 命令列工具**（`xcode-select --install`）。詞庫原始檔的下載腳本目前只有 PowerShell 版，Mac 上請照 `data/download.ps1` 裡的網址自己抓。
+
+```bash
+# 建 .app 並裝進 ~/Library/Input Methods/
+./platform/macos/build-app.sh --all
+
+# 產發布用的 .pkg（詞庫打包進去）
+./platform/macos/build-release.sh
+```
+
+裝好之後**登出再登入**，再到系統設定的輸入來源把它加進去。
+
+> 改了程式碼重跑 `build-app.sh` 即可，但**要切走輸入法再切回來**——正在打字的程式可能還連著舊的行程。改圖示或輸入模式的定義則要跳 `CFBundleVersion`，macOS 會快取那些中繼資料。
 
 
 

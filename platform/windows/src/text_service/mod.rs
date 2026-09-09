@@ -98,14 +98,6 @@ pub(super) struct State {
     /// 全半形切換的提示視窗。跟候選是**兩個獨立的視窗**——
     /// 那是狀態提示，這是選字，混在一起候選高度會忽大忽小。
     width_window: Option<crate::width_window::WidthWindow>,
-    /// Ctrl 按著的期間，有沒有按過別的鍵？
-    ///
-    /// # 為什麼要記
-    ///
-    /// 「單按 Ctrl」＝按下、放開，中間沒碰別的鍵——那是語言輪替。
-    /// 但 Ctrl 更常是組合鍵的一半（`Ctrl+C`、`Ctrl+S`），所以不能
-    /// 一放開就當成單按。邏輯與測試在 `keymap::CtrlTap`。
-    ctrl_tap: keymap::CtrlTap,
 }
 
 /// Phase 0 的 Echo IME：不做真正的語言辨識，只證明
@@ -466,8 +458,21 @@ unsafe fn apply_display_attribute(context: &ITfContext, ec: u32, range: &ITfRang
 }
 
 impl ITfKeyEventSink_Impl for TextService_Impl {
-    fn OnSetFocus(&self, _fforeground: BOOL) -> Result<()> {
-        crate::guard::com("OnSetFocus", || Ok(()))
+    fn OnSetFocus(&self, fforeground: BOOL) -> Result<()> {
+        crate::guard::com("OnSetFocus", || {
+            // 量測用：**鍵盤配置被切走的直接證據**。按 `Ctrl+Shift` 之後
+            // 如果這裡收到「失去焦點」，就代表系統把輸入法整個換掉了
+            // ——那比「按鍵到不了」更糟，log 裡看得到就不用猜。
+            crate::dlog!(
+                "[focus] {}",
+                if fforeground.as_bool() {
+                    "取得"
+                } else {
+                    "失去"
+                }
+            );
+            Ok(())
+        })
     }
 
     /// 「這個鍵你要不要？」——TSF 會先問這個，再決定要不要送 `OnKeyDown`。
@@ -475,28 +480,13 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     /// **必須跟 `OnKeyDown` 的判斷一致**，否則會出現「說要卻不處理」
     /// （按鍵消失）或「說不要卻處理了」（宿主也收到一份）。
     /// 兩邊都查同一張表就不會分岔——那是抽出 `keymap` 的主要理由之一。
-    fn OnTestKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+    fn OnTestKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
         crate::guard::key("OnTestKeyDown", || {
             let vk = wparam.0 as u32;
             // 量測快捷鍵攔截用。**這一行要在最前面**——這是 TSF 一定會問的
             // 一步，沒出現在 log 裡就代表按鍵根本沒送到輸入法（被系統或
             // 宿主先吃掉）。往後挪就分不出「沒到」與「到了但我們提早 return」
             crate::keyprobe::probe("Test", vk, None);
-
-            // **「Ctrl 有沒有配別的鍵」要在這裡標記，不能只在 `OnKeyDown`**。
-            //
-            // 這個方法是 TSF 一定會問的，而下面一遇到修飾鍵就回 0——回 0
-            // 之後 TSF 就不會再送 `OnKeyDown` 過來。只在那邊標記的話，
-            // `Ctrl+C`／`Ctrl+V` 的那個字母我們**根本看不到**，放開 Ctrl
-            // 就被當成單按，語言模式莫名其妙被切走。
-            //
-            // 複製貼上是最常按的組合，所以這個漏洞幾乎天天踩到。
-            {
-                let mut state = lock_state(&self.state);
-                state
-                    .ctrl_tap
-                    .key_down(vk, keymap::ctrl_down(), keymap::is_repeat(lparam));
-            }
 
             // `Ctrl+標點鍵` 是唯一被我們接走的修飾鍵組合，見 `ctrl_punct`。
             // **兩個入口的判斷必須一模一樣**，分岔的話會出現「說要卻不處理」
@@ -509,15 +499,16 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     return Ok(BOOL(1));
                 }
             }
-            if is_modifier_down() {
-                return Ok(BOOL(0));
-            }
             let mut state = lock_state(&self.state);
             // 密碼欄位一律不接手，理由同 `OnKeyDown`
             if let Ok(ctx) = pic.ok() {
                 refresh_password(ctx, &mut state);
             }
             if state.password {
+                return Ok(BOOL(0));
+            }
+            // Ctrl／Alt 組合原則上留給宿主，綁定表裡有的例外
+            if defer_to_host(state.mode(), vk) {
                 return Ok(BOOL(0));
             }
             // **有綁定就一律接手**。
@@ -539,103 +530,46 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     /// 那跟 KeyDown 的規則不同（KeyDown 要回 1 才收得到）。
     fn OnTestKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
         crate::guard::key("OnTestKeyUp", || {
-            // **單按 Ctrl 是語言輪替**，所以放開 Ctrl 這一下要接手。
-            //
-            // 其餘一律回 0——我們只是想順便偷看，不需要攔截。
             let vk = wparam.0 as u32;
-            Ok(BOOL::from(vk == VK_CONTROL.0 as u32))
+            // 量測用：**放開也要記**。按下記得到不代表這個組合能用——
+            // `Ctrl+Shift` 切鍵盤配置正是在**放開**時才生效的，只量
+            // 按下會得到「到得了」的錯誤結論。跟 `Test` 對照就看得出
+            // 「按下有、放開沒有」這種被系統中途攔走的情況。
+            crate::keyprobe::probe("Up", vk, None);
+
+            // **一律回 0**。我們只是想在 `OnKeyUp` 偷看修飾鍵放開了沒
+            // （提示視窗要開始淡出），不需要攔截——回 0 但 TSF 仍會送
+            // `OnKeyUp`，那跟 KeyDown 的規則不同。
+            //
+            // 原本放開 Ctrl 要回 1（單按 Ctrl 是語言輪替），2026-09-09
+            // 改成 `Shift+空白` 之後就不需要了。
+            let _ = vk;
+            Ok(BOOL(0))
         })
     }
 
     /// 放開按鍵。
     ///
-    /// 兩件事：
+    /// 只做一件事：**修飾鍵放開時通知提示視窗可以開始淡出**。提示在
+    /// 修飾鍵按著時不淡出，讓使用者按著 Shift 連按空白輪模式時看得到
+    /// 現在切到哪一格。
     ///
-    /// - **Shift**：全半形提示在它按著時不淡出，放開才開始倒數。
-    /// - **單按 Ctrl**（中間沒碰別的鍵）＝ 語言輪替。
-    ///
-    /// # 為什麼是 Ctrl 不是 Shift
-    ///
-    /// 一般輸入法用單按 Shift 切中英文，但這裡要輪四個模式，連按會
-    /// **觸發 Windows 的相黏鍵**（連按五次 Shift 跳出協助工具對話框）。
-    /// Ctrl 沒有那個機制，單按也沒有系統預設功能。
-    fn OnKeyUp(&self, pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
+    /// 語言鎖定原本在這裡（單按 Ctrl 放開時觸發），2026-09-09 改成
+    /// `Shift+空白` 之後整段搬到 `OnKeyDown` 的 `Action::CycleLock`
+    /// ——按下就生效，不必再判斷「這一輪有沒有碰過別的鍵」。
+    /// 那套判斷（`keymap::CtrlTap`）也跟著退休了。
+    fn OnKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
         crate::guard::key("OnKeyUp", || {
             let vk = wparam.0 as u32;
-            // 提示視窗在修飾鍵按著時不淡出，放開才開始倒數。
-            //
-            // 這裡通知的是**已經在畫面上**的那個（全半形的提示：使用者
-            // 按著 Shift 連按空白切模式，現在放開了）。單按 Ctrl 的
-            // 語言提示是下面才建出來的，那個要另外通知——見函式尾端。
-            if vk == VK_SHIFT.0 as u32 {
+            if vk == VK_SHIFT.0 as u32 || vk == VK_CONTROL.0 as u32 {
                 crate::width_window::on_shift_release();
-                return Ok(BOOL(0));
             }
-            if vk != VK_CONTROL.0 as u32 {
-                return Ok(BOOL(0));
-            }
-            crate::width_window::on_shift_release();
-
-            // 按著 Ctrl 按了別的鍵（`Ctrl+C` 這種），這一放開就不算單按。
-            // 標記在 `OnTestKeyDown`／`OnKeyDown`，邏輯見 `keymap::CtrlTap`。
-            let mut state = lock_state(&self.state);
-            let alone = state.ctrl_tap.ctrl_released();
-            if !alone {
-                return Ok(BOOL(0));
-            }
-            let Some(context) = pic.as_ref() else {
-                return Ok(BOOL(0));
-            };
-
-            let before = state.session.lock();
-            state.session.cycle_lock();
-            let after = state.session.lock();
-            if !state.session.is_empty() {
-                if direct_input_mode(&state) {
-                    // **切進「直接輸入」模式時要先把手上的組字送出去**。
-                    //
-                    // 那個模式不該有組字存在，留著的話會變成一串永遠
-                    // 送不出去的底線文字——使用者接著打的字直接進文件，
-                    // 組字區卻還掛在那裡。
-                    let text = state.session.text();
-                    end_composition(context, &mut state, EndKind::Commit(&text))?;
-                } else {
-                    // 輪替之後已經打的字也要跟著重算
-                    update_composition(self, context, &mut state)?;
-                    show_candidates(context, &mut state)?;
-                }
-            }
-            show_lang_window(context, &mut state, before, after)?;
-            // **工作列的字也要跟著變**——語言列不會主動來問，
-            // 不通知的話按了 Ctrl 工作列還顯示舊的模式
-            LANG_BAR.with(|b| {
-                if let Some((btn, _)) = b.borrow().as_ref() {
-                    btn.set_lock(after);
-                }
-            });
-            // **建完才通知可以淡出**。
+            // **處理但不消耗**。回 1 會把放開事件吃掉，而按下那一邊
+            // 我們是放行的——一邊吃一邊不吃，宿主眼裡修飾鍵就一直
+            // 按著，之後每個鍵都變成組合鍵。
             //
-            // 順序不能反：`show_lang_window` 建的是一個全新的動畫，
-            // 預設是「修飾鍵還按著、不要淡出」的狀態。開頭那次
-            // `on_shift_release` 通知的是上一個視窗，對這個新的無效——
-            // 結果就是提示一直掛在畫面上不消失。
-            //
-            // 單按 Shift 的語意本來就是「按完就放開」，沒有「按著不放
-            // 繼續切」的情況（那是全半形的 Shift+空白），所以建完直接
-            // 進入倒數是對的。
-            crate::width_window::on_shift_release();
-            // **處理了，但不消耗**。
-            //
-            // 回 1 會把 Ctrl 的放開事件吃掉，而按下那一邊我們是放行的
-            // （`OnTestKeyDown` 的 `is_modifier_down()` 回 0）——一邊吃
-            // 一邊不吃，宿主眼裡 Ctrl 就一直按著，之後每個鍵都變成組合鍵。
-            //
-            // 新酷音踩過同一個坑（26.4.2）：單按 Shift 切中英文時把 Shift
-            // 攔下來，**遠端桌面與 UltraEdit 因此壞掉**，修法就是改成
-            // 「處理但不消耗」。
-            //
-            // 該做的事在這一行之前都做完了，回 0 只是讓宿主收到它本來
-            // 就該收到的放開事件。
+            // 新酷音踩過同一個坑（26.4.2）：單按 Shift 切中英文時把
+            // Shift 攔下來，**遠端桌面與 UltraEdit 因此壞掉**。
             Ok(BOOL(0))
         })
     }
@@ -648,22 +582,6 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             let Some(context) = pic.as_ref() else {
                 return Ok(BOOL(0));
             };
-            // **先記下「這一下把修飾鍵用掉了」，再決定要不要擋**。
-            //
-            // 順序很重要：`Ctrl+C` 會在下面被擋掉直接 return，如果標記
-            // 寫在 return 之後就永遠執行不到——放開 Ctrl 時就會被誤判成
-            // 單按，複製一次就切一次語言。
-            {
-                // 兩個入口都標記：`OnTestKeyDown` 是主力（見那邊的說明），
-                // 這裡是保險——有些宿主不見得會先問。邏輯與測試在 `CtrlTap`。
-                let mut state = lock_state(&self.state);
-                state.ctrl_tap.key_down(
-                    wparam.0 as u32,
-                    keymap::ctrl_down(),
-                    keymap::is_repeat(lparam),
-                );
-            }
-
             let vk = wparam.0 as u32;
             // `Ctrl+標點鍵`：鎖定注音時明講「我要標點」，見 `ctrl_punct`。
             // 判斷跟 `OnTestKeyDown` 必須一致。
@@ -682,12 +600,6 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 }
             }
 
-            // Ctrl/Alt 的其餘組合留給宿主——那些是應用程式的快捷鍵。
-            // Shift 不擋，它要參與按鍵綁定（Shift+空白 = 切全半形）。
-            if is_modifier_down() {
-                return Ok(BOOL(0));
-            }
-
             let mut state = lock_state(&self.state);
 
             // **密碼欄位一律不接手**：不組字、不彈候選，按鍵原樣給宿主。
@@ -698,6 +610,13 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             if state.password {
                 // 萬一還有殘留的視窗，一起收掉
                 state.close_ime_windows();
+                return Ok(BOOL(0));
+            }
+
+            // Ctrl/Alt 的其餘組合留給宿主——那些是應用程式的快捷鍵。
+            // Shift 不擋，它要參與按鍵綁定（Shift+空白 = 輪替語言鎖定）。
+            // **判斷必須跟 `OnTestKeyDown` 一模一樣**，見 `defer_to_host`。
+            if defer_to_host(state.mode(), vk) {
                 return Ok(BOOL(0));
             }
 
@@ -717,6 +636,23 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             let Some(action) = keymap::lookup(state.mode(), vk) else {
                 return Ok(BOOL(0)); // 沒綁定 → 放行給宿主
             };
+
+            // **輪替型的動作要擋自動重複**。
+            //
+            // 按著 `Shift+空白` 不放，Windows 會持續重送 key-down——不擋
+            // 的話語言鎖定會瘋狂輪替，放開時停在哪一格全看運氣。一般
+            // 打字相反，按著注音鍵就是要連續輸入，所以只擋這兩個。
+            //
+            // 原本的單按 Ctrl 沒這個問題：它在**放開**時才觸發，而放開
+            // 只會發生一次。這是換成組合鍵帶進來的新狀況。
+            //
+            // 吃掉（回 1）而不是放行——這一下本來就是我們的鍵，放行會
+            // 讓宿主收到一個裸的空白鍵。
+            if matches!(action, Action::CycleLock | Action::ToggleWidth)
+                && keymap::is_repeat(lparam)
+            {
+                return Ok(BOOL(1));
+            }
 
             match action {
                 Action::Input(ch) => {
@@ -967,13 +903,13 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     state.session.seg_set_cand(abs);
                     // **挑了就直接定案**——數字鍵的語意是「就是這個」，
                     // 跟選字的 `PickChar` 一致（挑完就套用，不必再按 Enter）
-                    let advance = state.config.behavior.enter_in_select
+                    let advance = state.config.behavior.enter_in_segmenu
                         == ime_core::config::EnterInSelect::Next;
                     state.session.seg_confirm_with(advance);
                     if state.session.seg_done() {
                         state.seg_menu = false;
                         // 理由同 `SegConfirm`
-                        if state.config.behavior.commit_on_last {
+                        if state.config.behavior.commit_on_last_seg {
                             let text = state.session.text();
                             learn_from(&mut state);
                             end_composition(context, &mut state, EndKind::Commit(&text))?;
@@ -989,20 +925,21 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 // 選單那樣只有反白在動。
                 Action::SegConfirm => {
                     use ime_core::config::EnterInSelect;
-                    // **跟選字共用同一個開關**（使用者裁定）：`Next` 是
-                    // 新注音式的「選完往下一個」，`Exit` 是微軟注音式的
-                    // 「選完就停住」。兩層的粒度不同但心智模型一樣。
-                    let advance = state.config.behavior.enter_in_select == EnterInSelect::Next;
+                    // **段選單有自己的開關**（使用者要求 2026-09-09）：
+                    // `Next` 是「選完往下一段」，`Exit` 是「選完就退出」。
+                    //
+                    // 原本跟選字共用，但兩層的粒度不同——選字是逐**字**
+                    // 挑、段選單是逐**段**挑，習慣可以不一樣。
+                    let advance = state.config.behavior.enter_in_segmenu == EnterInSelect::Next;
                     state.session.seg_confirm_with(advance);
                     // **每一段都定案了就關掉選單**——沒有東西可挑了，
                     // 留著只會讓反白停在最後一段、候選是空的（實測回報
                     // 「選到最後不會跳離切法選擇」）。
                     if state.session.seg_done() {
                         state.seg_menu = false;
-                        // 「最後一個選完直接送出」——**三個設定同一個框，
-                        // 行為要一致**。選字那條路早就這樣做了，段選單
-                        // 漏接（實測回報「這功能在台語 TAB 中沒生效」）。
-                        if state.config.behavior.commit_on_last {
+                        // 「最後一段選完直接送出」。**段選單有自己的開關**
+                        // （使用者要求 2026-09-09），原本跟選字共用。
+                        if state.config.behavior.commit_on_last_seg {
                             let text = state.session.text();
                             learn_from(&mut state);
                             end_composition(context, &mut state, EndKind::Commit(&text))?;
@@ -1155,6 +1092,42 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 }
                 // 組字中沒綁定的鍵——吃掉就好，不能放行給宿主（游標會跑掉）
                 Action::Swallow => {}
+                // **輪替語言鎖定**：自動 → 注音 → 日文 → 英文 → 自動。
+                //
+                // 這段原本在 `OnKeyUp`（單按 Ctrl 放開時觸發），2026-09-09
+                // 改成 `Shift+空白` 之後搬到這裡，邏輯一字未改。
+                Action::CycleLock => {
+                    let before = state.session.lock();
+                    state.session.cycle_lock();
+                    let after = state.session.lock();
+                    if !state.session.is_empty() {
+                        if direct_input_mode(&state) {
+                            // **切進「直接輸入」模式時要先把手上的組字送出去**。
+                            //
+                            // 那個模式不該有組字存在，留著的話會變成一串永遠
+                            // 送不出去的底線文字——使用者接著打的字直接進文件，
+                            // 組字區卻還掛在那裡。
+                            let text = state.session.text();
+                            end_composition(context, &mut state, EndKind::Commit(&text))?;
+                        } else {
+                            // 輪替之後已經打的字也要跟著重算
+                            update_composition(self, context, &mut state)?;
+                            show_candidates(context, &mut state)?;
+                        }
+                    }
+                    show_lang_window(context, &mut state, before, after)?;
+                    // **工作列的字也要跟著變**——語言列不會主動來問，
+                    // 不通知的話切了模式工作列還顯示舊的
+                    LANG_BAR.with(|b| {
+                        if let Some((btn, _)) = b.borrow().as_ref() {
+                            btn.set_lock(after);
+                        }
+                    });
+                    // **建完才通知可以淡出**：`show_lang_window` 建的是一個
+                    // 全新的動畫，預設是「修飾鍵還按著、不要淡出」的狀態，
+                    // 不通知的話提示會一直掛在畫面上。順序不能反。
+                    crate::width_window::on_shift_release();
+                }
                 // 切換全半形：三態輪流，已經打好的標點也跟著重畫
                 Action::ToggleWidth => {
                     let before = state.session.width();
@@ -1438,8 +1411,29 @@ fn learn_from(state: &mut State) {
     }
 }
 
-fn is_modifier_down() -> bool {
-    unsafe { (GetKeyState(VK_CONTROL.0 as i32) < 0) || (GetKeyState(VK_MENU.0 as i32) < 0) }
+/// 這個鍵該不該讓給宿主？
+///
+/// **Alt 系一律讓**——那些全是應用程式的選單與快捷鍵，而且 §2.14 實測
+/// 過四個宿主都收不到，接手也沒意義。
+///
+/// **Ctrl 系原則上讓，但 keymap 綁了的例外**。原本這裡是「有 Ctrl 就
+/// 一律讓」，`Ctrl+Shift+空白`（全半形）因此永遠走不到查表那一步。
+/// 改成先問 keymap：綁了就接手，沒綁就讓給宿主。這樣新增 Ctrl 組合
+/// 只要動綁定表，不必再回來改這裡。
+///
+/// `Ctrl+標點鍵` 不走這條——它在呼叫端就先攔下來了，見 `ctrl_punct`。
+fn defer_to_host(mode: keymap::Mode, vk: u32) -> bool {
+    let alt = unsafe { GetKeyState(VK_MENU.0 as i32) < 0 };
+    if alt {
+        return true;
+    }
+    let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) < 0 };
+    // Ctrl 沒按著就不是這個函式要管的事
+    if !ctrl {
+        return false;
+    }
+    // 按著 Ctrl：只有綁定表裡有的才接手
+    keymap::lookup(mode, vk).is_none()
 }
 
 /// 把宿主 App 那支「會閃的插入點」移到目前組字文字的結尾。

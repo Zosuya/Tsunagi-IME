@@ -681,12 +681,12 @@ omoshiroi || 面白い	omoshiroi	omoshiroi
 剛剛|_|client|_|打來	e; e; | |client| |283x96	e; e;  client 283x96
 vpn|_|連不上	vpn| |xu061j6g;4	vpn xu061j6g;4
 麻煩|_|forward|_|給我	a86z06| |forward| |eo3ji3	a86z06 forward eo3ji3
-電車|_|誤點|了	dennsha| |j42u03|xk7	dennsha j42u03xk7
-api|_|回傳|錯誤	api| |cjo65j04|hji4j4	api cjo65j04hji4j4
+電車|_|誤點了	dennsha| |j42u03xk7	dennsha j42u03xk7
+api|_|回傳錯誤	api| |cjo65j04hji4j4	api cjo65j04hji4j4
 週報|_|template|_|在哪	5. 1l4| |template| |y94s83	5. 1l4 template y94s83
 excel|_|打不開	excel| |2831j4d9 	excel 2831j4d9 
 這台|_|printer|_|壞了	5o4w96| |printer| |cj94xk7	5o4w96 printer cj94xk7
-定期|_|要|續約	teiki| |ul |vm4m, 	teiki ul vm4m, 
+定期|_|要續約	teiki| |ul vm4m, 	teiki ul vm4m, 
 zoom|_|連結|_|過期	zoom| |xu06ru,6| |eji4fu6	zoom xu06ru,6 eji4fu6
 幫我|_|forward|_|資料	1; ji3| |forward| |siryou	1; ji3 forward siryou
 wifi|_|很慢	wifi| |cp3a04	wifi cp3a04
@@ -696,7 +696,7 @@ token|_|要更新	token| |ul e/ vup 	token ul e/ vup
 昨天|_|backup|_|失敗	yji6wu0 | |backup| |g 194	yji6wu0  backup g 194
 cache|_|清一下	cache| |fu/ u vu84	cache fu/ u vu84
 記得|_|logout	ru42k6| |logout	ru42k6 logout
-予約|_|取消|了	yoyaku| |fm3vul |xk7	yoyaku fm3vul xk7
+予約|_|取消了	yoyaku| |fm3vul xk7	yoyaku fm3vul xk7
 branch|_|合併完成	branch| |ck61u/4j06t/6	branch ck61u/4j06t/6
 今天|_|standup|_|取消	rup wu0 | |standup| |fm3vul 	rup wu0  standup fm3vul 
 docker|_|起不來	docker| |fu31j4x96	docker fu31j4x96
@@ -704,31 +704,31 @@ docker|_|起不來	docker| |fu31j4x96	docker fu31j4x96
 書類|_|交出去了	shorui| |rul tj fm4xk7	shorui rul tj fm4xk7
 build|_|掛掉了	build| |ej842ul4xk7	build ej842ul4xk7
 密碼|_|reset|_|一下	au4a83| |reset| |u vu84	au4a83 reset u vu84
-port|_|被|佔用	port| |1o4|504m/4	port 1o4504m/4
+port|_|被佔用	port| |1o4504m/4	port 1o4504m/4
 這個|_|endpoint|_|沒回應	5k4ek7| |endpoint| |ai4cjo6u/ 	5k4ek7 endpoint ai4cjo6u/ 
 郵便|_|寄到了	yuubinn| |ru42l4xk7	yuubinn ru42l4xk7
 webhook|_|沒觸發	webhook| |ai4tj4z8 	webhook ai4tj4z8 
 剩下|_|test|_|還沒跑	g/4vu84| |test| |c96ai4ql3	g/4vu84 test c96ai4ql3
-proxy|_|設定|好了	proxy| |gk42u/4|cl3xk7	proxy gk42u/4cl3xk7
+proxy|_|設定好了	proxy| |gk42u/4cl3xk7	proxy gk42u/4cl3xk7
 那個|_|script|_|要改	s84ek7| |script| |ul e93	s84ek7 script ul e93
 請求書|_|寄過去	seikyuusho| |ru4eji4fm4	seikyuusho ru4eji4fm4
 queue|_|塞住了	queue| |n9 5j4xk7	queue n9 5j4xk7
 記得|_|commit|_|訊息	ru42k6| |commit| |vmp4vu6	ru42k6 commit vmp4vu6
 staging|_|環境|_|好了	staging| |cj06ru/4| |cl3xk7	staging cj06ru/4 cl3xk7
 這個|_|package|_|太舊	5k4ek7| |package| |w94ru.4	5k4ek7 package w94ru.4
-担当|_|換人|了	tanntou| |cj04bp6|xk7	tanntou cj04bp6xk7
+担当|_|換人了	tanntou| |cj04bp6xk7	tanntou cj04bp6xk7
 memory|_|不太夠	memory| |1j4w94e.4	memory 1j4w94e.4
 請|_|review|_|一下	fu/3| |review| |u vu84	fu/3 review u vu84
 https|_|憑證|_|過期	https| |qu/65/4| |eji4fu6	https qu/65/4 eji4fu6
 今晚|_|release	rup j03| |release	rup j03 release
-面接|_|安排|好了	mennsetu| |0 q96|cl3xk7	mennsetu 0 q96cl3xk7
+面接|_|安排好了	mennsetu| |0 q96cl3xk7	mennsetu 0 q96cl3xk7
 log|_|太多了	log| |w942ji xk7	log w942ji xk7
 那個|_|link|_|失效	s84ek7| |link| |g vul4	s84ek7 link g vul4
 mobile|_|版本|_|有問題	mobile| |1031p3| |u.3jp4wu6	mobile 1031p3 u.3jp4wu6
 幫忙|_|debug|_|一下	1; a;6| |debug| |u vu84	1; a;6 debug u vu84
 報告書|_|寫完了	houkokusho| |vu,3j06xk7	houkokusho vu,3j06xk7
-database|_|備份|好了	database| |1o4zp4|cl3xk7	database 1o4zp4cl3xk7
-那個|_|feature|_|先|關掉	s84ek7| |feature| |vu0 |ej0 2ul4	s84ek7 feature vu0 ej0 2ul4
+database|_|備份好了	database| |1o4zp4cl3xk7	database 1o4zp4cl3xk7
+那個|_|feature|_|先關掉	s84ek7| |feature| |vu0 ej0 2ul4	s84ek7 feature vu0 ej0 2ul4
 cronjob|_|沒跑	cronjob| |ai4ql3	cronjob ai4ql3
 這個|_|query|_|很慢	5k4ek7| |query| |cp3a04	5k4ek7 query cp3a04
 見積|_|出來了	mitumo| |tj x94xk7	mitumo tj x94xk7
@@ -1111,11 +1111,11 @@ hi|今天	hi|rup wu0 	hirup wu0
 
 #
 # ---- 2026-09-07 補 5 筆：五組地雷（ru su fu vu xu）各再一句 ----
-見面|再說	ru04au04y94gji 	ru04au04y94gji 
-進去|看看	rup4fm4|d04d04	rup4fm4d04d04
-年紀|大了	su06ru4|284xk7	su06ru4284xk7
-強調|重點	fu;62ul45j/42u03	fu;62ul45j/42u03
-連續|三天	xu06vm4|n0 wu0 	xu06vm4n0 wu0 
+見面再說	ru04au04y94gji 	ru04au04y94gji 
+進去看看	rup4fm4d04d04	rup4fm4d04d04
+年紀大了	su06ru4284xk7	su06ru4284xk7
+強調重點	fu;62ul45j/42u03	fu;62ul45j/42u03
+連續三天	xu06vm4n0 wu0 	xu06vm4n0 wu0 
 ## en_bopomofo ｜ 主測：切點 ｜ 來源：人工
 # 混合語言測資（第七組）：英文詞的結尾偷走注音音節的開頭
 #
@@ -1530,12 +1530,12 @@ token|_|要更新|。|買|_|失礼|_|review|，|学校|已經|world|，|admin|�
 handler|開|。|world|_|こんにちは|_|queue|_|塞住了|_|hand|早|，|button|買|。|音楽|player|，|meeting|_|寿司	handler|d9 |.|world| |konnnichiha| |queue| |n9 5j4xk7| |hand|yl3|,|button|a93|.|onngaku|player|,|meeting| |sushi	handlerd9 .world konnnichiha queue n9 5j4xk7 handyl3,buttona93.onngakuplayer,meeting sushi
 明日|meeting|這個|_|明天|_|meeting|_|寿司|_|anchor|要|_|data|你|。|deploy|頑張って|檔案|。|同人誌|_|買了三本	ashita|meeting|5k4ek7| |au/6wu0 | |meeting| |sushi| |anchor|ul | |data|su3|.|deploy|gannbatte|2;304|.|douzinnsi| |a93xk7n0 1p3	ashitameeting5k4ek7 au/6wu0  meeting sushi anchorul  datasu3.deploygannbatte2;304.douzinnsi a93xk7n0 1p3
 会議|_|build|，|ok|走走|_|昨天|。|問題|_|server|，|限定版|_|賣完了|_|file|_|data|。|網站|，|明天|_|記得	kaigi| |build|,|ok|y.3y.3| |yji6wu0 |.|jp4wu6| |server|,|gennteibann| |a94j06xk7| |file| |data|.|j;3504|,|au/6wu0 | |ru42k6	kaigi build,oky.3y.3 yji6wu0 .jp4wu6 server,gennteibann a94j06xk7 file data.j;3504,au/6wu0  ru42k6
-javascript|。|定期|_|要|續約|_|好吃|_|file|_|失礼|。|抽到|_|推し|_|今日|test|_|want|你|_|書類|_|交出去了	javascript|.|teiki| |ul |vm4m, | |cl3t | |file| |shitsurei|.|t. 2l4| |osi| |kyou|test| |want|su3| |shorui| |rul tj fm4xk7	javascript.teiki ul vm4m,  cl3t  file shitsurei.t. 2l4 osi kyoutest wantsu3 shorui rul tj fm4xk7
+javascript|。|定期|_|要續約|_|好吃|_|file|_|失礼|。|抽到|_|推し|_|今日|test|_|want|你|_|書類|_|交出去了	javascript|.|teiki| |ul vm4m, | |cl3t | |file| |shitsurei|.|t. 2l4| |osi| |kyou|test| |want|su3| |shorui| |rul tj fm4xk7	javascript.teiki ul vm4m,  cl3t  file shitsurei.t. 2l4 osi kyoutest wantsu3 shorui rul tj fm4xk7
 memory|_|不太夠|。|meeting|寿司|一下|，|they|好|_|ありがとうございます|_|あまり乗り気じゃない|_|each|年|_|excel|_|打不開	memory| |1j4w94e.4|.|meeting|sushi|u vu84|,|they|cl3| |arigatougozaimasu| |amarinorikijanai| |each|su06| |excel| |2831j4d9 	memory 1j4w94e.4.meetingsushiu vu84,theycl3 arigatougozaimasu amarinorikijanai eachsu06 excel 2831j4d9 
 沒問題|です|_|資料|_|檔案|。|剛剛|_|deploy|_|成功|，|同人|_|shop|，|看|_|配信|。|現在|_|やすみじかん	ao6jp4wu6|desu| |y xul4| |2;304|.|e; e; | |deploy| |seikou|,|douzinn| |shop|,|d0 | |haisinn|.|vu04y94| |yasumijikann	ao6jp4wu6desu y xul4 2;304.e; e;  deploy seikou,douzinn shop,d0  haisinn.vu04y94 yasumijikann
 check|記得|寿司|，|晚餐|_|ok|沒問題|。|ございます|update|。|日本|_|旅行|。|資料|folder|_|這個|_|bug|_|很好	check|ru42k6|sushi|,|j03h0 | |ok|ao6jp4wu6|.|gozaimasu|update|.|b41p3| |xm3vu/6|.|siryou|folder| |5k4ek7| |bug| |cp3cl3	checkru42k6sushi,j03h0  okao6jp4wu6.gozaimasuupdate.b41p3 xm3vu/6.siryoufolder 5k4ek7 bug cp3cl3
-明天|_|review|_|資料|，|update|_|進度|_|manager|稿|_|問題|頑張って|_|年紀|大了|。|linker|已|_|等|_|reply	au/6wu0 | |review| |siryou|,|update| |rup42j4| |manager|el3| |jp4wu6|gannbatte| |su06ru4|284xk7|.|linker|u3| |2/3| |reply	au/6wu0  review siryou,update rup42j4 managerel3 jp4wu6gannbatte su06ru4284xk7.linkeru3 2/3 reply
-開發|_|deployserver|_|面接|_|安排|好了|。|謝謝|_|你好|。|，|寿司|一下|notebook|，|這個|。|解決	d9 z8 | |deployserver| |mennsetu| |0 q96|cl3xk7|.|vu,4vu,4| |su3cl3|.|,|sushi|u vu84|notebook|,|5k4ek7|.|ru,3rm,6	d9 z8  deployserver mennsetu 0 q96cl3xk7.vu,4vu,4 su3cl3.,sushiu vu84notebook,5k4ek7.ru,3rm,6
+明天|_|review|_|資料|，|update|_|進度|_|manager|稿|_|問題|頑張って|_|年紀大了|。|linker|已|_|等|_|reply	au/6wu0 | |review| |siryou|,|update| |rup42j4| |manager|el3| |jp4wu6|gannbatte| |su06ru4284xk7|.|linker|u3| |2/3| |reply	au/6wu0  review siryou,update rup42j4 managerel3 jp4wu6gannbatte su06ru4284xk7.linkeru3 2/3 reply
+開發|_|deployserver|_|面接|_|安排好了|。|謝謝|_|你好|。|，|寿司|一下|notebook|，|這個|。|解決	d9 z8 | |deployserver| |mennsetu| |0 q96cl3xk7|.|vu,4vu,4| |su3cl3|.|,|sushi|u vu84|notebook|,|5k4ek7|.|ru,3rm,6	d9 z8  deployserver mennsetu 0 q96cl3xk7.vu,4vu,4 su3cl3.,sushiu vu84notebook,5k4ek7.ru,3rm,6
 天天見面|_|六七個人|_|書類|_|交出去了|。|楽しい|問題|。|engine|買|_|這個|good|あります	wu0 wu0 ru04au04| |xu.4fu ek4bp6| |shorui| |rul tj fm4xk7|.|tanoshii|jp4wu6|.|engine|a93| |5k4ek7|good|arimasu	wu0 wu0 ru04au04 xu.4fu ek4bp6 shorui rul tj fm4xk7.tanoshiijp4wu6.enginea93 5k4ek7goodarimasu
 記得|_|commit|_|訊息|。|一下|_|notebook|_|です|。|アニメ|這個|_|因為|，|會議|_|cronjob|_|沒跑|_|天天見面	ru42k6| |commit| |vmp4vu6|.|u vu84| |notebook| |desu|.|anime|5k4ek7| |up jo4|,|cjo4u4| |cronjob| |ai4ql3| |wu0 wu0 ru04au04	ru42k6 commit vmp4vu6.u vu84 notebook desu.anime5k4ek7 up jo4,cjo4u4 cronjob ai4ql3 wu0 wu0 ru04au04
 買|失礼|，|會議|，|生誕|live|_|コーヒー|。|button|買|，|開|大丈夫|_|that|用|，|仕事|report|工作	a93|shitsurei|,|cjo4u4|,|seitann|live| |ko-hi-|.|button|a93|,|d9 |daijoubu| |that|m/4|,|shigoto|report|ej/ yji4	a93shitsurei,cjo4u4,seitannlive ko-hi-.buttona93,d9 daijoubu thatm/4,shigotoreportej/ yji4
@@ -1543,7 +1543,7 @@ have|你|_|什麼|，|運動|。|午後|_|demo|_|準備|_|push|_|討論|_|写真
 睡覺|_|請求書|_|寄過去|_|加班|_|電話|config|，|運動|，|確認|_|have|你|_|みんなに奢ってあげる	gjo4rul4| |seikyuusho| |ru4eji4fm4| |ru8 10 | |dennwa|config|,|mp42j/4|,|fm,4bp4| |have|su3| |minnnaniogotteageru	gjo4rul4 seikyuusho ru4eji4fm4 ru8 10  dennwaconfig,mp42j/4,fm,4bp4 havesu3 minnnaniogotteageru
 完成今天|_|amazing|。|放心|_|上傳|_|ありがとう|_|https|_|憑證|_|過期|，|原作|_|小說|_|banner|改	j06t/6rup wu0 | |amazing|.|z;4vup | |g;4tj06| |arigatou| |https| |qu/65/4| |eji4fu6|,|m06yji4| |vul3gji | |banner|e93	j06t/6rup wu0  amazing.z;4vup  g;4tj06 arigatou https qu/65/4 eji4fu6,m06yji4 vul3gji  bannere93
 楽しい|_|美味しい|_|sprint|_|結束|_|お疲れ|。|each|年|。|再見|_|功能|_|確認|_|電車|_|search|，|工作|merge|写真	tanoshii| |oishii| |sprint| |ru,6gj4| |otukare|.|each|su06|.|y94ru04| |ej/ s/6| |fm,4bp4| |dennsha| |search|,|ej/ yji4|merge|shashinn	tanoshii oishii sprint ru,6gj4 otukare.eachsu06.y94ru04 ej/ s/6 fm,4bp4 dennsha search,ej/ yji4mergeshashinn
-format|去|，|worker|用|_|number|稿|_|進去|看看|_|good|沒問題|です|。|先生|page|，|便當|_|還是|。|系統	format|fm4|,|worker|m/4| |number|el3| |rup4fm4|d04d04| |good|ao6jp4wu6|desu|.|sennsei|page|,|1u042; | |c96g4|.|vu4wj/3	formatfm4,workerm/4 numberel3 rup4fm4d04d04 goodao6jp4wu6desu.sennseipage,1u042;  c96g4.vu4wj/3
+format|去|，|worker|用|_|number|稿|_|進去看看|_|good|沒問題|です|。|先生|page|，|便當|_|還是|。|系統	format|fm4|,|worker|m/4| |number|el3| |rup4fm4d04d04| |good|ao6jp4wu6|desu|.|sennsei|page|,|1u042; | |c96g4|.|vu4wj/3	formatfm4,workerm/4 numberel3 rup4fm4d04d04 goodao6jp4wu6desu.sennseipage,1u042;  c96g4.vu4wj/3
 火車|_|頑張って|_|client|。|mail|_|寄出去了|，|什麼|_|更新|。|draft|_|合約|_|習慣|_|兩三年前	cji3tk | |gannbatte| |client|.|mail| |ru4tj fm4xk7|,|gk6ai7| |e/ vup |.|draft| |ck6m, | |vu6ej04| |xu;3n0 su06fu06	cji3tk  gannbatte client.mail ru4tj fm4xk7,gk6ai7 e/ vup .draft ck6m,  vu6ej04 xu;3n0 su06fu06
 你就知道|，|config|時間|。|期末考|_|六七個人|_|push|_|討論|_|写真|_|download|_|確認	su3ru.45 2l4|,|config|g6ru0 |.|fu6ai4dl3| |xu.4fu ek4bp6| |push| |wl3xjp4| |shashinn| |download| |fm,4bp4	su3ru.45 2l4,configg6ru0 .fu6ai4dl3 xu.4fu ek4bp6 push wl3xjp4 shashinn download fm,4bp4
 友達|_|電話|。|加班|，|討論|_|build|_|keeper|要|，|麵包|_|時間|merge|_|push|_|上去|。|あまり乗り気じゃない	tomodachi| |dennwa|.|ru8 10 |,|wl3xjp4| |build| |keeper|ul |,|au041l | |jikann|merge| |push| |g;4fm4|.|amarinorikijanai	tomodachi dennwa.ru8 10 ,wl3xjp4 build keeperul ,au041l  jikannmerge push g;4fm4.amarinorikijanai
@@ -1557,7 +1557,7 @@ when|目|，|render|好|_|report|工作|会議|，|good|_|沒問題|_|hello|。|
 respond|天|，|我明天就過去|。|開好|，|我看見那隻鳥|。|performance|。|play|你|，|現在|_|可以|_|merge	respond|wu0 |,|ji3au/6wu0 ru.4eji4fm4|.|d9 cl3|,|ji3d04ru04s8 5 sul3|.|performance|.|play|su3|,|vu04y94| |dk3u3| |merge	respondwu0 ,ji3au/6wu0 ru.4eji4fm4.d9 cl3,ji3d04ru04s8 5 sul3.performance.playsu3,vu04y94 dk3u3 merge
 こんにちは|_|明天|_|configreport|。|search|ありがとう|_|上傳|_|_|已經|_|logger|上|_|漫画|_|很好看	konnnichiha| |au/6wu0 | |configreport|.|search|arigatou| |g;4tj06| | |u3ru/ | |logger|g;4| |mannga| |cp3cl3d0 	konnnichiha au/6wu0  configreport.searcharigatou g;4tj06  u3ru/  loggerg;4 mannga cp3cl3d0 
 route|你|，|記得這個|_|フォーク|。|去|_|秋葉原|_|質問|box|_|review|_|測試|。|六點要下班|_|兩三年前	route|su3|,|ru42k65k4ek7| |fo-ku|.|fm4| |akihabara| |situmonn|box| |review| |hk4g4|.|xu.42u03ul4vu8410 | |xu;3n0 su06fu06	routesu3,ru42k65k4ek7 fo-ku.fm4 akihabara situmonnbox review hk4g4.xu.42u03ul4vu8410  xu;3n0 su06fu06
-年紀|大了|，|買|data|_|六點要下班|，|server|買|，|你好|。|_|come|你|。|アドバイスを聞いていれば|。|那個|_|release|_|延期	su06ru4|284xk7|,|a93|data| |xu.42u03ul4vu8410 |,|server|a93|,|su3cl3|.| |come|su3|.|adobaisuwokiiteireba|.|s84ek7| |release| |u06fu6	su06ru4284xk7,a93data xu.42u03ul4vu8410 ,servera93,su3cl3. comesu3.adobaisuwokiiteireba.s84ek7 release u06fu6
+年紀大了|，|買|data|_|六點要下班|，|server|買|，|你好|。|_|come|你|。|アドバイスを聞いていれば|。|那個|_|release|_|延期	su06ru4284xk7|,|a93|data| |xu.42u03ul4vu8410 |,|server|a93|,|su3cl3|.| |come|su3|.|adobaisuwokiiteireba|.|s84ek7| |release| |u06fu6	su06ru4284xk7,a93data xu.42u03ul4vu8410 ,servera93,su3cl3. comesu3.adobaisuwokiiteireba.s84ek7 release u06fu6
 照片|_|then|去|_|一下|_|notebook|_|です|。|応援|_|上映|。|cronjob|_|沒跑|_|number|目|，|見面好吃	5l4qu04| |then|fm4| |u vu84| |notebook| |desu|.|ouenn| |g;4u/4|.|cronjob| |ai4ql3| |number|aj4|,|ru04au04cl3t 	5l4qu04 thenfm4 u vu84 notebook desu.ouenn g;4u/4.cronjob ai4ql3 numberaj4,ru04au04cl3t 
 我進去看看|_|アニメ|這個|，|単位を落とされてしまう|。|take|你|。|握手会|_|要抽選|_|hello|.|_|明天|_|記得	ji3rup4fm4d04d04| |anime|5k4ek7|,|tanniwootosareteshimau|.|take|su3|.|akushukai| |ul t. vm03| |hello|.| |au/6wu0 | |ru42k6	ji3rup4fm4d04d04 anime5k4ek7,tanniwootosareteshimau.takesu3.akushukai ul t. vm03 hello. au/6wu0  ru42k6
 hello|.|.|.|_|剩下|_|test|_|還沒跑|。|兩個|ramen|，|電車|search|，|這個|_|bug|_|很好|_|sensor|稿|_|見面|_|email	hello|.|.|.| |g/4vu84| |test| |c96ai4ql3|.|xu;3ek4|ramen|,|dennsha|search|,|5k4ek7| |bug| |cp3cl3| |sensor|el3| |ru04au04| |email	hello... g/4vu84 test c96ai4ql3.xu;3ek4ramen,dennshasearch,5k4ek7 bug cp3cl3 sensorel3 ru04au04 email
@@ -1577,7 +1577,7 @@ backup|買|。|可以|_|休み|_|merge|_|写真|_|修改|_|需求|。|那件事|
 這個|。|這個|_|bug|_|很好|_|我進辦公室|_|save|_|檔案|。|notebook|_|test|_|我喜歡|寿司|，|file|_|失礼|。|旅行|plan|，|午餐|_|環境|_|等|_|新刊|，|推薦|_|這個|_|遊戲|_|天氣|。|test|_|わかりました|_|買	5k4ek7|.|5k4ek7| |bug| |cp3cl3| |ji3rup4104ej/ g4| |save| |2;304|.|notebook| |test| |ji3vu3cj0 |sushi|,|file| |shitsurei|.|ryokou|plan|,|j3h0 | |cj06ru/4| |2/3| |sinnkann|,|wjo ru04| |5k4ek7| |u.6vu4| |wu0 fu4|.|test| |wakarimashita| |a93	5k4ek7.5k4ek7 bug cp3cl3 ji3rup4104ej/ g4 save 2;304.notebook test ji3vu3cj0 sushi,file shitsurei.ryokouplan,j3h0  cj06ru/4 2/3 sinnkann,wjo ru04 5k4ek7 u.6vu4 wu0 fu4.test wakarimashita a93
 契約|file|_|record|認|_|value|稿|。|ありがとうございました|。|notebook|_|です|。|buffer|天|_|data|_|大丈夫|_|測試|_|runner|改|_|あります|test|_|一起|_|東京|_|好玩|_|print|_|兩份|。|剛剛|_|deploy|_|成功|。|這個|_|query|_|很慢	keiyaku|file| |record|bp4| |value|el3|.|arigatougozaimasita|.|notebook| |desu|.|buffer|wu0 | |data| |daijoubu| |hk4g4| |runner|e93| |arimasu|test| |u fu3| |2j/ ru/ | |cl3j06| |print| |xu;3zp4|.|e; e; | |deploy| |seikou|.|5k4ek7| |query| |cp3a04	keiyakufile recordbp4 valueel3.arigatougozaimasita.notebook desu.bufferwu0  data daijoubu hk4g4 runnere93 arimasutest u fu3 2j/ ru/  cl3j06 print xu;3zp4.e; e;  deploy seikou.5k4ek7 query cp3a04
 捷運|。|webhook|_|沒觸發|_|環境|_|那個|_|job|_|失敗|。|viewer|改|_|format|去|_|主管|_|commit|改|，|migrate|用|。|email|買|。|submit|_|表單|，|message|認|。|時間|_|討論|。|password|_|license|_|到期|，|希望|，|什麼	ru,6mp4|.|webhook| |ai4tj4z8 | |cj06ru/4| |s84ek7| |job| |g 194|.|viewer|e93| |format|fm4| |5j3ej03| |commit|e93|,|migrate|m/4|.|email|a93|.|submit| |1ul320 |,|message|bp4|.|jikann| |wl3xjp4|.|password| |license| |2l4fu6|,|vu j;4|,|gk6ai7	ru,6mp4.webhook ai4tj4z8  cj06ru/4 s84ek7 job g 194.viewere93 formatfm4 5j3ej03 commite93,migratem/4.emaila93.submit 1ul320 ,messagebp4.jikann wl3xjp4.password license 2l4fu6,vu j;4,gk6ai7
-辞書|lookup|，|review|_|文件|_|editor|要|。|楽しい|deploy|_|出張|_|下週|。|commit|美味しい|資料|_|年紀|大了|，|設定|，|what|你|_|this|開|_|番号|input|。|file|開|大丈夫|，|player|買|，|早安|_|通知|_|team|_|經過那個路口	zisho|lookup|,|review| |jp6ru04| |editor|ul |.|tanoshii|deploy| |shucchou| |vu845. |.|commit|oishii|y xul4| |su06ru4|284xk7|,|gk42u/4|,|what|su3| |this|d9 | |banngou|input|.|file|d9 |daijoubu|,|player|a93|,|yl30 | |wj/ 5 | |team| |ru/ eji4s8 ek4xj4d.3	zisholookup,review jp6ru04 editorul .tanoshiideploy shucchou vu845. .commitoishiiy xul4 su06ru4284xk7,gk42u/4,whatsu3 thisd9  banngouinput.filed9 daijoubu,playera93,yl30  wj/ 5  team ru/ eji4s8 ek4xj4d.3
+辞書|lookup|，|review|_|文件|_|editor|要|。|楽しい|deploy|_|出張|_|下週|。|commit|美味しい|資料|_|年紀大了|，|設定|，|what|你|_|this|開|_|番号|input|。|file|開|大丈夫|，|player|買|，|早安|_|通知|_|team|_|經過那個路口	zisho|lookup|,|review| |jp6ru04| |editor|ul |.|tanoshii|deploy| |shucchou| |vu845. |.|commit|oishii|y xul4| |su06ru4284xk7|,|gk42u/4|,|what|su3| |this|d9 | |banngou|input|.|file|d9 |daijoubu|,|player|a93|,|yl30 | |wj/ 5 | |team| |ru/ eji4s8 ek4xj4d.3	zisholookup,review jp6ru04 editorul .tanoshiideploy shucchou vu845. .commitoishiiy xul4 su06ru4284xk7,gk42u/4,whatsu3 thisd9  banngouinput.filed9 daijoubu,playera93,yl30  wj/ 5  team ru/ eji4s8 ek4xj4d.3
 今日|test|。|data|_|大丈夫|_|測試|，|先|_|merge|_|確認|_|writer|買|_|特典|_|很讚|，|先|_|merge|_|確認|_|生誕|沒問題|，|網路|。|楽しい|_|deploy|_|資料|_|想想看再決定|，|質問|box|，|widget|目|。|time|開	kyou|test|.|data| |daijoubu| |hk4g4|,|vu0 | |merge| |kakuninn| |writer|a93| |tokutenn| |cp3y04|,|vu0 | |merge| |kakuninn| |seitann|ao6jp4wu6|,|j;3xj4|.|tanoshii| |deploy| |y xul4| |vu;3vu;3d04y94rm,62u/4|,|situmonn|box|,|widget|aj4|.|time|d9 	kyoutest.data daijoubu hk4g4,vu0  merge kakuninn writera93 tokutenn cp3y04,vu0  merge kakuninn seitannao6jp4wu6,j;3xj4.tanoshii deploy y xul4 vu;3vu;3d04y94rm,62u/4,situmonnbox,widgetaj4.timed9 
 明天|_|call|_|客戶|，|下午|_|会議|確認|login|，|写真|修改|_|deploy|資料|_|沒問題見面|，|仕事|_|report|_|時間|_|push|_|会議|_|一起|_|あります|_|です|_|会議|build|修改|_|好吃|_|お願い|_|照片|_|我進辦公室	au/6wu0 | |call| |dk4cj4|,|vu84j3| |kaigi|fm,4bp4|login|,|shashinn|vu. e93| |deploy|y xul4| |ao6jp4wu6ru04au04|,|shigoto| |report| |g6ru0 | |push| |kaigi| |u fu3| |arimasu| |desu| |kaigi|build|vu. e93| |cl3t | |onegai| |5l4qu04| |ji3rup4104ej/ g4	au/6wu0  call dk4cj4,vu84j3 kaigifm,4bp4login,shashinnvu. e93 deployy xul4 ao6jp4wu6ru04au04,shigoto report g6ru0  push kaigi u fu3 arimasu desu kaigibuildvu. e93 cl3t  onegai 5l4qu04 ji3rup4104ej/ g4
 world|_|今天|_|明日|。|picker|買|_|server|_|再起動|_|一下|，|明天見|桜|。|request|成|，|時間|limit|，|他很強|_|data|_|好|_|楽しい|。|明日|_|記得|_|bug|_|cancel|_|訂單|。|見面|わかりました|_|merge|確認	world| |rup wu0 | |ashita|.|picker|a93| |server| |saikidou| |u vu84|,|au/6wu0 ru04|sakura|.|request|t/6|,|zikann|limit|,|w8 cp3fu;6| |data| |cl3| |tanoshii|.|ashita| |ru42k6| |bug| |cancel| |2u/420 |.|ru04au04|wakarimashita| |merge|fm,4bp4	world rup wu0  ashita.pickera93 server saikidou u vu84,au/6wu0 ru04sakura.requestt/6,zikannlimit,w8 cp3fu;6 data cl3 tanoshii.ashita ru42k6 bug cancel 2u/420 .ru04au04wakarimashita mergefm,4bp4
@@ -1914,14 +1914,21 @@ then|去|，|漫画|_|很好看|。|good|_|notebook|_|runner|改|_|what|成|，|
 誤差|0.49|公尺	j4t8 |0.49|ej/ t3	j4t8 0.49ej/ t3
 大約|1.69|倍	284m, |1.69|1o4	284m, 1.691o4
 # 下面這筆的數字已經對了，剩句首「看」被「刊」壓過——選字問題，不是切點。
-看|2.64|現在|可以|做|什麼	d0 |2.64|vu04y94|dk3u3|yji4|gk6ai7	d0 2.64vu04y94dk3u3yji4gk6ai7
+#
+# **按鍵期望裡的注音要連成一段，不能逐詞切開**（2026-09-09 修）。
+# `normalize` 把相鄰同語言段黏回去是設計（見 `rank::Score` 的
+# `fewer_same_lang` 註解：同語言切點對輸出沒影響），所以
+# `vu04y94|dk3u3|yji4|gk6ai7` 這種切法引擎交不出來——這一列會卡在
+# 「②切不出」，測不到它真正要測的選字問題。原本寫成四段是照著
+# 「使用者心裡的分詞」標的，但第二欄的定義是**引擎的物理切法**。
+看|2.64|現在可以做什麼	d0 |2.64|vu04y94dk3u3yji4gk6ai7	d0 2.64vu04y94dk3u3yji4gk6ai7
 # 詞被另一種語言的短段從中間剖開（`rank::split_sandwich`）。
 # 兩個方向都要守：日文詞被英文剖開、英文詞被日文剖開。
 # review 被 `ie`（いえ）剖開成 rev|家|we
 review|稿	review|el3	reviewel3
 # アドバイス 被 `is` 剖開成 あどば|is|うを
 # ——要夠長觸發分區凍結才重現得出來，所以整句照抄 long 節那一句
-年紀|大了|，|買|data|_|六點要下班|，|server|買|，|你好|。|_|come|你|。|アドバイスを聞いていれば|。|那個|_|release|_|延期	su06ru4|284xk7|,|a93|data| |xu.42u03ul4vu8410 |,|server|a93|,|su3cl3|.| |come|su3|.|adobaisuwokiiteireba|.|s84ek7| |release| |u06fu6	su06ru4284xk7,a93data xu.42u03ul4vu8410 ,servera93,su3cl3. comesu3.adobaisuwokiiteireba.s84ek7 release u06fu6
+年紀大了|，|買|data|_|六點要下班|，|server|買|，|你好|。|_|come|你|。|アドバイスを聞いていれば|。|那個|_|release|_|延期	su06ru4284xk7|,|a93|data| |xu.42u03ul4vu8410 |,|server|a93|,|su3cl3|.| |come|su3|.|adobaisuwokiiteireba|.|s84ek7| |release| |u06fu6	su06ru4284xk7,a93data xu.42u03ul4vu8410 ,servera93,su3cl3. comesu3.adobaisuwokiiteireba.s84ek7 release u06fu6
 
 
 
@@ -1954,7 +1961,7 @@ review|稿	review|el3	reviewel3
 第|3|版	2u4|3|103	2u43103
 下午|3|點	vu84j3|3|2u03	vu84j332u03
 5|分鐘	5|zp 5j/ 	5zp 5j/ 
-10|個|人	10|ek4|bp6	10ek4bp6
+10|個人	10|ek4bp6	10ek4bp6
 第|1|名	2u4|1|au/6	2u41au/6
 100|元	100|m06	100m06
 3|天	3|wu0 	3wu0 
@@ -1966,7 +1973,7 @@ review|稿	review|el3	reviewel3
 15|號	15|cl4	15cl4
 編號|38	1u0 cl4|38	1u0 cl438
 大約|20|分	284m, |20|zp 	284m, 20zp 
-3|年|前	3|su06|fu06	3su06fu06
+3|年前	3|su06fu06	3su06fu06
 剩|5|天	g/4|5|wu0 	g/45wu0 
 12|月|25|號	12|m,4|25|cl4	12m,425cl4
 第|3|章	2u4|3|5; 	2u435; 
@@ -1977,7 +1984,7 @@ review|稿	review|el3	reviewel3
 等|10|分鐘	2/3|10|zp 5j/ 	2/310zp 5j/ 
 大約|3|成	284m, |3|t/6	284m, 3t/6
 第|4|題	2u4|4|wu6	2u44wu6
-6|號|出口	6|cl4|tj d.3	6cl4tj d.3
+6|號出口	6|cl4tj d.3	6cl4tj d.3
 第|7|週	2u4|7|5. 	2u475. 
 3|時間	3|zikann	3zikann
 2|回	2|kai	2kai
@@ -2034,7 +2041,7 @@ round2	round2	round2
 3|個|_|寿司	3|ek4| |susi	3ek4 susi
 買|2|個	a93|2|ek4	a932ek4
 5|_|items	5| |items	5 items
-訂|3|張|票	2u/4|3|5; |qul4	2u/435; qul4
+訂|3|張票	2u/4|3|5; qul4	2u/435; qul4
 2|個|_|file	2|ek4| |file	2ek4 file
 今天|_|meeting|_|3|點	rup wu0 | |meeting| |3|2u03	rup wu0  meeting 32u03
 10kg	10kg	10kg
@@ -2048,5 +2055,5 @@ round2	round2	round2
 2|週|_|sprint	2|5. | |sprint	25.  sprint
 剩|1|個	g/4|1|ek4	g/41ek4
 大約|15|_|km	284m, |15| |km	284m, 15 km
-6|個|月	6|ek4m,4	6ek4m,4
+6|個月	6|ek4m,4	6ek4m,4
 第|9|課	2u4|9|dk4	2u49dk4

@@ -1,6 +1,6 @@
 [package]
 name = "ime-tip-macos"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 
 # macOS 的輸入法是**獨立的 .app 行程**服務所有 App，不是像 Windows 那樣
@@ -18,6 +18,9 @@ path = "src/installer.rs"
 # Apple 框架只在 macOS 上拉。Windows 上 cargo 根本不會看這一段，
 # 加上程式碼本體整個 cfg 掉，根目錄的 cargo build/test 不受影響。
 [target.'cfg(target_os = "macos")'.dependencies]
+# 引擎與繪製決策。**掛在 macOS 的 target 區段**，Windows 目標下這個 crate
+# 仍然零依賴（§2.52.12 量過，別讓它退化）。
+ime-core = { path = "../../core" }
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"

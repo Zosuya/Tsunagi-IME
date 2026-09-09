@@ -1,6 +1,6 @@
 [package]
 name = "ime-settings"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 
 # 設定頁是**獨立執行檔**，不是 DLL 的一部分。
@@ -18,7 +18,10 @@ egui = "0.32"
 
 # 只為了叫系統的「選擇字型」對話框（ChooseFontW）。
 # 自己列幾百項字型再過濾符號字型太囉唆，系統對話框自帶清單與預覽。
-[dependencies.windows]
+# **只在 Windows 上拉**。設定頁的主體（分頁、預覽、存檔）是 egui，本來就
+# 跨平台；平台相依的只有五處系統對話框與圖片／字型載入，各自 cfg 掉。
+# spike 1 驗過 eframe 0.32 在 Mac 目標下 check 得過（開發文件 §2.52.6）。
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
 features = [
     "Win32_Foundation",
@@ -33,6 +36,15 @@ features = [
     "Win32_System_Com",
 ]
 
+
+# macOS 的「選資料夾」「選圖片」系統對話框（NSOpenPanel）。
+#
+# **版本跟 platform/macos 一致**——分岔的話 workspace 會同時編兩份 objc2，
+# 而且兩份的型別互不相容。Windows 上 cargo 根本不會看這一段。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
 
 [[bin]]
 name = "ime_settings"

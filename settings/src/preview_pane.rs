@@ -290,6 +290,20 @@ pub(crate) fn gradient_bottom(base: &str, second: &str) -> egui::Color32 {
 /// | 選字 | 候選字、編號、反白三色、分隔線 |
 /// | 切法選單 | 長內容下的視窗底色與外框 |
 pub(crate) fn preview(ui: &mut egui::Ui, cfg: &Config) {
+    // ★ 先把這個平台用不到的設定正規化掉 ★
+    //
+    // **隱藏控制項不會讓值消失**——使用者以前調過的漸層、描邊、反白樣式
+    // 都還在設定檔裡（而且套用主題也會寫進去）。照著原始設定畫的話，
+    // 展示區會出現實際面板不會有的效果，那比不畫還糟：使用者是靠這裡
+    // 判斷「改了會變成什麼樣」。
+    //
+    // 一處正規化勝過在每個繪製點各加一個 `if`——漏掉一個就是一個不一致，
+    // 而漸層那個就是這樣漏掉的（第一版只藏了控制項）。
+    let cfg = &crate::platform::effective(cfg);
+    if !crate::platform::HAS_PREVIEW_BAR {
+        preview_no_bar(ui, cfg);
+        return;
+    }
     ui.horizontal_top(|ui| {
         state_card(ui, cfg, "打字中", |ui, cfg| {
             preview_row(ui, cfg, "su3cl3");
@@ -310,6 +324,53 @@ pub(crate) fn preview(ui: &mut egui::Ui, cfg: &Config) {
                 cand_row(ui, cfg, i + 1, t, i == 0);
             }
         });
+    });
+}
+
+/// 沒有預覽列的平台（macOS）的展示。
+///
+/// # 為什麼不是把上面那份拿掉幾列就好
+///
+/// **組字的樣子根本不在我們的畫布上**：macOS 的組字區是宿主畫的
+/// （marked text，見開發文件 §2.52.27），我們只能交出屬性。所以展示
+/// 「打字中」那張卡沒有意義——那張卡在 Windows 上畫的整個就是預覽列。
+///
+/// 剩下兩張是 macOS 真的有的東西：選字的候選面板、TAB 的段選單。
+/// 提示列那一行也畫出來，因為 `index`（提示文字）在 macOS 上就靠它
+/// 跟編號現身。
+fn preview_no_bar(ui: &mut egui::Ui, cfg: &Config) {
+    ui.horizontal_top(|ui| {
+        state_card(ui, cfg, "選字", |ui, cfg| {
+            for (i, ch) in ["你", "擬", "妳", "泥"].iter().enumerate() {
+                cand_row(ui, cfg, i + 1, ch, i == 1);
+            }
+            hint_row(ui, cfg, "↑↑↓↓ ⚙ 開啟設定");
+        });
+        ui.add_space(10.0);
+        state_card(ui, cfg, "段選單（TAB）", |ui, cfg| {
+            for (i, t) in ["你好", "ni3好", "你cl3"].iter().enumerate() {
+                cand_row(ui, cfg, i + 1, t, i == 0);
+            }
+        });
+    });
+}
+
+/// 底部的提示列：比候選字小一號，用 `index` 的顏色。
+///
+/// 字級走 `core::render::hint_font_pt`，**跟實際繪製同一條公式**——
+/// 各寫一份的話改了一邊就對不上（那條公式本來就是為此才搬進 core 的）。
+pub(crate) fn hint_row(ui: &mut egui::Ui, cfg: &Config, text: &str) {
+    let pt = ime_core::render::hint_font_pt(ime_core::render::fixed::FONT_SIZE_PT);
+    let size =
+        BASE_FONT_SIZE * shrink(cfg) * pt as f32 / ime_core::render::fixed::FONT_SIZE_PT as f32;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        label_outlined(
+            ui,
+            cfg,
+            to_color(&cfg.colors.index),
+            egui::RichText::new(text).size(size),
+        );
     });
 }
 

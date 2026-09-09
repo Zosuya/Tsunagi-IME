@@ -81,8 +81,12 @@ impl Input {
             Some(Language::Romaji) => Input::Romaji(RomajiInput::default()),
             // 自動與鎖定英文都走瀑布式——英文是 passthrough，
             // 打什麼顯示什麼，不需要自己的輸入邏輯
+            // **`inc` 也要拿到 `engines`**：語言開關若只設在 `Cascade`
+            // 上，切點引擎內部照樣生成停用語言的候選，最後才在出口
+            // 濾掉——白算六成，而且會擠掉正解。見開發文件 §2.73。
             _ => Input::Cascade(Cascade {
                 engines,
+                inc: Incremental::with_engines(engines),
                 ..Default::default()
             }),
         }
@@ -294,7 +298,7 @@ impl Cascade {
         }
         // 累加式沒有退格——分支是一路累積的，沒有反向的走法。
         // 整串重建，成本可接受（按鍵串通常十幾個字元）。
-        self.inc = Incremental::from_keys(&self.keys);
+        self.inc = Incremental::from_keys_with(&self.keys, self.engines);
         self.recompute(lock);
         Changed::Segments
     }

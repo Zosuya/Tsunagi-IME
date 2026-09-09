@@ -9,4 +9,4 @@ pub const GUID_PROFILE: GUID = GUID::from_u128(0xe2a94e34_a5ca_4a62_b331_6470c20
 /// 目標語言：繁體中文（台灣）。Phase 0 僅需一個假的語言檔即可掛進輸入法清單。
 pub const TEXTSERVICE_LANGID: u16 = 0x0404;
 
-pub const TEXTSERVICE_DESC: &str = "通 · つなぎ 輸入法";
+pub const TEXTSERVICE_DESC: &str = "通譯-Tsunagi";

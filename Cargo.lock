@@ -1514,7 +1514,7 @@ dependencies = [
 
 [[package]]
 name = "ime-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "crossterm",
  "memmap2",
@@ -1524,18 +1524,22 @@ dependencies = [
 
 [[package]]
 name = "ime-settings"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "eframe",
  "egui",
  "ime-core",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "windows 0.62.2",
 ]
 
 [[package]]
 name = "ime-tip-macos"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
+ "ime-core",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -1544,7 +1548,7 @@ dependencies = [
 
 [[package]]
 name = "ime-tip-windows"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ime-core",
  "windows 0.62.2",

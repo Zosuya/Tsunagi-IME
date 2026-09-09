@@ -138,8 +138,19 @@ pub enum Action {
     NumpadInput(char),
     /// 方向鍵：餵給手勢偵測器，順便當作「進選字」的候補
     Gesture(Dir),
-    /// 切換全半形（Shift+空白）
+    /// 切換全半形（`Ctrl+Shift+空白`）
     ToggleWidth,
+    /// 輪替語言鎖定（`Shift+空白`）：自動 → 注音 → 日文 → 英文 → 自動。
+    ///
+    /// **原本是「單按 Ctrl」**（2026-08-30～2026-09-09）。換掉的理由是
+    /// 誤觸與軟體衝突：單按的判斷要靠一整套旗標去分辨「真的只按了
+    /// Ctrl」與「Ctrl+C 的 Ctrl」，那套邏輯踩過兩次坑，而且某些宿主
+    /// 自己需要單按 Ctrl 時會被輸入法吃掉。
+    ///
+    /// 換成明確的組合鍵就沒有這層猜測。鍵位是實測選的（見
+    /// `keyprobe`）——`Ctrl+Shift`、`Ctrl+空白`、`Alt+Shift` 都被系統
+    /// 攔走，`Shift+空白` 兩邊平台都到得了。
+    CycleLock,
 
     /// 吃掉這個鍵，什麼都不做。
     ///
@@ -171,12 +182,26 @@ impl Combo {
             ctrl: false,
         }
     }
+    /// `Ctrl+Shift+鍵`。
+    ///
+    /// **目前只有全半形用它**。Ctrl 系組合原則上留給宿主（那些是應用
+    /// 程式的快捷鍵），這是刻意開的例外——`Shift+空白` 讓給語言鎖定
+    /// 之後，全半形要一個兩邊平台都到得了的位子，實測只有這個組合
+    /// 過關。代價是宿主原本綁在這個組合上的功能會被吃掉（VSCode 的
+    /// 參數提示），使用者已確認可接受。
+    pub const fn ctrl_shift(vk: u32) -> Self {
+        Self {
+            vk,
+            shift: true,
+            ctrl: true,
+        }
+    }
 }
 
 /// Ctrl 現在按著嗎？
 ///
-/// 一般的 Ctrl 組合在 `OnKeyDown` 就擋掉了（留給宿主），這個是用來
-/// 判斷「單按 Ctrl」——見 `text_service` 的 `mod_used`。
+/// `lookup` 用它組出要查表的 `Combo`。Ctrl 系組合原則上留給宿主，
+/// 綁定表裡有的例外（目前只有 `Ctrl+Shift+空白`），見 `defer_to_host`。
 pub fn ctrl_down() -> bool {
     unsafe { GetKeyState(VK_CONTROL.0 as i32) < 0 }
 }
@@ -191,8 +216,14 @@ pub fn shift_down() -> bool {
 /// `lparam` 的第 30 位元是「前一次的鍵狀態」——1 代表這個鍵**本來就
 /// 按著**，也就是按住不放時系統重送的那些。
 ///
-/// 修飾鍵也會重複，而那正是 `CtrlTap` 踩過的坑：重複的 Ctrl key-down
-/// 會把「這一輪用過了」洗掉，複製貼上就變成切換語言。
+/// **用途在 2026-09-09 換了，判準本身一字不動**（那條規則已經錯過
+/// 三次，見開發文件 §2.44）。原本是給 `CtrlTap` 用的——重複的 Ctrl
+/// key-down 會把「這一輪用過了」洗掉，複製貼上就變成切換語言。
+///
+/// 現在是給**輪替型的動作**擋自動重複：`Shift+空白`（語言鎖定）與
+/// `Ctrl+Shift+空白`（全半形）按住不放，系統會連續重送 key-down，
+/// 不擋的話語言會瘋狂輪替。原本的單按 Ctrl 沒這個問題——它在放開時
+/// 才觸發，而放開只會發生一次。
 fn is_repeat_bits(lparam: isize) -> bool {
     lparam & 0x4000_0000 != 0
 }
@@ -202,69 +233,6 @@ pub fn is_repeat(lparam: windows::Win32::Foundation::LPARAM) -> bool {
     is_repeat_bits(lparam.0)
 }
 
-/// 「單按 Ctrl」的偵測。
-///
-/// # 為什麼需要一個狀態機
-///
-/// 單按 `Ctrl` 是語言輪替，但 `Ctrl+C`／`Ctrl+V` 這種組合**不能**觸發
-/// ——那是使用者在複製貼上，模式被切走會莫名其妙。判斷方式是：Ctrl
-/// 按著時只要看到別的鍵，這一輪就不算單按。
-///
-/// **這條規則錯過兩次**，所以抽出來測：
-///
-/// 1. 一開始把「按下 Ctrl 本身」也算成用過，結果單按永遠沒反應。
-/// 2. 標記只做在 `OnKeyDown`，但那個方法在我們對修飾鍵回「不要」之後
-///    就不會被呼叫——`Ctrl+C` 的那個 C 根本看不到，放開就誤判成單按。
-///    複製貼上是最常按的組合，這個漏洞天天踩。
-#[derive(Debug, Default, Clone, Copy)]
-pub struct CtrlTap {
-    used: bool,
-}
-
-impl CtrlTap {
-    /// 有鍵按下去了。
-    ///
-    /// `ctrl_held` 是「這一刻 Ctrl 按著嗎」，`repeat` 是「這一下是系統
-    /// 的自動重複嗎」（`lparam` 的第 30 位元＝前一次的鍵狀態）。
-    pub fn key_down(&mut self, vk: u32, ctrl_held: bool, repeat: bool) {
-        if vk == VK_CONTROL.0 as u32 {
-            // **按下 Ctrl 是新一輪的開始**。
-            //
-            // 不能算成「用過」——按下 Ctrl 的那一刻它自己已經是按著的，
-            // 算進去的話單按永遠成立不了（這個 bug 犯過）。
-            //
-            // 順手重置，把上一輪沒收乾淨的狀態清掉——中途換視窗、
-            // 放開事件沒收到的話，殘留會讓下一次單按失效。
-            //
-            // **但自動重複的那些不算新一輪**（這是第三次踩到這條規則）。
-            // 按著 Ctrl 不放時系統會持續送 key-down，重置寫在這裡的話：
-            //
-            // ```text
-            // 按下 Ctrl  → used = false
-            // 按下 C     → used = true
-            // Ctrl 重複  → used = false   ← 洗掉了
-            // 放開 Ctrl  → 誤判成單按 → 語言被切走
-            // ```
-            //
-            // 症狀是「**有時候**複製貼上會意外切換語言」——要按著 Ctrl
-            // 超過自動重複的延遲（預設約 0.5 秒）才會發生，所以時有時無。
-            //
-            // 拿不到 `repeat` 訊號時（一律傳 false）行為跟修之前一樣，
-            // 不會比現況更糟。
-            if !repeat {
-                self.used = false;
-            }
-        } else if ctrl_held {
-            self.used = true;
-        }
-    }
-
-    /// Ctrl 放開了。回傳這一輪**是不是單按**，並重置狀態。
-    pub fn ctrl_released(&mut self) -> bool {
-        !std::mem::take(&mut self.used)
-    }
-}
-
 /// 鍵位表。**這是唯一的一份，不開放使用者自訂**。
 ///
 /// 要調鍵位就改這裡——集中成一張表正是為了「只動一個地方」。
@@ -272,7 +240,8 @@ impl CtrlTap {
 /// # 為什麼不做自訂（2026-08-31 決定）
 ///
 /// 這張表已經很擠：十個數字全是注音鍵、方向鍵在選字、Tab 開切法
-/// 選單、Ctrl 輪替語言鎖定、Shift+空白切全半形、↑↑↓↓ 是指令手勢。
+/// 選單、Shift+空白輪替語言鎖定、Ctrl+Shift+空白切全半形、↑↑↓↓ 是
+/// 指令手勢。
 /// 能空出來給使用者綁的本來就沒幾個。
 ///
 /// 而**綁錯的代價很高**：不小心佔用注音鍵，打字本身就壞了；輸入法
@@ -310,11 +279,18 @@ const DEFAULT_BINDINGS: &[(Mode, Combo, Action)] = &[
     // 但沒組字時（`Mode::Idle`）不綁——那時候空白就是空白。
     // 一聲必須前面已經有構成合法注音的鍵，不會憑空從空白開始。
     (Mode::Typing, Combo::plain(VK_SPACE.0 as u32),  Action::Input(' ')),
-    // Shift+空白切換全半形。三態輪流：自動 → 半形 → 全形。
-    // 沒組字時也要能切——使用者可能先設好模式再開始打。
-    (Mode::Typing, Combo::shift(VK_SPACE.0 as u32),  Action::ToggleWidth),
-    (Mode::Idle,   Combo::shift(VK_SPACE.0 as u32),  Action::ToggleWidth),
-    (Mode::Selecting, Combo::shift(VK_SPACE.0 as u32), Action::ToggleWidth),
+    // **Shift+空白輪替語言鎖定**：自動 → 注音 → 日文 → 英文 → 自動。
+    // 沒組字時也要能切——使用者常是先設好模式再開始打。
+    //
+    // 這個位子原本是全半形的，2026-09-09 讓給語言鎖定（換掉單按 Ctrl，
+    // 見 `Action::CycleLock`），全半形搬到 `Ctrl+Shift+空白`。
+    (Mode::Typing, Combo::shift(VK_SPACE.0 as u32),  Action::CycleLock),
+    (Mode::Idle,   Combo::shift(VK_SPACE.0 as u32),  Action::CycleLock),
+    (Mode::Selecting, Combo::shift(VK_SPACE.0 as u32), Action::CycleLock),
+    // Ctrl+Shift+空白切換全半形。三態輪流：自動 → 半形 → 全形。
+    (Mode::Typing, Combo::ctrl_shift(VK_SPACE.0 as u32),  Action::ToggleWidth),
+    (Mode::Idle,   Combo::ctrl_shift(VK_SPACE.0 as u32),  Action::ToggleWidth),
+    (Mode::Selecting, Combo::ctrl_shift(VK_SPACE.0 as u32), Action::ToggleWidth),
     // **日文詞界調整**（文節伸縮）。日文 IME 的通用慣例，而且我們的
     // Shift+方向鍵本來就是空的。只在選字時有意義——那時框停在某一格上，
     // 「把這一格拉長／縮短」才有指涉對象。見 `Session::widen_word`。
@@ -461,18 +437,26 @@ pub fn lookup(mode: Mode, vk: u32) -> Option<Action> {
         return Some(Action::Input(ch));
     }
     // Idle 只有空白鍵有綁定（注音的一聲），其餘放行給宿主
+    let ctrl = ctrl_down();
     let combo = Combo {
         vk,
         shift: shift_down(),
-        ctrl: false,
+        ctrl,
     };
     DEFAULT_BINDINGS
         .iter()
         .find(|(m, c, _)| *m == mode && *c == combo)
         .map(|(_, _, a)| *a)
         // Shift 版本沒綁的話退回無 Shift 版本——
-        // 使用者按 Shift+Enter 應該還是送出
+        // 使用者按 Shift+Enter 應該還是送出。
+        //
+        // **按著 Ctrl 時不走這條退路**：`Ctrl+Shift+X` 沒綁的話應該
+        // 放行給宿主（那是應用程式的快捷鍵），退回去會誤中 `X` 的
+        // 綁定，把一堆宿主快捷鍵吃掉。
         .or_else(|| {
+            if ctrl {
+                return None;
+            }
             DEFAULT_BINDINGS
                 .iter()
                 .find(|(m, c, _)| *m == mode && c.vk == vk && !c.shift)
@@ -485,7 +469,11 @@ pub fn lookup(mode: Mode, vk: u32) -> Option<Action> {
         // 寧可讓那顆鍵沒反應，也不能讓組字散掉。
         //
         // Idle 不在此列：沒組字時輸入法不該干擾宿主。
-        .or(if mode == Mode::Idle {
+        //
+        // **按著 Ctrl 的組合也不在此列**：那些是宿主的快捷鍵，組字中
+        // 按 `Ctrl+C` 應該複製，不該被吃掉。組字散不散由宿主自己負責
+        // ——它本來就知道自己那個快捷鍵會做什麼。
+        .or(if mode == Mode::Idle || ctrl {
             None
         } else {
             Some(Action::Swallow)
@@ -575,84 +563,95 @@ fn shifted_digit(d: char) -> char {
 
 #[cfg(test)]
 mod tests {
-    /// 單按 Ctrl 的偵測。這條規則錯過兩次，用測試釘住。
-    mod 單按ctrl {
-        use super::super::CtrlTap;
-        const CTRL: u32 = 0x11;
-        const C: u32 = 0x43;
+    use super::*;
 
-        #[test]
-        fn 自動重複的位元判得出來() {
-            assert!(!super::super::is_repeat_bits(0x0000_0001), "第一次按下");
-            assert!(super::super::is_repeat_bits(0x4000_0001), "按著不放的重複");
-        }
-
-        #[test]
-        fn 單獨按放算單按() {
-            let mut t = CtrlTap::default();
-            t.key_down(CTRL, true, false); // 按下 Ctrl 時它自己已經是按著的
-            assert!(t.ctrl_released(), "單按 Ctrl 應該算數");
-        }
-
-        #[test]
-        fn 複製貼上不算單按() {
-            let mut t = CtrlTap::default();
-            t.key_down(CTRL, true, false);
-            t.key_down(C, true, false); // Ctrl+C
-            assert!(!t.ctrl_released(), "Ctrl+C 不該切換語言");
-        }
-
-        /// **假設驗證**：按著 Ctrl 不放時 Windows 會持續送 key-down，
-        /// 那個重複會不會把「用過了」洗掉？
-        #[test]
-        fn 按著ctrl的自動重複不該洗掉用過的標記() {
-            let mut t = CtrlTap::default();
-            t.key_down(CTRL, true, false); // 按下 Ctrl
-            t.key_down(C, true, false); // Ctrl+C
-            t.key_down(CTRL, true, true); // ← 按著不放，系統重送 Ctrl 的 key-down
-            assert!(!t.ctrl_released(), "重複的 Ctrl key-down 不該讓它變成單按");
-        }
-
-        #[test]
-        fn 用過之後會重置() {
-            let mut t = CtrlTap::default();
-            t.key_down(CTRL, true, false);
-            t.key_down(C, true, false);
-            assert!(!t.ctrl_released());
-            // 下一輪才是真的單按——狀態沒重置的話這裡會失敗
-            t.key_down(CTRL, true, false);
-            assert!(t.ctrl_released(), "上一輪的組合不該影響這一輪");
-        }
-
-        #[test]
-        fn 沒按著ctrl時的按鍵不影響() {
-            let mut t = CtrlTap::default();
-            t.key_down(C, false, false); // 單純打字
-            t.key_down(CTRL, true, false);
-            assert!(t.ctrl_released(), "打字之後單按 Ctrl 仍然算數");
-        }
-
-        #[test]
-        fn 按下ctrl會清掉殘留() {
-            let mut t = CtrlTap::default();
-            t.key_down(CTRL, true, false);
-            t.key_down(C, true, false);
-            // 這一輪沒收到「放開」就換了視窗，殘留著「用過」
-            t.key_down(CTRL, true, false);
-            assert!(t.ctrl_released(), "新一輪不該被上一輪的殘留拖累");
-        }
-
-        #[test]
-        fn 連按兩次都算() {
-            let mut t = CtrlTap::default();
-            for _ in 0..2 {
-                t.key_down(CTRL, true, false);
-                assert!(t.ctrl_released());
-            }
-        }
+    /// 自動重複的判準。**這條規則已經錯過三次**（見開發文件 §2.44），
+    /// 用測試釘住——現在擋的是「按著 Shift+空白 不放會連續輪替語言」。
+    #[test]
+    fn 自動重複的位元判得出來() {
+        assert!(!is_repeat_bits(0x0000_0001), "第一次按下");
+        assert!(is_repeat_bits(0x4000_0001), "按著不放的重複");
     }
 
-    use super::*;
+    /// 找出綁定表裡某個組合對應的動作。
+    ///
+    /// `lookup` 讀的是**真實鍵盤狀態**（`shift_down()`／`ctrl_down()`），
+    /// 單元測試按不出 Shift，所以這裡直接查表——這次改的規則正是
+    /// 綁定表本身，查表就測得到。
+    fn 查表(mode: Mode, combo: Combo) -> Option<Action> {
+        DEFAULT_BINDINGS
+            .iter()
+            .find(|(m, c, _)| *m == mode && *c == combo)
+            .map(|(_, _, a)| *a)
+    }
+
+    /// 2026-09-09 換鍵位：`Shift+空白` 從全半形改成語言鎖定輪替，
+    /// 全半形搬到 `Ctrl+Shift+空白`。單按 Ctrl 整個退休。
+    ///
+    /// 鍵位是實測選的——`Ctrl+Shift`、`Ctrl+空白`、`Alt+Shift` 都被
+    /// 系統攔走（見 `keyprobe` 與開發文件 §4.17）。
+    mod 語言鎖定換鍵位 {
+        use super::*;
+        const 空白: u32 = 0x20;
+
+        #[test]
+        fn shift空白是語言輪替() {
+            for mode in [Mode::Typing, Mode::Idle, Mode::Selecting] {
+                assert_eq!(
+                    查表(mode, Combo::shift(空白)),
+                    Some(Action::CycleLock),
+                    "{mode:?} 的 Shift+空白 應該輪替語言鎖定"
+                );
+            }
+        }
+
+        #[test]
+        fn ctrl_shift空白是全半形() {
+            for mode in [Mode::Typing, Mode::Idle, Mode::Selecting] {
+                assert_eq!(
+                    查表(mode, Combo::ctrl_shift(空白)),
+                    Some(Action::ToggleWidth),
+                    "{mode:?} 的 Ctrl+Shift+空白 應該切全半形"
+                );
+            }
+        }
+
+        /// **兩個動作不能綁在同一個組合上**——這正是這次換鍵位的重點，
+        /// 綁重了會有一個永遠觸發不到。
+        #[test]
+        fn 兩個動作沒有綁在同一個組合() {
+            for mode in [Mode::Typing, Mode::Idle, Mode::Selecting] {
+                let 輪替 = 查表(mode, Combo::shift(空白));
+                let 全半形 = 查表(mode, Combo::ctrl_shift(空白));
+                assert_ne!(輪替, 全半形, "{mode:?} 兩個組合不該對到同一個動作");
+            }
+        }
+
+        /// 打字中的裸空白仍然是注音的一聲——換鍵位不該動到它。
+        #[test]
+        fn 裸空白還是注音一聲() {
+            assert_eq!(
+                查表(Mode::Typing, Combo::plain(空白)),
+                Some(Action::Input(' ')),
+                "空白鍵在打字中是一聲，不是控制鍵"
+            );
+        }
+
+        /// 全半形只剩 `Ctrl+Shift+空白` 一個入口，舊的 `Shift+空白`
+        /// 不該還留著（留著就會蓋掉語言輪替）。
+        #[test]
+        fn 全半形沒有第二個入口() {
+            let 全半形入口: Vec<_> = DEFAULT_BINDINGS
+                .iter()
+                .filter(|(_, _, a)| *a == Action::ToggleWidth)
+                .map(|(m, c, _)| (*m, *c))
+                .collect();
+            assert!(
+                全半形入口.iter().all(|(_, c)| c.ctrl && c.shift),
+                "全半形只該綁在 Ctrl+Shift 組合上，實際：{全半形入口:?}"
+            );
+        }
+    }
 
     #[test]
     fn 字元鍵不分模式() {

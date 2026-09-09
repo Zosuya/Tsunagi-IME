@@ -17,8 +17,12 @@
 mod color;
 mod debug_page;
 mod font_dialog;
+mod font_list;
 mod image_dialog;
 mod image_load;
+#[cfg(target_os = "macos")]
+mod mac_panel;
+mod platform;
 mod preview_font;
 mod preview_pane;
 
@@ -41,7 +45,7 @@ fn main() -> eframe::Result<()> {
             // 視窗的話，內容會擠到得一直捲動（外觀分頁尤其明顯）。
             .with_inner_size([980.0, 780.0])
             .with_min_inner_size([820.0, 620.0])
-            .with_title("通 · つなぎ 輸入法 設定"),
+            .with_title("通譯-Tsunagi 設定"),
         ..Default::default()
     };
     eframe::run_native(
@@ -60,26 +64,90 @@ fn main() -> eframe::Result<()> {
 
 /// egui 內建字型沒有中文字，不裝的話介面全是豆腐方塊。
 ///
-/// 從系統字型目錄找微軟正黑體；找不到就退回內建字型（英文還是看得懂，
-/// 中文會變方塊，但**不能因為字型問題就開不起來**）。
+/// 依平台找一支系統中文字型（Windows 微軟正黑體／macOS 蘋方，見
+/// `cjk_candidates`）；找不到就退回內建字型（英文還是看得懂，中文會變
+/// 方塊，但**不能因為字型問題就開不起來**）。
 /// 預覽區專用的字型家族名稱。介面自己用的是另一份。
 pub const PREVIEW_FAMILY: &str = "preview";
 
+/// 介面中文字型的候選：**檔案路徑＋字型集合裡的第幾個字面**。
+///
+/// 字型集合（`.ttc`）一個檔裡裝好幾套字，不指定編號拿到的可能是簡體
+/// 或別的字重——蘋方那個檔裡就有 24 套。
+#[cfg(windows)]
+fn cjk_candidates() -> Vec<(std::path::PathBuf, u32)> {
+    vec![
+        (r"C:\Windows\Fonts\msjh.ttc".into(), 0),    // 微軟正黑體
+        (r"C:\Windows\Fonts\msjhl.ttc".into(), 0),   // 微軟正黑體 Light
+        (r"C:\Windows\Fonts\mingliu.ttc".into(), 0), // 細明體
+    ]
+}
+
+/// macOS 的中文字型候選。
+///
+/// # 為什麼蘋方要用找的
+///
+/// **`/System/Library/Fonts/PingFang.ttc` 在新版 macOS 上不存在了**——它
+/// 搬進 `AssetsV2` 的資產目錄，路徑中間有一段雜湊（實測 macOS 26 是
+/// `com_apple_MobileAsset_Font8/86ba…/AssetData/PingFang.ttc`），那段每台
+/// 機器、每次系統更新都可能不一樣，寫死一定會壞。所以掃兩層目錄去找。
+///
+/// 找不到就退回 `/System/Library/Fonts/` 底下路徑穩定的那兩支。
+#[cfg(target_os = "macos")]
+fn cjk_candidates() -> Vec<(std::path::PathBuf, u32)> {
+    let mut out: Vec<(std::path::PathBuf, u32)> = Vec::new();
+
+    // 蘋方：字面 2 是 PingFangTC-Regular（0 是 HK、3 是 SC）
+    let assets = std::path::Path::new("/System/Library/AssetsV2");
+    if let Ok(groups) = std::fs::read_dir(assets) {
+        for g in groups.flatten() {
+            if !g
+                .file_name()
+                .to_string_lossy()
+                .starts_with("com_apple_MobileAsset_Font")
+            {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(g.path()) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let p = e.path().join("AssetData/PingFang.ttc");
+                if p.is_file() {
+                    out.push((p, 2));
+                }
+            }
+        }
+    }
+
+    // 退路。這兩支的路徑一直很穩，但字形是簡體取向（宋體的字面 7 是
+    // STSongti-TC-Regular，繁體）。
+    out.push(("/System/Library/Fonts/Hiragino Sans GB.ttc".into(), 0));
+    out.push(("/System/Library/Fonts/Supplemental/Songti.ttc".into(), 7));
+    out
+}
+
+/// 其他平台還沒查過系統字型放哪，回空的——介面會是豆腐方塊，
+/// 但**不能因為字型問題就開不起來**。
+#[cfg(not(any(windows, target_os = "macos")))]
+fn cjk_candidates() -> Vec<(std::path::PathBuf, u32)> {
+    Vec::new()
+}
+
 fn install_cjk_font(ctx: &egui::Context, preview_family: &str) {
-    let candidates = [
-        r"C:\Windows\Fonts\msjh.ttc",    // 微軟正黑體
-        r"C:\Windows\Fonts\msjhl.ttc",   // 微軟正黑體 Light
-        r"C:\Windows\Fonts\mingliu.ttc", // 細明體
-    ];
-    let Some(bytes) = candidates.iter().find_map(|p| std::fs::read(p).ok()) else {
+    let Some((bytes, face)) = cjk_candidates()
+        .into_iter()
+        .find_map(|(p, i)| std::fs::read(p).ok().map(|b| (b, i)))
+    else {
         return;
     };
 
     let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        "cjk".to_owned(),
-        std::sync::Arc::new(egui::FontData::from_owned(bytes.clone())),
-    );
+    let mut cjk = egui::FontData::from_owned(bytes.clone());
+    cjk.index = face;
+    fonts
+        .font_data
+        .insert("cjk".to_owned(), std::sync::Arc::new(cjk));
     // 插在最前面：優先用它，找不到的字才往後退
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts
@@ -92,7 +160,7 @@ fn install_cjk_font(ctx: &egui::Context, preview_family: &str) {
     // **預覽區用使用者選的字型**，介面維持原本的。
     // 撈不到就退回介面那份——換字型看不出差別，總比整個閃退好。
     let preview = preview_font::family_font(preview_family)
-        .unwrap_or(preview_font::Loaded { bytes, index: 0 });
+        .unwrap_or(preview_font::Loaded { bytes, index: face });
     let mut data = egui::FontData::from_owned(preview.bytes);
     // **字型集合要指定第幾個字面**，不指定的話拿到的是同一個檔案裡
     // 的別種字型（msjh.ttc 裡就有正黑體與正黑體 UI 兩個）
@@ -129,6 +197,7 @@ enum Tab {
     Select,
     Appearance,
     Packs,
+    About,
     Debug,
 }
 
@@ -161,6 +230,8 @@ struct App {
     /// 換字型時要重新載入才看得到效果，但**載字型很貴**（讀檔＋重建
     /// 整份字型表），不能每一幀都做——記住現在是哪個，變了才重載。
     loaded_font: String,
+    /// 解除安裝的兩段式確認按到第二段了嗎。**不是設定**，只是畫面狀態。
+    uninstall_confirming: bool,
 }
 
 impl App {
@@ -177,6 +248,7 @@ impl App {
             packs: None,
             learn_stats: None,
             loaded_font: String::new(),
+            uninstall_confirming: false,
         }
     }
 
@@ -261,6 +333,7 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.tab, Tab::Select, "  選字  ");
                 ui.selectable_value(&mut self.tab, Tab::Appearance, "  外觀  ");
                 ui.selectable_value(&mut self.tab, Tab::Packs, "  擴充包  ");
+                ui.selectable_value(&mut self.tab, Tab::About, "  關於  ");
                 // 除錯分頁預設不顯示——設定檔寫 `debug = true` 才出現。
                 // 平常使用者不需要看到引擎的內部狀態。
                 if self.cfg.debug {
@@ -312,6 +385,7 @@ impl eframe::App for App {
                         Tab::Select => select_page(ui, &mut self.cfg, &mut self.learn_stats),
                         Tab::Appearance => appearance_page(ui, &mut self.cfg),
                         Tab::Packs => packs_page(ui, &mut self.cfg, &mut self.packs),
+                        Tab::About => about_page(ui, &mut self.uninstall_confirming),
                         Tab::Debug => unreachable!(),
                     });
                 }
@@ -354,7 +428,11 @@ fn behavior_page(ui: &mut egui::Ui, cfg: &mut Config) {
     ui.add_space(18.0);
     ui.heading("標點");
     ui.add_space(6.0);
-    ui.label("全形／半形（打字時按 Shift+空白可隨時切換，這裡設的是開機預設）：");
+    // **切換鍵兩個平台不一樣**，不能寫死（macOS 收不到 Ctrl）。
+    ui.label(format!(
+        "全形／半形（打字時按 {} 可隨時切換，這裡設的是開機預設）：",
+        crate::platform::WIDTH_TOGGLE_KEY
+    ));
     ui.radio_value(
         &mut cfg.behavior.width,
         ime_core::width::Width::Auto,
@@ -389,6 +467,7 @@ fn fill(ui: &mut egui::Ui) {
 /// 這條執行緒初始化過 COM 了，這時會回 `S_FALSE`（已初始化）或
 /// `RPC_E_CHANGED_MODE`（模式不同）。兩種都不影響接下來的呼叫，
 /// 硬要當成錯誤反而讓按鈕永遠沒反應。
+#[cfg(windows)]
 fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
@@ -429,6 +508,22 @@ fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
         CoTaskMemFree(Some(raw.0 as *const _));
         path
     }
+}
+
+/// macOS 版**還沒實作**——`NSOpenPanel` 的 `canChooseDirectories`，
+/// 或 `rfd::FileDialog::pick_folder`。等 §2.52.8 待決 2 的後半拍板。
+/// 現在回 `None`（等同使用者按取消），路徑欄位維持原值。
+/// macOS：系統的「選資料夾」面板。
+#[cfg(target_os = "macos")]
+fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
+    mac_panel::pick(mac_panel::Want::Folder, start)
+}
+
+/// 其他平台還沒接系統對話框，一律回 `None`（路徑仍然可以手動輸入）。
+#[cfg(not(any(windows, target_os = "macos")))]
+fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
+    let _ = start;
+    None
 }
 
 /// 滑鼠停在包名上時顯示的完整基本資料。
@@ -504,6 +599,121 @@ fn breakdown(info: &ime_core::pack::Info) -> String {
     parts.join("・")
 }
 
+/// 關於分頁：版本、授權出處、解除安裝。
+///
+/// # 為什麼要有這一頁
+///
+/// 兩件事本來沒有容身之處：
+///
+/// 1. **授權的姓名標示**。詞庫與擴充包來自十幾個外部來源，CC BY-SA、
+///    CC BY-ND、國教院的開放資料政策**都明文要求標示出處**。`CREDITS.md`
+///    躺在安裝目錄裡不算真的讓使用者看得到
+/// 2. **解除安裝**（只有 macOS 需要，見 `platform::uninstall_script`）。
+///    原本放在「行為」分頁底部，但那頁講的是打字行為，混在一起不對；
+///    fcitx5-macos 也是放在「關於」
+fn about_page(ui: &mut egui::Ui, confirming: &mut bool) {
+    ui.add_space(8.0);
+    ui.heading("通譯輸入法");
+    ui.label(
+        egui::RichText::new(format!(
+            "版本 {}　·　通 · つなぎ · Tsunagi",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .weak(),
+    );
+    ui.add_space(10.0);
+    ui.label("一套輸入法同時處理中文注音、日文羅馬字與英文，依輸入內容自動判斷，不必手動切換。");
+
+    ui.add_space(14.0);
+    ui.separator();
+    ui.add_space(10.0);
+
+    ui.heading("授權與來源");
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "程式：GPL-3.0-or-later。詞庫與擴充包各有自己的授權（McBopomofo MIT、mozc BSD-3、RIME 八股文 LGPL-3、國教院與教育部的開放資料、台語包 CC BY-SA 4.0）——完整清單與姓名標示在 CREDITS.md。",
+        )
+        .weak(),
+    );
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        if ui.button("開啟 CREDITS.md").clicked() {
+            open_sibling("CREDITS.md");
+        }
+        if ui.button("開啟 LICENSE").clicked() {
+            open_sibling("LICENSE");
+        }
+    });
+
+    if !crate::platform::HAS_UNINSTALL {
+        return;
+    }
+
+    ui.add_space(14.0);
+    ui.separator();
+    ui.add_space(10.0);
+    ui.heading("解除安裝");
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(
+            "移除輸入法本體。設定、學習檔、主題與你自己裝的擴充包會留著——重裝之後那些還在。",
+        )
+        .weak(),
+    );
+    ui.add_space(6.0);
+
+    if !*confirming {
+        if ui.button("解除安裝…").clicked() {
+            *confirming = true;
+        }
+        return;
+    }
+
+    // **先講清楚順序**：設定頁的入口是輸入法自己（選單列或打 `config`），
+    // 先從系統設定移除的話就再也開不了這一頁，那顆按鈕也按不到了。
+    ui.label(
+        egui::RichText::new(
+            "移除之後，再到「系統設定 → 鍵盤 → 輸入方式」把「通譯-Tsunagi」那一筆刪掉。順序不能反——先從系統設定移除的話就開不了這個設定頁了。",
+        )
+        .color(egui::Color32::from_rgb(0xC6, 0x28, 0x28)),
+    );
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        if ui.button("確定移除").clicked() {
+            crate::platform::run_uninstall(false);
+            std::process::exit(0);
+        }
+        if ui.button("連同我的設定與學習檔一起刪").clicked() {
+            crate::platform::run_uninstall(true);
+            std::process::exit(0);
+        }
+        if ui.button("取消").clicked() {
+            *confirming = false;
+        }
+    });
+}
+
+/// 打開跟設定頁放在一起的檔案（`CREDITS.md`／`LICENSE`）。
+///
+/// **用鄰居找，不寫死路徑**——理由同 `platform::uninstall_script`。
+fn open_sibling(name: &str) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(dir) = exe.parent() else { return };
+    let f = dir.join(name);
+    if f.is_file() {
+        #[cfg(windows)]
+        let cmd = "explorer";
+        #[cfg(target_os = "macos")]
+        let cmd = "open";
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let cmd = "xdg-open";
+        let _ = std::process::Command::new(cmd).arg(f).spawn();
+    }
+}
+
 /// 選字分頁：選字的行為 ＋ 智慧學習。
 ///
 /// **獨立成一頁而不是掛在「行為」底下**——學習是選字的直接結果
@@ -541,7 +751,48 @@ fn select_page(
         ui.label(egui::RichText::new("（上面選「離開選字」時這項無效）").weak());
     }
 
+    ui.add_space(18.0);
+    ui.heading("段選單（TAB）");
+    ui.add_space(2.0);
+    ui.label(
+        egui::RichText::new(
+            "TAB 反白一段、往下選它是什麼。跟上面的選字是兩層——選字挑的是「哪個字」，段選單挑的是「這一段是什麼」，所以兩邊可以各自設定。",
+        )
+        .weak(),
+    );
+    ui.add_space(6.0);
+
+    ui.label("段選單裡按 Enter：");
+    ui.radio_value(
+        &mut cfg.behavior.enter_in_segmenu,
+        EnterInSelect::Next,
+        "選中這一段，然後移到下一段",
+    );
+    ui.radio_value(
+        &mut cfg.behavior.enter_in_segmenu,
+        EnterInSelect::Exit,
+        "選中這一段，然後關掉選單",
+    );
+
     ui.add_space(12.0);
+    let seg_last_enabled = cfg.behavior.enter_in_segmenu == EnterInSelect::Next;
+    ui.add_enabled_ui(seg_last_enabled, |ui| {
+        ui.checkbox(
+            &mut cfg.behavior.commit_on_last_seg,
+            "最後一段選完直接送出（不然只關掉選單，要再按一次 Enter）",
+        );
+    });
+    if !seg_last_enabled {
+        ui.label(egui::RichText::new("（上面選「關掉選單」時這項無效）").weak());
+    }
+
+    ui.add_space(18.0);
+    // 下面幾項都只在鎖定語言時有意義，先講怎麼鎖——**切換鍵兩個平台不一樣**。
+    ui.label(format!(
+        "以下只在鎖定語言時生效（打字時按 {} 依序切換自動／注音／日文／英文）：",
+        crate::platform::LOCK_TOGGLE_KEY
+    ));
+    ui.add_space(6.0);
     ui.checkbox(
         &mut cfg.behavior.backspace_whole_cell,
         "鎖定語言時，倒退鍵刪掉整個反白的字",
@@ -573,17 +824,21 @@ fn select_page(
         "一律當注音符號（要打標點就切回自動模式）",
     );
 
-    ui.add_space(8.0);
-    ui.checkbox(
-        &mut cfg.behavior.ctrl_punct,
-        "用 Ctrl + 那個鍵可以明講「我要標點」",
-    );
-    ui.label(
-        egui::RichText::new(
-            "代價是那些組合在鎖定注音時到不了程式本身——Ctrl+- （瀏覽器縮小）和 Ctrl+/ （編輯器註解）會失效。會用到的話就關掉它。",
-        )
-        .weak(),
-    );
+    // **macOS 收不到 Ctrl+…**（IMK 不轉給輸入法），這個選項在那邊勾了
+    // 也不會有事發生，所以整條藏起來，見 `platform::HAS_CTRL_PUNCT`。
+    if crate::platform::HAS_CTRL_PUNCT {
+        ui.add_space(8.0);
+        ui.checkbox(
+            &mut cfg.behavior.ctrl_punct,
+            "用 Ctrl + 那個鍵可以明講「我要標點」",
+        );
+        ui.label(
+            egui::RichText::new(
+                "代價是那些組合在鎖定注音時到不了程式本身——Ctrl+- （瀏覽器縮小）和 Ctrl+/ （編輯器註解）會失效。會用到的話就關掉它。",
+            )
+            .weak(),
+        );
+    }
 
     ui.add_space(18.0);
     ui.heading("智慧學習");
@@ -607,8 +862,7 @@ fn select_page(
             if let Some(d) =
                 ime_core::learn::path(None).and_then(|p| p.parent().map(|d| d.to_path_buf()))
             {
-                let _ = std::fs::create_dir_all(&d);
-                let _ = std::process::Command::new("explorer").arg(d).spawn();
+                reveal_folder(&d);
             }
         }
     });
@@ -695,7 +949,7 @@ fn packs_page(ui: &mut egui::Ui, cfg: &mut Config, cache: &mut Option<Vec<ime_co
             // 路徑已經在上面的欄位裡了，這一行只講狀態，不再印一次
             Some(p) if exists => {
                 if ui.button("開啟資料夾").clicked() {
-                    let _ = std::process::Command::new("explorer").arg(p).spawn();
+                    reveal_folder(p);
                 }
             }
             Some(p) => {
@@ -711,7 +965,9 @@ fn packs_page(ui: &mut egui::Ui, cfg: &mut Config, cache: &mut Option<Vec<ime_co
             None => {
                 ui.colored_label(
                     egui::Color32::from_rgb(0xC6, 0x28, 0x28),
-                    "找不到可用的位置（%APPDATA% 讀不到？）",
+                    // 訊息不要只講 Windows：macOS 的對應物是
+                    // ~/Library/Application Support
+                    "找不到可用的位置（使用者資料夾讀不到？）",
                 );
             }
         }
@@ -942,14 +1198,29 @@ fn appearance_page(ui: &mut egui::Ui, cfg: &mut Config) {
     // 上面的展示區，等於白做。
     ui.columns(2, |cols| {
         colors_section(&mut cols[0], &mut cfg.colors);
-        outline_section(&mut cols[0], &mut cfg.background);
+        if crate::platform::HAS_TEXT_OUTLINE {
+            outline_section(&mut cols[0], &mut cfg.background);
+        }
         let ui = &mut cols[1];
         font_section(ui, &mut cfg.font);
         ui.add_space(10.0);
         metrics_section(ui, &mut cfg.metrics);
-        ui.add_space(10.0);
-        background_section(ui, &mut cfg.background);
+        if crate::platform::HAS_BACKGROUND_IMAGE {
+            ui.add_space(10.0);
+            background_section(ui, &mut cfg.background);
+        }
     });
+
+    // **藏起來的要說一聲**，不然使用者會以為選項不見了或壞了。
+    if crate::platform::HIDES_ANYTHING {
+        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new(
+                "這個平台的候選面板沒有預覽列、漸層、描邊與背景圖，相關設定不顯示。設定檔裡的值保留著，帶回 Windows 仍然有效。",
+            )
+            .weak(),
+        );
+    }
 }
 
 /// 候選視窗的背景圖。
@@ -1088,9 +1359,7 @@ fn theme_section(ui: &mut egui::Ui, cfg: &mut Config) {
         }
         if ui.button("開啟主題資料夾").clicked() {
             if let Some(d) = &dir {
-                // 資料夾可能還不存在——先建再開，不然總管會說找不到
-                let _ = std::fs::create_dir_all(d);
-                let _ = std::process::Command::new("explorer").arg(d).spawn();
+                reveal_folder(d);
             }
         }
     });
@@ -1123,7 +1392,9 @@ fn colors_section(ui: &mut egui::Ui, c: &mut Colors) {
         .spacing([6.0, 4.0])
         .show(ui, |ui| {
             color_row(ui, "視窗底色", &mut c.window_bg);
-            gradient_row(ui, "　↳ 漸層下緣", &mut c.window_bg2, &c.window_bg);
+            if crate::platform::HAS_GRADIENT {
+                gradient_row(ui, "　↳ 漸層下緣", &mut c.window_bg2, &c.window_bg);
+            }
             color_row(ui, "候選字", &mut c.text);
             // 編號已經跟候選字同色了，這個顏色現在只影響提示列與
             // 全半形提示視窗。**設定檔的鍵名不動**（還是 `index`），
@@ -1131,11 +1402,98 @@ fn colors_section(ui: &mut egui::Ui, c: &mut Colors) {
             color_row(ui, "提示文字", &mut c.index);
             color_row(ui, "反白底", &mut c.highlight_bg);
             color_row(ui, "反白文字", &mut c.highlight_text);
-            color_row(ui, "預覽列文字", &mut c.preview_text);
-            color_row(ui, "預覽列底色", &mut c.preview_bg);
-            gradient_row(ui, "　↳ 漸層下緣", &mut c.preview_bg2, &c.preview_bg);
-            color_row(ui, "分隔線", &mut c.separator);
+            // 預覽列那三個與分隔線**只有 Windows 用得到**——macOS 的組字區
+            // 是宿主畫的，沒有我們自己的預覽列，也就沒有那條分隔線。
+            if crate::platform::HAS_PREVIEW_BAR {
+                color_row(ui, "預覽列文字", &mut c.preview_text);
+                color_row(ui, "預覽列底色", &mut c.preview_bg);
+                if crate::platform::HAS_GRADIENT {
+                    gradient_row(ui, "　↳ 漸層下緣", &mut c.preview_bg2, &c.preview_bg);
+                }
+                color_row(ui, "分隔線", &mut c.separator);
+            }
         });
+}
+
+/// 沒有系統對話框的平台（macOS）的字型選擇器。
+///
+/// # 為什麼是下拉選單加搜尋，不是純輸入框
+///
+/// 第一版是輸入框——**能用但要背字型名字**，而且打錯只會靜靜地退回系統
+/// 預設，看不出是打錯還是那台機器沒裝。系統的清單本來就問得到
+/// （`font_list::families`），列出來就好。
+///
+/// 搜尋框是因為清單有兩三百項：一路捲下去找「蘋方」不現實，而使用者
+/// 通常知道自己要的是什麼開頭。
+fn font_picker(ui: &mut egui::Ui, f: &mut Font) {
+    let families = crate::font_list::families();
+    if families.is_empty() {
+        // 清單撈不到（拿不到主執行緒標記之類）就退回打字，
+        // **不要留一個空的下拉選單**——那等於沒得選。
+        ui.add(
+            egui::TextEdit::singleline(&mut f.family)
+                .hint_text("字型名稱（留空＝系統預設）")
+                .desired_width(180.0),
+        );
+        return;
+    }
+
+    let shown = if f.family.is_empty() {
+        "（系統預設）".to_string()
+    } else {
+        f.family.clone()
+    };
+    // 搜尋字串存在 egui 的暫存區：它只是這個控制項的臨時狀態，
+    // 不屬於設定，也不該讓 `Font` 多一個欄位。
+    let filter_id = ui.id().with("font_filter");
+    egui::ComboBox::from_id_salt("font_family")
+        .selected_text(shown)
+        .width(200.0)
+        .show_ui(ui, |ui| {
+            let mut filter: String =
+                ui.memory_mut(|m| m.data.get_temp(filter_id).unwrap_or_default());
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut filter)
+                    .hint_text("搜尋…")
+                    .desired_width(190.0),
+            );
+            if resp.changed() {
+                ui.memory_mut(|m| m.data.insert_temp(filter_id, filter.clone()));
+            }
+            ui.separator();
+            // 「系統預設」永遠排第一，而且**不受搜尋影響**——它是回到
+            // 預設的出口，找不到它會讓人以為只能一直選著某個字型。
+            ui.selectable_value(&mut f.family, String::new(), "（系統預設）");
+            let needle = filter.to_lowercase();
+            egui::ScrollArea::vertical()
+                .max_height(260.0)
+                .show(ui, |ui| {
+                    for name in families {
+                        if !needle.is_empty() && !name.to_lowercase().contains(&needle) {
+                            continue;
+                        }
+                        ui.selectable_value(&mut f.family, name.clone(), name);
+                    }
+                });
+        });
+}
+
+/// 在系統的檔案管理員裡打開一個資料夾。
+///
+/// **不存在就先建**——按了說「找不到」比什麼都不做更讓人困惑，而使用者
+/// 按這個按鈕的意思本來就是「我要把東西放進去」。
+///
+/// 三處都走這裡（學習檔、擴充包、主題）。原本各自寫死 `explorer`，
+/// 那在 macOS 上是**按了完全沒反應**——跟字型對話框同一類的洞。
+fn reveal_folder(dir: &std::path::Path) {
+    let _ = std::fs::create_dir_all(dir);
+    #[cfg(windows)]
+    let cmd = "explorer";
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let cmd = "xdg-open";
+    let _ = std::process::Command::new(cmd).arg(dir).spawn();
 }
 
 fn font_section(ui: &mut egui::Ui, f: &mut Font) {
@@ -1147,13 +1505,17 @@ fn font_section(ui: &mut egui::Ui, f: &mut Font) {
         } else {
             f.family.clone()
         };
-        if ui.button(shown).clicked() {
-            // 用系統的字型對話框——它自帶完整清單與預覽，
-            // 比自己列幾百項再過濾符號字型省事得多。
-            // 字級在對話框裡選的會被忽略，這裡只取字族。
-            if let Some((name, _)) = font_dialog::choose(&f.family, 12) {
-                f.family = name;
+        if crate::platform::HAS_FONT_DIALOG {
+            if ui.button(shown).clicked() {
+                // 用系統的字型對話框——它自帶完整清單與預覽，
+                // 比自己列幾百項再過濾符號字型省事得多。
+                // 字級在對話框裡選的會被忽略，這裡只取字族。
+                if let Some((name, _)) = font_dialog::choose(&f.family, 12) {
+                    f.family = name;
+                }
             }
+        } else {
+            font_picker(ui, f);
         }
         if !f.family.is_empty() && ui.button("清除").clicked() {
             f.family.clear();
@@ -1163,19 +1525,9 @@ fn font_section(ui: &mut egui::Ui, f: &mut Font) {
 
 fn metrics_section(ui: &mut egui::Ui, m: &mut Metrics) {
     use ime_core::config::HighlightStyle as HS;
-    ui.heading("反白樣式");
-    ui.add_space(4.0);
-    for (v, label, hint) in [
-        (HS::Solid, "實心", "最清楚，看得最準"),
-        (HS::Sheen, "高光帶", "色塊上緣加一道白光，像一片玻璃"),
-        (HS::SheenOnly, "只有高光", "底色全透明，只剩光與邊框"),
-    ] {
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut m.highlight_style, v, label);
-            ui.label(egui::RichText::new(hint).weak());
-        });
+    if crate::platform::HAS_HIGHLIGHT_STYLE {
+        highlight_style_section(ui, m);
     }
-    ui.add_space(14.0);
 
     ui.heading("整體尺寸");
     ui.add_space(4.0);
@@ -1190,6 +1542,25 @@ fn metrics_section(ui: &mut egui::Ui, m: &mut Metrics) {
     ui.label(
         egui::RichText::new("字級、行高、內距、圓角全部等比縮放——版面比例由設計決定。").weak(),
     );
+    let _ = HS::Solid;
+}
+
+/// 反白樣式。**macOS 的面板目前只畫實心**，所以那邊不顯示這一區。
+fn highlight_style_section(ui: &mut egui::Ui, m: &mut Metrics) {
+    use ime_core::config::HighlightStyle as HS;
+    ui.heading("反白樣式");
+    ui.add_space(4.0);
+    for (v, label, hint) in [
+        (HS::Solid, "實心", "最清楚，看得最準"),
+        (HS::Sheen, "高光帶", "色塊上緣加一道白光，像一片玻璃"),
+        (HS::SheenOnly, "只有高光", "底色全透明，只剩光與邊框"),
+    ] {
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut m.highlight_style, v, label);
+            ui.label(egui::RichText::new(hint).weak());
+        });
+    }
+    ui.add_space(14.0);
 }
 
 /// 一列顏色：色塊選擇器 + 十六進位字串。

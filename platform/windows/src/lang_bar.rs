@@ -24,7 +24,7 @@
 //!
 //! 語言列**不會主動來問**目前是什麼狀態——它訂閱通知，我們在狀態
 //! 改變時呼叫 `OnUpdate` 告訴它「重新問一次」。沒有這一環的話，
-//! 使用者按 Ctrl 切了模式，工作列上的字不會跟著變。
+//! 使用者按 Shift+空白 切了模式，工作列上的字不會跟著變。
 
 use std::cell::RefCell;
 use windows::core::{implement, Interface, Ref, Result, BOOL, BSTR, GUID, PCWSTR};
@@ -176,7 +176,7 @@ impl LangBarButton_Impl {
     /// 換掉顯示的模式，並通知語言列重畫。
     ///
     /// **一定要通知**——語言列不會主動來問，不通知的話使用者按了
-    /// Ctrl 切模式，工作列上的字不會變。
+    /// Shift+空白 切模式，工作列上的字不會變。
     pub fn set_lock(&self, lock: Option<Language>) {
         if *self.lock.borrow() == lock {
             return;
@@ -213,7 +213,7 @@ impl ITfLangBarItem_Impl for LangBarButton_Impl {
                 TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_BTN_MENU | TF_LBI_STYLE_SHOWNINTRAY;
             info.ulSort = 0;
             // 說明文字（滑鼠停留時顯示）
-            let desc: Vec<u16> = "通 · つなぎ 輸入法".encode_utf16().collect();
+            let desc: Vec<u16> = "通譯-Tsunagi".encode_utf16().collect();
             let n = desc.len().min(info.szDescription.len() - 1);
             info.szDescription[..n].copy_from_slice(&desc[..n]);
             info.szDescription[n] = 0;
@@ -238,7 +238,7 @@ impl ITfLangBarItem_Impl for LangBarButton_Impl {
             Some(Language::Romaji) => "日文",
             Some(Language::English) => "英文",
         };
-        Ok(BSTR::from(format!("通 · つなぎ 輸入法－{mode}")))
+        Ok(BSTR::from(format!("通譯-Tsunagi－{mode}")))
     }
 }
 

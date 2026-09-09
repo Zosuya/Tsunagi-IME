@@ -175,6 +175,15 @@ pub struct Incremental {
     /// 索引就對不上，取到錯的字串，所有分支被誤殺（實測後區 `alive`
     /// 卡在 10 不動，切點停在 8）。
     all_keys: String,
+    /// 啟用哪些語言引擎。
+    ///
+    /// **要在這裡而不是只在出口過濾**。語言開關本來只在 `input.rs` 的
+    /// 出口生效（`filter(|c| c.iter().all(|s| engines.enabled(s.lang)))`），
+    /// 切點引擎內部照樣生成所有語言的候選——實測關掉日文的人**六成的
+    /// 候選是白算的**（平均 28.1 → 10.9 條），而且那些日文候選還會擠掉
+    /// 正解（21 句排名前進，0 句變差；`logout`／`widget`／`logger` 這種
+    /// 不在 en_50k 的技術詞是主要受害者）。見開發文件 §2.73。
+    engines: crate::config::Engines,
     /// 正在重放後區嗎？重放期間不再嘗試凍結。
     ///
     /// **這個旗標是必要的**：凍完之後把後區重新累加時，`frozen` 已經
@@ -296,6 +305,7 @@ impl Incremental {
             chars: Vec::new(),
             frozen: Vec::new(),
             all_keys: String::new(),
+            engines: crate::config::Engines::default(),
             replaying: false,
             // 空字串只有一種切法：什麼都沒切
             alive: vec![Vec::new()],
@@ -305,9 +315,26 @@ impl Incremental {
         }
     }
 
+    /// 指定啟用哪些語言。
+    pub fn with_engines(engines: crate::config::Engines) -> Self {
+        Self {
+            engines,
+            ..Self::new()
+        }
+    }
+
     /// 從既有的按鍵串重建（等同逐鍵 `push`）。
     pub fn from_keys(keys: &str) -> Self {
         let mut s = Self::new();
+        for c in keys.chars() {
+            s.push(c);
+        }
+        s
+    }
+
+    /// 從既有的按鍵串重建，指定啟用哪些語言。
+    pub fn from_keys_with(keys: &str, engines: crate::config::Engines) -> Self {
+        let mut s = Self::with_engines(engines);
         for c in keys.chars() {
             s.push(c);
         }
@@ -395,7 +422,7 @@ impl Incremental {
             if rec.is_none() {
                 let seg = super::slice(&self.keys, &self.chars, begin, end);
                 let r = Checked {
-                    lang_ok: lang_of(&seg).is_some(),
+                    lang_ok: lang_of(&seg, self.engines).is_some(),
                     keep: None,
                 };
                 self.checked.borrow_mut().insert(key, r);
@@ -712,7 +739,7 @@ impl Incremental {
             let lang = match cached {
                 Some(l) => l,
                 None => {
-                    let l = lang_of(&seg);
+                    let l = lang_of(&seg, self.engines);
                     self.lang_cache.borrow_mut().insert(key, l);
                     l
                 }
@@ -735,6 +762,13 @@ impl Incremental {
 ///
 /// 回 `None` 代表三個引擎都不收，這條切法就死了。
 ///
+/// # 停用的語言在這裡就跳過
+///
+/// **不是只在出口過濾**。語言開關本來只在 `input.rs` 的出口生效，
+/// 停用語言的候選照樣在這裡生成、參與排序，最後整條被丟掉。實測
+/// 關掉日文的人六成候選是白算的，而且那些候選會擠掉正解。
+/// 見開發文件 §2.73。
+///
 /// # 「有詞典收錄就以那個詞典為優先」
 ///
 /// 瀑布順序讓日文永遠贏過英文，但日文的合法範圍很大——`file` 拼得成
@@ -742,11 +776,11 @@ impl Incremental {
 ///
 /// 所以合法日文還要再問一句：**只有英文詞典收它、日文詞典沒收**的話，
 /// 就判英文。兩邊都收（`sushi`）或都沒收（活用形）維持日文優先。
-fn lang_of(seg: &str) -> Option<Language> {
-    if bopomofo::validity(seg) == bopomofo::Validity::Valid {
+fn lang_of(seg: &str, engines: crate::config::Engines) -> Option<Language> {
+    if engines.bopomofo && bopomofo::validity(seg) == bopomofo::Validity::Valid {
         return Some(Language::Bopomofo);
     }
-    if romaji::validity(seg) == romaji::Validity::Valid {
+    if engines.romaji && romaji::validity(seg) == romaji::Validity::Valid {
         // 只有英文詞典收它 → 判英文
         if seg.chars().count() >= 2
             && crate::english::is_word(seg)
@@ -779,6 +813,56 @@ fn lang_of(seg: &str) -> Option<Language> {
 
 #[cfg(test)]
 mod tests {
+    /// **停用的語言在切點引擎裡就不該出現**，不是等到出口才濾掉。
+    ///
+    /// 語言開關本來只在 `input.rs` 的出口生效
+    /// （`filter(|c| c.iter().all(|s| engines.enabled(s.lang)))`），
+    /// 切點引擎內部照樣把 `sushi` 判成日文，最後整條丟掉。行為看起來
+    /// 對，但引擎內部的語意跟使用者的設定不一致——而且韓文要接進
+    /// `lang_of` 的前提就是這個。見開發文件 §2.73。
+    #[test]
+    fn 關掉的語言不會出現在切法裡() {
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("data");
+        crate::preload(&data, crate::config::Engines::default());
+        if !crate::english::is_loaded() {
+            eprintln!("詞庫未下載，跳過（跑 data/download.ps1）");
+            return;
+        }
+        let no_ja = crate::config::Engines {
+            bopomofo: true,
+            romaji: false,
+        };
+        // 這幾串是**純日文**，三語全開時一定判日文
+        for keys in ["sushi", "ashita", "anime", "wakarimashita"] {
+            let on = super::Incremental::from_keys(keys).cuttings();
+            assert!(
+                on.iter()
+                    .any(|c| c.iter().any(|s| s.lang == super::Language::Romaji)),
+                "{keys} 三語全開時應該有日文段"
+            );
+            let off = super::Incremental::from_keys_with(keys, no_ja).cuttings();
+            assert!(
+                !off.iter()
+                    .any(|c| c.iter().any(|s| s.lang == super::Language::Romaji)),
+                "{keys} 關掉日文後不該再有日文段：{off:?}"
+            );
+        }
+        // 反向：關掉注音之後注音段也要消失
+        let no_zh = crate::config::Engines {
+            bopomofo: false,
+            romaji: true,
+        };
+        let off = super::Incremental::from_keys_with("su3cl3", no_zh).cuttings();
+        assert!(
+            !off.iter()
+                .any(|c| c.iter().any(|s| s.lang == super::Language::Bopomofo)),
+            "關掉注音後不該再有注音段：{off:?}"
+        );
+    }
+
     /// 反斜線一定自成一段，不會被英文段吞掉。
     ///
     /// **這條擋的是一個靜靜失效的坑**：符號打法是把名字用兩個反斜線

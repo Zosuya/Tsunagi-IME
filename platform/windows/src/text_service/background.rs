@@ -121,20 +121,52 @@ pub(crate) fn refresh_config(state: &mut State) {
 
 /// 把讀進來的設定套到各處。
 fn apply_config(state: &mut State) {
+    // ★ 解構，而且**不准寫 `..`** ★
+    //
+    // `Behavior` 加了新欄位的話這裡會**編譯不過**，逼你明講怎麼處理它。
+    // macOS 那邊（`platform/macos/src/settings.rs` 的 `apply_to`）有同樣
+    // 一份，所以**加設定時兩個平台都會被擋下來**。
+    //
+    // 理由見那邊的長註解：「設定頁改得動、平台層不理它」這種洞不會有任何
+    // 症狀，而用測試去掃會誤報（欄位可能透過方法被讀）。只有編譯器數得準。
+    let ime_core::config::Behavior {
+        enter_in_select,
+        commit_on_last,
+        enter_in_segmenu,
+        commit_on_last_seg,
+        width,
+        engines,
+        backspace_whole_cell,
+        packs,
+        packs_dir,
+        lock_punct,
+        ctrl_punct,
+    } = &state.config.behavior;
+    let (width, engines) = (*width, *engines);
+    let (backspace_whole_cell, lock_punct) = (*backspace_whole_cell, *lock_punct);
+
     // 全半形的開機預設。使用者按 Shift+空白切過之後以那個為準，
     // 直到下次重讀設定。
-    state.session.set_width(state.config.behavior.width);
+    state.session.set_width(width);
     // 啟用哪些語言引擎。關掉的**連自動辨識都跳過**，
     // 見 `ime_core::config::Engines`。
-    state.session.set_engines(state.config.behavior.engines);
+    state.session.set_engines(engines);
     // 鎖定時倒退鍵刪整格，見 `Session::delete_marked_slot`
-    state
-        .session
-        .set_backspace_whole_cell(state.config.behavior.backspace_whole_cell);
+    state.session.set_backspace_whole_cell(backspace_whole_cell);
     // 鎖定注音時 , . ; / - 這五個一鍵兩用的鍵怎麼處理
-    state
-        .session
-        .set_lock_punct(state.config.behavior.lock_punct);
+    state.session.set_lock_punct(lock_punct);
+
+    // ── 以下不在這裡套用，但**必須交代** ──
+    //
+    // 選字按 Enter 的行為、最後一格選完直接送出：在按鍵當下現查
+    // （`text_service/mod.rs` 的 `ConfirmCand`／`SegConfirm` 那幾處）。
+    // **選字與段選單各一組**，兩層的操作節奏不同，見 `config::Behavior`。
+    let _ = (enter_in_select, commit_on_last);
+    let _ = (enter_in_segmenu, commit_on_last_seg);
+    // 領域包是獨立的一層，時間戳跟設定分開記，走 `refresh_config` 後半段。
+    let _ = (packs, packs_dir);
+    // Ctrl+標點鍵：在 `mod.rs` 的按鍵入口現查（`ctrl_punct(vk)`）。
+    let _ = ctrl_punct;
     // 外觀立刻套用到候選視窗
     let theme = crate::theme::Theme::from_config(&state.config);
     // **兩個視窗各有一份主題**（預覽列與候選清單是分開的視窗），

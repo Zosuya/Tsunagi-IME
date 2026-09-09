@@ -18,8 +18,21 @@ BUILT="$ROOT/target/$APP_NAME"
 CARGO="${CARGO:-cargo}"
 command -v "$CARGO" >/dev/null 2>&1 || CARGO="$HOME/.cargo/bin/cargo"
 
+# --all 連設定頁一起建（對應 Windows 的 `build-ime.ps1 -All`）。
+ALL=0
+for arg in "$@"; do
+	case "$arg" in
+	--all) ALL=1 ;;
+	*) echo "不認得的參數：$arg（只有 --all）" >&2; exit 2 ;;
+	esac
+done
+
 echo "==> 編譯"
 "$CARGO" build --release -p ime-tip-macos --manifest-path "$ROOT/Cargo.toml"
+if [ "$ALL" = 1 ]; then
+	echo "==> 編譯設定頁"
+	"$CARGO" build --release -p ime-settings --manifest-path "$ROOT/Cargo.toml"
+fi
 
 echo "==> 組 bundle"
 rm -rf "$BUILT"
@@ -28,7 +41,40 @@ cp "$ROOT/target/release/tsunagi_ime" "$BUILT/Contents/MacOS/"
 cp "$HERE/Info.plist" "$BUILT/Contents/"
 # 老派的 bundle 標記，Apple 自己的輸入法都有。CFBundleSignature 是 TSNG。
 printf 'APPLTSNG' > "$BUILT/Contents/PkgInfo"
-cp "$HERE/menu.tiff" "$BUILT/Contents/Resources/"
+# 選單列的圖示。**要改就用 tools/mkicon.swift 重產**，不要手工修圖——
+# 那支會一次把三件事做對：16px＋32px 兩種解析度放同一個 TIFF、
+# 標成樣板圖（系統依選單列深淺自動反色）、字貼齊整數像素。
+#     swiftc -O -o target/mkicon platform/macos/tools/mkicon.swift
+#     ./target/mkicon 通 platform/macos/menuTemplate.tiff
+cp "$HERE/menuTemplate.tiff" "$BUILT/Contents/Resources/"
+
+# ★ 設定頁跟輸入法一起裝 ★
+#
+# 放進 `Contents/Resources/`，`paths::settings_exe()` 就是去那裡找。輸入法
+# 有兩條路叫它：組字時打 `config` 再按 ↑↑↓↓，或選單列的「通譯設定…」。
+#
+# **沒建過設定頁就沿用上一次的**——`--all` 才重建，但既有的執行檔照樣裝
+# 進去，不然平常建輸入法會把設定頁弄不見。
+if [ -f "$ROOT/target/release/ime_settings" ]; then
+	cp "$ROOT/target/release/ime_settings" "$BUILT/Contents/Resources/"
+	echo "==> 帶上設定頁"
+else
+	echo "==> ⚠ 沒有設定頁執行檔（跑一次 ./build-app.sh --all），↑↑↓↓ 會開不出來"
+fi
+
+# ★ 開發用的詞庫指路檔 ★
+#
+# 詞庫 146MB，每次建置都複製進 bundle 太慢，改詞庫還要重裝。寫一個指路檔
+# 指回專案的 data/，建置快、改了立刻生效。**正式包不該有這個檔**——那時
+# 詞庫要真的放進 Contents/Resources/data（§2.52.5 定的佈局）。
+#
+# 路徑用 $ROOT 算出來，不寫死（CLAUDE.md 的跨電腦開發注意事項）。
+if [ -d "$ROOT/data" ]; then
+	printf '%s\n' "$ROOT/data" > "$BUILT/Contents/Resources/data-dir.txt"
+	echo "==> 詞庫指向 $ROOT/data（開發用指路檔）"
+else
+	echo "==> ⚠ 找不到 $ROOT/data，輸入法會沒有詞庫"
+fi
 # 至少要有一個 .lproj，不然 CFBundle 認不出這是個正常的 app bundle。
 #
 # ★ 輸入模式在選單裡的名字，鍵是**模式字典的鍵**（不是 TISInputSourceID，
@@ -43,8 +89,16 @@ write_lproj() {  # $1=語言 $2=顯示名稱
 		printf '"%s" = "%s";\n' "$MODE_KEY" "$2"
 	} > "$BUILT/Contents/Resources/$1.lproj/InfoPlist.strings"
 }
-write_lproj en      "Tsunagi"
-write_lproj zh-Hant "通譯"
+# ★ 顯示名稱是「通譯-Tsunagi」★
+#
+# 系統設定與 Fn 的切換清單裡，第三方輸入法只會顯示這個名字（不像 Apple
+# 自家還有內建符號可用）。**中英並列**是為了在兩種情境下都認得出來：
+# 中文介面看得懂「通譯」，英文介面或搜尋時打得到「Tsunagi」。
+#
+# 日文那份維持「つなぎ」——日文介面下並列拉丁字反而突兀，而且日文使用者
+# 搜尋時打的是假名。
+write_lproj en      "通譯-Tsunagi"
+write_lproj zh-Hant "通譯-Tsunagi"
 write_lproj ja      "つなぎ"
 
 # 簽章。預設 ad-hoc（`-`），用 SIGN_ID 換成真的身分：
@@ -54,6 +108,11 @@ write_lproj ja      "つなぎ"
 # 其實是 bundle id 少了 `.inputmethod.`。
 SIGN_ID="${SIGN_ID:--}"
 echo "==> 簽名（身分：${SIGN_ID}）"
+# **裡面那支要先簽**：`--deep` 只處理巢狀的 bundle，Resources 底下一支
+# 裸的 Mach-O 不歸它管。先簽它、再簽外層，外層的資源封印才蓋得到它。
+if [ -f "$BUILT/Contents/Resources/ime_settings" ]; then
+	codesign --force --sign "$SIGN_ID" "$BUILT/Contents/Resources/ime_settings"
+fi
 codesign --force --deep --sign "$SIGN_ID" "$BUILT"
 
 echo "==> 建查詢工具（target/tisq）"
@@ -94,6 +153,20 @@ pkill -x tsunagi_ime 2>/dev/null && echo "==> 舊的行程已終止"
 #
 # 所以順序是：**先讓它掉**，等 FSEvent 的重掃落地，**再**登記。驗證是
 # 因為時間差不保證固定——不驗的話又會變成「大部分時候可以」的東西。
+# ★ 登記之前先讓選單的 agent 重新載入清單 ★
+#
+# 順序抄 vChewing 的安裝程式（`InstallerVMProtocol.swift`）：
+# **先 killall TextInputMenuAgent、等半秒、再 register**。反過來做的話，
+# 剛登記好的東西會被 agent 手上那份舊清單蓋過去——症狀是「圖示／plist 明明
+# 換了，畫面上還是舊的」，我在 §2.52.40 那輪就是這樣反覆試了好幾次。
+#
+# **只殺 TextInputMenuAgent**。vChewing 的註解講得很清楚：殺 imklaunchagent
+# 會讓正在打字的宿主失去與所有輸入法的對接、非重開宿主不可；而
+# TextInputSwitcher（按 Fn 那個大 HUD）只是純 UI，殺它沒有意義。
+echo "==> 讓選單的 agent 重載清單"
+killall TextInputMenuAgent 2>/dev/null || true
+sleep 1
+
 echo "==> 等系統重掃落地，再向系統登記"
 ok=0
 for attempt in 1 2 3 4 5; do
@@ -134,5 +207,12 @@ open "$DEST/$APP_NAME"
 
 echo
 echo "完成：$DEST/$APP_NAME"
+# ★ 這一行是給人看的，不要拿掉 ★
+#
+# 腳本會 pkill 舊行程再 open 新的，**宿主手上那條連線在那一瞬間就斷了**，
+# 而它不一定會自己接到新行程。症狀是「剛改的東西沒生效」或「本來會的
+# 功能突然不會了」——跟 Windows 那條「驗證新版必須讓宿主整個行程重開」
+# 是同一類的坑（見 CLAUDE.md 的已知陷阱）。
+echo "★ 測之前先切走輸入法再切回來 ★（宿主可能還連著被砍掉的舊行程）"
 echo "輸入法在選單裡不見了：$TISQ register"
 echo "選得到卻打不出字（系統不肯自動拉起來）：open \"$DEST/$APP_NAME\""

@@ -25,7 +25,8 @@
 
 use std::sync::OnceLock;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    GetKeyState, VK_CONTROL, VK_LCONTROL, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RSHIFT,
+    VK_RWIN, VK_SHIFT,
 };
 
 /// 宿主程式名（`notepad`、`brave`…）。
@@ -46,6 +47,20 @@ fn down(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> bool {
     unsafe { GetKeyState(vk.0 as i32) < 0 }
 }
 
+/// 這個修飾鍵按的是左邊還右邊，回傳 `"L"`／`"R"`／`""`。
+///
+/// 兩邊都按著時回空字串——那是「左右一起按」，標哪一邊都不對。
+fn side(
+    l: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY,
+    r: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY,
+) -> &'static str {
+    match (down(l), down(r)) {
+        (true, false) => "L",
+        (false, true) => "R",
+        _ => "",
+    }
+}
+
 /// 現在按著哪些修飾鍵，組成 `Ctrl+Alt+` 這種前綴。
 ///
 /// **按下的鍵自己是修飾鍵時不算進前綴**——按 Ctrl 的那一刻 Ctrl 當然
@@ -54,12 +69,17 @@ fn down(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> bool {
 fn modifiers(vk: u32) -> String {
     let mut s = String::new();
     if down(VK_CONTROL) && !matches!(vk, 0x11 | 0xA2 | 0xA3) {
+        // **左右要分開記**：Windows 的「切換輸入語言」熱鍵預設綁的是
+        // 左邊那組，右 Ctrl+右 Shift 有機會躲過去。不分左右就量不到
+        // 這個差別，而那正是要量的東西。
+        s.push_str(side(VK_LCONTROL, VK_RCONTROL));
         s.push_str("Ctrl+");
     }
     if down(VK_MENU) && !matches!(vk, 0x12 | 0xA4 | 0xA5) {
         s.push_str("Alt+");
     }
     if down(VK_SHIFT) && !matches!(vk, 0x10 | 0xA0 | 0xA1) {
+        s.push_str(side(VK_LSHIFT, VK_RSHIFT));
         s.push_str("Shift+");
     }
     if (down(VK_LWIN) || down(VK_RWIN)) && !matches!(vk, 0x5B | 0x5C) {
@@ -77,8 +97,15 @@ fn key_name(vk: u32) -> String {
         0x08 => "Back",
         0x09 => "Tab",
         0x0D => "Enter",
-        0x10 => "Shift",
-        0x11 => "Ctrl",
+        // 修飾鍵**自己**被按下時走這裡。`GetKeyState` 這時已經反映
+        // 左右，所以查得出來——`side()` 兩邊都按著會回空字串，
+        // 那時就退回不分左右的 `Shift`／`Ctrl`。
+        0x10 => return format!("{}Shift", side(VK_LSHIFT, VK_RSHIFT)),
+        0x11 => return format!("{}Ctrl", side(VK_LCONTROL, VK_RCONTROL)),
+        0xA0 => "LShift",
+        0xA1 => "RShift",
+        0xA2 => "LCtrl",
+        0xA3 => "RCtrl",
         0x12 => "Alt",
         0x14 => "CapsLock",
         0x1B => "Esc",
@@ -96,7 +123,9 @@ fn key_name(vk: u32) -> String {
         0x5B => "LWin",
         0x5C => "RWin",
         0x5D => "Menu",
-        0x70..=0x7B => return format!("F{}", vk - 0x6F),
+        // F1～F24。**F13 以上也要收**：它們兩邊平台都有、幾乎沒人拿來
+        // 當快捷鍵，是語言鎖定鍵的候選之一。
+        0x70..=0x87 => return format!("F{}", vk - 0x6F),
         0x60..=0x69 => return format!("Num{}", vk - 0x60),
         _ => "",
     };
@@ -116,11 +145,20 @@ fn key_name(vk: u32) -> String {
 /// （F1～F12、方向鍵、Tab、Esc 這些），一般字母數字一律不記，
 /// 免得把使用者打的內容寫進檔案。
 fn worth_logging(vk: u32) -> bool {
+    // **修飾鍵自己一律記**。原本只在「有修飾鍵按著」時記，於是單獨的
+    // Shift 按下與放開都看不到——而量 `Ctrl+Shift` 要看的正是這兩下的
+    // 先後順序（誰先放開決定系統要不要切鍵盤配置）。修飾鍵不帶內容，
+    // 記下來沒有把使用者打的字寫進檔案的風險。
+    if matches!(vk, 0x10 | 0x11 | 0x12 | 0xA0..=0xA5) {
+        return true;
+    }
     if down(VK_CONTROL) || down(VK_MENU) || down(VK_LWIN) || down(VK_RWIN) {
         return true;
     }
-    // 功能鍵、方向鍵這類本來就不帶內容的，沒有修飾鍵也記
-    let special = matches!(vk, 0x09 | 0x1B | 0x21..=0x28 | 0x2D | 0x2E | 0x70..=0x7B);
+    // 功能鍵、方向鍵這類本來就不帶內容的，沒有修飾鍵也記。
+    // **CapsLock（0x14）與 F13～F24 也列入**：都是語言鎖定鍵的候選，
+    // 兩邊平台都存在而且沒人搶。
+    let special = matches!(vk, 0x09 | 0x14 | 0x1B | 0x21..=0x28 | 0x2D | 0x2E | 0x70..=0x87);
     // **Shift 只搭配非文字鍵才記**。`Shift+空白`是我們的全半形鍵，
     // 一定要量得到；但 `Shift+字母`是打大寫，記下去就等於記內容了
     let shift_combo = down(VK_SHIFT) && (special || vk == 0x20);
@@ -160,6 +198,9 @@ mod tests {
         assert_eq!(key_name(0x31), "1");
         assert_eq!(key_name(0x70), "F1");
         assert_eq!(key_name(0x7B), "F12");
+        // F13 以上是語言鎖定鍵的候選，兩邊平台都有而且沒人搶
+        assert_eq!(key_name(0x7C), "F13");
+        assert_eq!(key_name(0x87), "F24");
         assert_eq!(key_name(0x61), "Num1");
     }
 

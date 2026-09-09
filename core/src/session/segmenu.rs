@@ -362,10 +362,12 @@ impl Session {
     ///
     /// **`seg_idx` 不動**——非台語模式關掉再開會停在原處，那是刻意的。
     pub fn seg_open(&mut self) {
+        // **「走完了」的旗標兩條路都要清**——不清的話上一輪按 Enter
+        // 退出之後，重開 TAB 會立刻又被判定成走完，選單開不起來。
+        self.seg_done_flag = false;
         if self.tw_mode() {
             self.seg_tw_at = 0;
             self.seg_tw_len = 0;
-            self.seg_tw_done = false;
             self.seg_cand = 0;
             self.seg_first = 0;
         }
@@ -864,7 +866,7 @@ impl Session {
                             // **後面沒有詞了＝走完整句**。選單該關掉，
                             // 不是繞回開頭（實測回報「最後選完沒跳出去
                             // 又回到第一個」）
-                            self.seg_tw_done = true;
+                            self.seg_done_flag = true;
                             self.seg_tw_at = words.first().map(|w| w.at).unwrap_or(0);
                         }
                     }
@@ -874,7 +876,7 @@ impl Session {
                     //
                     // 兩層共用一個設定，行為就要一致——只設反白位置而不
                     // 標「走完了」的話，選單永遠關不掉（實測回報「退不出去」）。
-                    self.seg_tw_done = true;
+                    self.seg_done_flag = true;
                     // 反白留在剛定案的範圍——選單這一幀還要畫，別讓它
                     // 漂到別的詞去。重開 TAB 時 `seg_open` 會重設。
                     if let (Some(end), Some(len)) = (was, pick_len) {
@@ -919,6 +921,19 @@ impl Session {
         } else {
             self.seg_idx.min(n.saturating_sub(1))
         };
+        // **「選完就退出」要真的退出**。
+        //
+        // 只把反白留在原地是不夠的——選單照樣開著、`seg_done()` 照樣
+        // false，使用者按幾次 Enter 都一樣，**永遠出不去**（實測回報
+        // 「TAB 選單沒辦法 Enter 確定選法」，log 顯示動作有執行但狀態
+        // 一動也不動）。
+        //
+        // 語意要跟選字層一致：那邊的 `confirm_cand_with(false)` 直接
+        // `exit_select()`，選完就離開。台語那條路早就這樣做了
+        // （見上面的 `seg_done_flag = true`），非台語這條漏了。
+        if !advance {
+            self.seg_done_flag = true;
+        }
         self.set_seg_cand(self.seg_current_index());
     }
 
@@ -936,16 +951,18 @@ impl Session {
         // 被關掉，使用者根本沒機會往下選（實測回報「選字設定在台語
         // TAB 中沒生效」）。
         //
-        // 台語走完了沒有，**在定案時就決定**（`seg_tw_done`）。
+        // 台語走完了沒有，**在定案時就決定**（`seg_done_flag`）。
         //
         // 事後推論都不可靠：「還有沒有詞可挑」永遠是有（定案過的詞
         // 也算在斷詞裡，才回得去改），而「反白在不在最後一個」也不行
         // ——`tw_next` 走到底會繞回開頭，反白早就跑掉了（實測回報
         // 「最後選完沒跳出去又回到第一個」）。
         if self.tw_mode() {
-            return self.seg_tw_done || self.tw_words().is_empty();
+            return self.seg_done_flag || self.tw_words().is_empty();
         }
-        self.seg_locked > 0 && self.seg_locked >= self.seg_count()
+        // 旗標優先：「選完就退出」的設定按一次 Enter 就該出去，
+        // 不必等到每一段都定案。
+        self.seg_done_flag || (self.seg_locked > 0 && self.seg_locked >= self.seg_count())
     }
 
     /// 使用者在段選單裡定案過嗎？
@@ -1148,6 +1165,55 @@ mod tests {
         let s = sess("su3cl3");
         assert_eq!(s.seg_index(), 0);
         assert!(!s.seg_segments().is_empty());
+    }
+
+    /// **「選完就退出」要真的退出**（實測回報 2026-09-09：
+    /// 「TAB 選單沒辦法 Enter 確定選法」）。
+    ///
+    /// 病灶是 `advance == false` 只做了「反白留在原地」，沒有標記走完
+    /// ——選單照樣開著、`seg_done()` 照樣 false，按幾次 Enter 都一樣。
+    /// log 顯示動作**有執行**但狀態一動也不動，看起來就像「關掉之後又
+    /// 立刻打開」。
+    ///
+    /// 台語那條路早就標了旗標，非台語這條漏了——共用同一個旗標之後
+    /// 就不會再有一邊修了一邊沒修的情況。
+    #[test]
+    fn 選完就退出的設定按一次enter就該走完() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3hello");
+        assert!(!s.seg_done(), "一開始不該是走完的");
+        // advance = false 就是「選完就退出」（EnterInSelect::Exit）
+        s.seg_confirm_with(false);
+        assert!(s.seg_done(), "選完就退出：按一次 Enter 就該關掉選單");
+    }
+
+    /// 相對的，「選完往下一段」不該提早結束——還有段可挑就繼續。
+    #[test]
+    fn 選完往下一段的設定不會提早走完() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3hello");
+        if s.seg_count() < 2 {
+            return; // 只有一段的話「往下」本來就等於走完
+        }
+        s.seg_confirm_with(true);
+        assert!(!s.seg_done(), "還有段可挑就不該關掉選單");
+    }
+
+    /// 退出之後重開 TAB 要能再選——旗標沒清的話選單開不起來。
+    #[test]
+    fn 退出之後重開tab還能再選() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3hello");
+        s.seg_confirm_with(false);
+        assert!(s.seg_done(), "先確認真的走完了");
+        s.seg_open();
+        assert!(!s.seg_done(), "重開 TAB 要能再選，不能一開就被判定走完");
     }
 
     #[test]
@@ -1858,17 +1924,33 @@ mod taigi_tests {
         crate::pack::any_tw()
     }
 
-    /// 載入引擎與那份臨時台語包。
+    /// 載入引擎與那份臨時台語包。**整組測試只做一次**。
+    ///
+    /// # 為什麼要 `OnceLock`
+    ///
+    /// 內容共用一份還不夠。`cargo test` 預設**並行**跑，17 個測試各自
+    /// 呼叫一次 `pack::load`，而 `load` 是「建好新索引再整個換掉」——
+    /// 換的那一瞬間別的測試正在查，就查到半套。症狀是**隨機掛一個**
+    /// （每次不同那個），單執行緒跑則全過。
+    ///
+    /// `OnceLock` 讓載入真的只發生一次：第一個到的做，其餘的等它做完
+    /// 再一起往下走。之後沒有人再動那個索引，查詢自然穩定。
+    ///
+    /// **不用 `serial_test` 那類序列化**：那會讓 17 個測試排隊跑，而
+    /// 它們其實只是共用同一份唯讀資料，並行本身沒有問題。
     fn load_with_taigi() -> bool {
-        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("data");
-        crate::preload(&data, crate::config::Engines::default());
-        if !crate::dict::bopomofo_loaded() {
-            return false;
-        }
-        write_test_pack()
+        static READY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *READY.get_or_init(|| {
+            let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("data");
+            crate::preload(&data, crate::config::Engines::default());
+            if !crate::dict::bopomofo_loaded() {
+                return false;
+            }
+            write_test_pack()
+        })
     }
 
     /// **鎖定注音**的 session——台語只在那時出現（使用者裁定）。

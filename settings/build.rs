@@ -19,6 +19,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    // **圖示是 Windows 的 exe 資源**，其他平台沒有這個概念。不擋的話
+    // 在 macOS 上每次建置都抱怨找不到 `rc.exe`——那是雜訊，不是問題。
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let ico = manifest
         .parent()

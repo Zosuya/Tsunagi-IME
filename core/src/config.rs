@@ -45,10 +45,23 @@ pub enum EnterInSelect {
 pub struct Behavior {
     /// 選字時按 Enter 的行為
     pub enter_in_select: EnterInSelect,
+    /// **段選單**（TAB）裡按 Enter 的行為。
+    ///
+    /// 跟 `enter_in_select` 分開（使用者要求 2026-09-09）——兩層的
+    /// 粒度不同：選字是逐**字**挑、段選單是逐**段**挑，習慣可以不一樣。
+    ///
+    /// 原本共用一個設定，而共用正是那個 bug 的溫床：台語那條路把
+    /// `Exit` 實作成「標記走完、關掉選單」，非台語那條只實作了
+    /// 「反白不動」——結果按 Enter 永遠出不去。
+    pub enter_in_segmenu: EnterInSelect,
     /// 最後一個字選完要不要直接送出（退出組字）。
     ///
     /// `false` 只離開選字狀態，字還在組字區，要再按一次 Enter 才送出。
     pub commit_on_last: bool,
+    /// **段選單**：最後一段選完要不要直接送出。
+    ///
+    /// 跟 `commit_on_last` 分開，理由同 `enter_in_segmenu`。
+    pub commit_on_last_seg: bool,
     /// 標點的全半形。Shift+空白可以隨時切，這裡是**開機預設**。
     pub width: crate::width::Width,
     /// 啟用哪些語言引擎。
@@ -167,7 +180,11 @@ impl Default for Behavior {
     fn default() -> Self {
         Self {
             enter_in_select: EnterInSelect::Next,
+            // 段選單預設「選完往下一段」——逐段確認一整句時，自己往下
+            // 跑比較順。使用者實測過再調（2026-09-09）。
+            enter_in_segmenu: EnterInSelect::Next,
             commit_on_last: false,
+            commit_on_last_seg: false,
             width: crate::width::Width::Auto,
             engines: Engines::default(),
             backspace_whole_cell: true,
@@ -907,6 +924,38 @@ width = \"full\"
             .unwrap();
         assert_eq!(c.behavior.enter_in_select, EnterInSelect::Exit);
         assert!(c.behavior.commit_on_last);
+    }
+
+    /// 段選單跟選字是**兩組獨立的設定**（使用者要求 2026-09-09）。
+    ///
+    /// 原本共用一個，而共用正是那個 bug 的溫床——非台語那條路把
+    /// `Exit` 實作成「反白不動」而不是「退出」，按 Enter 永遠出不去。
+    #[test]
+    fn 段選單跟選字的設定各管各的() {
+        let c = Config::parse(
+            "[behavior]\nenter_in_select = \"exit\"\ncommit_on_last = true\nenter_in_segmenu = \"next\"\ncommit_on_last_seg = false\n",
+        )
+        .unwrap();
+        assert_eq!(c.behavior.enter_in_select, EnterInSelect::Exit);
+        assert!(c.behavior.commit_on_last);
+        assert_eq!(
+            c.behavior.enter_in_segmenu,
+            EnterInSelect::Next,
+            "段選單獨立於選字"
+        );
+        assert!(!c.behavior.commit_on_last_seg, "段選單的送出也獨立");
+    }
+
+    /// **舊設定檔沒有新欄位**，要拿得到預設值而不是解析失敗。
+    #[test]
+    fn 舊設定檔沒有段選單那兩項也讀得動() {
+        let c = Config::parse("[behavior]\nenter_in_select = \"exit\"\n").unwrap();
+        assert_eq!(c.behavior.enter_in_select, EnterInSelect::Exit, "舊的照舊");
+        assert_eq!(
+            c.behavior.enter_in_segmenu,
+            EnterInSelect::Next,
+            "新的走預設，不受舊設定影響"
+        );
     }
 
     #[test]

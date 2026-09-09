@@ -611,10 +611,11 @@ fn paint_inner(hwnd: HWND) {
         else {
             return;
         };
-        // 提示列用小一點的字級——它是輔助資訊，不該搶走候選的注意力
+        // 提示列用小一點的字級——它是輔助資訊，不該搶走候選的注意力。
+        // 比例在 `core::render`，跟 macOS 共用同一條公式。
         let hint_font = renderer.text_format(
             &theme.font.family,
-            (theme.metrics.font_size_pt() * 4 / 5).max(7) as f32,
+            ime_core::render::hint_font_pt(theme.metrics.font_size_pt()) as f32,
             dpi,
         );
 

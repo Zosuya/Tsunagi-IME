@@ -6,11 +6,6 @@
 	<string>English</string>
 	<key>CFBundleExecutable</key>
 	<string>tsunagi_ime</string>
-	<!-- ★★ bundle id 一定要含 `.inputmethod.`（前後都有點）★★
-	     HIToolbox 掃 ~/Library/Input Methods/ 時拿這個子字串當過濾條件，
-	     不合的 bundle 連 Info.plist 都不讀、不留任何 log、TISRegisterInputSource
-	     照樣回 noErr。`com.tsunagi.inputmethod`（結尾沒有點）就是這樣被
-	     靜默跳過，卡了整整三小節，見開發文件 §2.52.16。 -->
 	<key>CFBundleIdentifier</key>
 	<string>com.tsunagi.inputmethod.Tsunagi</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -20,41 +15,26 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.0</string>
-	<!-- 四個字元的簽名碼。`????` 是「沒有」的意思，正式的輸入法都給一個
-	     （威注音是 BPMF）。 -->
+	<string>0.3.1</string>
 	<key>CFBundleSignature</key>
 	<string>TSNG</string>
 	<key>CFBundleVersion</key>
-	<string>0.2.0</string>
-
-	<!-- ★ 輸入模式清單 ★
-	     格式是照著威注音（McBopomofo）的 Info.plist 對出來的，見開發文件
-	     §2.52.14。三個當初寫錯、而且錯了系統也不會吭聲的地方：
-	       1. 整段必須包在 ComponentInputModeDict 底下，不能放最外層
-	       2. repertoire 要 ISO 15924 的**書寫系統代碼**（Hant／Jpan／Latn），
-	          不是 BCP-47 的語言標籤（zh-Hant／ja／en）
-	       3. 最外層要有 TISInputSourceID（＝bundle id）；模式字典裡**也要**
-	          明寫自己的 ID，不然系統會拼出疊兩層的（§2.52.16） -->
+	<string>0.3.1</string>
 	<key>ComponentInputModeDict</key>
 	<dict>
 		<key>tsInputModeListKey</key>
 		<dict>
-			<!-- 模式 ID 要以 bundle id 開頭：系統會把它接在 bundle id 後面，
-			     `com.tsunagi.inputmethod.tsunagi` 會變成
-			     `com.tsunagi.inputmethod.Tsunagi.tsunagi`（§2.52.16）。 -->
 			<key>com.tsunagi.inputmethod.Tsunagi.Auto</key>
 			<dict>
-				<!-- 模式自己的 ID。沒寫的話系統會自己拼一個
-				     （com.tsunagi.inputmethod.Tsunagi.Tsunagi.Auto，多疊一層），
-				     Apple 自己的 AinuIM 也是明寫的（§2.52.16）。 -->
+				<key>TISIconLabels</key>
+				<dict>
+					<key>Primary</key>
+					<string>通</string>
+				</dict>
 				<key>TISInputSourceID</key>
 				<string>com.tsunagi.inputmethod.Tsunagi.Auto</string>
 				<key>TISIntendedLanguage</key>
 				<string>zh-Hant</string>
-				<key>tsInputModeAlternateMenuIconFileKey</key>
-				<string>menu.tiff</string>
-				<!-- 中／日／英三種書寫系統。這是「通譯」的整個重點。 -->
 				<key>tsInputModeCharacterRepertoireKey</key>
 				<array>
 					<string>Hant</string>
@@ -65,24 +45,28 @@
 				<true/>
 				<key>tsInputModeIsVisibleKey</key>
 				<true/>
-				<!-- 選單列上顯示的短標籤。Apple 每個模式都給（注音是「注」、
-				     倉頡是「倉」）——沒有它就只剩那張圖，在彩色底上是一團黑。 -->
-				<key>TISIconLabels</key>
-				<dict>
-					<key>Primary</key>
-					<string>通</string>
-				</dict>
 				<key>tsInputModeMenuIconFileKey</key>
-				<string>menu.tiff</string>
+				<string>menuTemplate.tiff</string>
 				<key>tsInputModePaletteIconFileKey</key>
-				<string>menu.tiff</string>
-				<!-- ★ false ★ Apple 自己的模式**全部**是 false（TCIM 的注音／倉頡／
-				     速成／拼音都是）。true 等於宣稱自己是整個繁中書寫系統的
-				     首選輸入法，會跟內建的繁體中文輸入法搶。 -->
+				<string>menuTemplate.tiff</string>
 				<key>tsInputModePrimaryInScriptKey</key>
 				<false/>
+				<!-- ★ `smUnicode` 不是 `smTradChinese` ★
+				     宣告成「繁體中文文字系統」的話，macOS 會把那個文字系統的配套
+				     面板一起自動啟用——使用者加入我們之後會多出一個「繁體手寫」
+				     （`com.apple.inputmethod.ChineseHandwriting`，型別是
+				     `TISTypeCharacterPalette`，跟 Emoji 面板、日文假名面板同一類）。
+				     那不是我們做的，是系統的附掛行為，但源頭是這個宣告。
+
+				     vChewing 用的就是 `smUnicode`，而它照樣出現在繁體中文分類底下
+				     ——分類是 `TISIntendedLanguage` 決定的，不是 script。
+				     **實測確認**：改成 smUnicode 之後手寫面板不再自動出現，
+				     而我們仍然宣告 zh-Hant、分類也沒跑掉。
+
+				     **這個輸入法本來就不只一種文字系統**（中／日／英同時判斷），
+				     宣告成單一的繁體中文本來就不準確，`smUnicode` 反而更貼近實情。 -->
 				<key>tsInputModeScriptKey</key>
-				<string>smTradChinese</string>
+				<string>smUnicode</string>
 			</dict>
 		</dict>
 		<key>tsVisibleInputModeOrderedArrayKey</key>
@@ -90,33 +74,24 @@
 			<string>com.tsunagi.inputmethod.Tsunagi.Auto</string>
 		</array>
 	</dict>
-
-	<!-- IMKServer 用這個名字開連線；echo_ime.rs 從 Info.plist 讀它。 -->
 	<key>InputMethodConnectionName</key>
 	<string>com.tsunagi.inputmethod.Tsunagi_Connection</string>
-	<!-- ★ 這個字串就是 define_class! 的 #[name]。IMKServer 拿它去 ObjC
-	     runtime 找類別，打錯不會編譯失敗，是執行期靜悄悄失效。 -->
 	<key>InputMethodServerControllerClass</key>
 	<string>TsunagiEchoController</string>
-
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
-	<!-- ★ 是 LSUIElement，不是 LSBackgroundOnly ★
-	     LSBackgroundOnly 的 app 完全不能有 UI，而輸入法要畫候選視窗、要出
-	     選單列圖示。威注音用的是 LSUIElement。 -->
 	<key>LSUIElement</key>
 	<string>1</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
-
-	<!-- ★ 最外層也要有一份 ★ 只放在模式字典裡是不夠的。 -->
+	<key>TISIconIsTemplate</key>
+	<true/>
 	<key>TISInputSourceID</key>
 	<string>com.tsunagi.inputmethod.Tsunagi</string>
 	<key>TISIntendedLanguage</key>
 	<string>zh-Hant</string>
-
 	<key>tsInputMethodCharacterRepertoireKey</key>
 	<array>
 		<string>Hant</string>
@@ -124,6 +99,6 @@
 		<string>Jpan</string>
 	</array>
 	<key>tsInputMethodIconFileKey</key>
-	<string>menu.tiff</string>
+	<string>menuTemplate.tiff</string>
 </dict>
 </plist>

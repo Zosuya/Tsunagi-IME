@@ -1,5 +1,5 @@
 # check_all 的基準：每節通過幾句。用 --save 更新。
-__總計	1277
+__總計	1279
 cutpoint	312
 daily	48
 en_bopomofo	46
@@ -9,7 +9,7 @@ holdout	86
 ja_en	47
 japanese_verbs	110
 kana_fragment	41
-long	27
+long	29
 number	80
 otaku	42
 regression	22
