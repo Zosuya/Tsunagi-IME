@@ -60,7 +60,9 @@ DefaultDirName={commonpf}\Tsunagi IME
 AppendDefaultDirName=no
 LicenseFile={#Root}\LICENSE
 OutputDir={#Root}\target\installer
-OutputBaseFilename=tsunagi-ime-{#AppVersion}-setup
+; **檔名帶 win**——macOS 那邊發的是 .pkg，兩個平台的產物並排在同一個
+; Release 底下，光看副檔名分不夠清楚（見 platform/macos/build-release.sh）。
+OutputBaseFilename=tsunagi-ime-{#AppVersion}-win-setup
 SetupIconFile={#Root}\platform\windows\res\ime.ico
 UninstallDisplayIcon={app}\ime_settings.exe
 DisableProgramGroupPage=yes

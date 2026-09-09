@@ -108,7 +108,8 @@ if (-not $iscc) {
 & $iscc "/DAppVersion=$Version" (Join-Path $PSScriptRoot 'tsunagi.iss')
 if ($LASTEXITCODE -ne 0) { Fail "ISCC 編譯失敗" }
 
-$out = Join-Path $root "target\installer\tsunagi-ime-$Version-setup.exe"
+# **要跟 tsunagi.iss 的 OutputBaseFilename 一致**，改一邊就要改另一邊。
+$out = Join-Path $root "target\installer\tsunagi-ime-$Version-win-setup.exe"
 if (-not (Test-Path $out)) { Fail "編譯說成功，但找不到 $out" }
 
 Write-Host ""

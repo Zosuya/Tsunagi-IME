@@ -431,13 +431,28 @@ pub fn lookup(mode: Mode, vk: u32) -> Option<Action> {
     if let Some(ch) = numpad_char(vk) {
         return Some(Action::NumpadInput(ch));
     }
-    // 字元鍵優先——它跟模式無關，隨時可以繼續打字。
-    // `typed_char` 自己會看 Shift（Shift+1 是 `!`）。
-    if let Some(ch) = typed_char(vk) {
-        return Some(Action::Input(ch));
+    let ctrl = ctrl_down();
+    // ★ 按著 Ctrl 時字元鍵不是輸入 ★
+    //
+    // **這一段一定要在 `typed_char` 之前。** `typed_char` 只看 Shift，
+    // 它不知道 Ctrl 按著——`Ctrl+C` 問它會老實回答 `'c'`，於是 `lookup`
+    // 回 `Some(Input('c'))`，而 `defer_to_host` 看的正是「`lookup` 是不是
+    // `None`」。結果整組 `Ctrl+…` 都被判定成「綁定表裡有」，不讓回宿主，
+    // 複製貼上全部失效。
+    //
+    // 這是 2026-09-09 換鍵位的連帶損害：以前 Ctrl 走 `CtrlTap` 的專門
+    // 路徑，退休之後就掉進一般字元鍵的順序裡了。
+    //
+    // 例外走下面的綁定表（目前只有 `Ctrl+Shift+空白` 全半形）——那是
+    // 刻意收編的組合，見 `Combo::ctrl_shift`。
+    if !ctrl {
+        // 字元鍵優先——它跟模式無關，隨時可以繼續打字。
+        // `typed_char` 自己會看 Shift（Shift+1 是 `!`）。
+        if let Some(ch) = typed_char(vk) {
+            return Some(Action::Input(ch));
+        }
     }
     // Idle 只有空白鍵有綁定（注音的一聲），其餘放行給宿主
-    let ctrl = ctrl_down();
     let combo = Combo {
         vk,
         shift: shift_down(),
@@ -1013,6 +1028,46 @@ mod tests {
             assert!(
                 lookup(Mode::Typing, vk.0 as u32).is_some(),
                 "{vk:?} 該被接手"
+            );
+        }
+    }
+
+    /// 2026-09-09 實測回報：**複製貼上全部失效**。
+    ///
+    /// 根因是 `lookup` 的「字元鍵優先」排在 Ctrl 判斷之前，而
+    /// `typed_char` 只看 Shift——`Ctrl+C` 問它會回 `'c'`，`lookup` 就
+    /// 回 `Some(Input('c'))`，於是 `defer_to_host`（它看的是 `lookup`
+    /// 是不是 `None`）判定「這個組合我們有綁」，不讓回宿主。
+    ///
+    /// 換鍵位（`ca016b1`）之前 Ctrl 走 `CtrlTap` 的專門路徑，不會掉進
+    /// 字元鍵的順序裡；退休之後才踩到。
+    mod ctrl系組合要讓回宿主 {
+        use super::*;
+
+        /// 測試按不出真的 Ctrl（`lookup` 讀的是實體鍵盤），所以這裡
+        /// 驗的是**修好之後仍然成立的那一半**：沒按 Ctrl 時字元鍵照樣
+        /// 是輸入。Ctrl 那半靠 `defer_to_host` 的邏輯與實機驗收。
+        #[test]
+        fn 沒按ctrl時字母照樣進組字() {
+            for (vk, ch) in [(0x43u32, 'c'), (0x56, 'v'), (0x41, 'a')] {
+                assert_eq!(
+                    lookup(Mode::Typing, vk),
+                    Some(Action::Input(ch)),
+                    "沒按 Ctrl 時 {ch} 該進組字"
+                );
+            }
+        }
+
+        /// `Ctrl+Shift+空白`（全半形）是**刻意收編**的例外，必須留在
+        /// 綁定表裡——修 Ctrl 放行時別把它一起放掉了。
+        #[test]
+        fn 全半形那個例外還在表裡() {
+            let combo = Combo::ctrl_shift(0x20);
+            assert!(
+                DEFAULT_BINDINGS
+                    .iter()
+                    .any(|(_, c, a)| *c == combo && matches!(a, Action::ToggleWidth)),
+                "Ctrl+Shift+空白 該還綁著全半形"
             );
         }
     }

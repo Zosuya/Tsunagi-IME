@@ -34,3 +34,11 @@
 # 換行符號若被轉成 CRLF，shebang 那行會變成 `#!/bin/sh\r`，sh 找不到直譯器
 # 而失敗。這裡釘死 LF——**放在最後面**，gitattributes 是後面的規則覆蓋前面的。
 .githooks/** text eol=lf
+
+
+# macOS 的建置／安裝腳本，**理由跟上面的 hook 一模一樣**：它們在 Mac 上
+# 由 bash 執行，CRLF 會讓 shebang 變成 `#!/usr/bin/env bash` 而找不到
+# 直譯器。git 內部本來就存 LF，所以現在不會壞——釘住是為了擋住「在
+# Windows 工作區改完直接複製給 Mac」與「有人設了 core.autocrlf=true」
+# 這兩條路。
+*.sh text eol=lf

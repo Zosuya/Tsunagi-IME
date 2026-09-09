@@ -10,7 +10,7 @@
 #     INSTALLER_ID="Developer ID Installer: 你的名字 (TEAMID)" \
 #         ./platform/macos/build-release.sh                # 正式
 #
-# 產出：target/release-pkg/通譯-Tsunagi-<版本>.pkg
+# 產出：target/release-pkg/tsunagi-ime-<版本>-macos[-unsigned].pkg
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -335,7 +335,21 @@ $TAIGI_CHOICE
 </installer-gui-script>
 XML
 
-PKG="$OUT/通譯-Tsunagi-$VERSION.pkg"
+# 檔名。**英文、而且講明平台**：
+#
+#   * 中文檔名讓使用者在終端機打不出來——沒簽章的包一定要跑
+#     `xattr -dr com.apple.quarantine <路徑>`，那行是要複製貼上的。
+#   * Windows 的產物是 `tsunagi-ime-<版本>-win-setup.exe`，兩個平台的
+#     檔案並排在同一個 Release 底下，光看副檔名分不夠清楚。
+#
+# `-unsigned` **自己判斷**，不靠人記得改：沒給 `SIGN_ID` 就是 ad-hoc，
+# 那種包發給別人會被 Gatekeeper 擋，檔名要講清楚（vChewing 也這樣發）。
+# 之後真的拿 Developer ID 簽了，後綴會自動消失。
+if [ "$SIGN_ID" = "-" ]; then
+	PKG="$OUT/tsunagi-ime-$VERSION-macos-unsigned.pkg"
+else
+	PKG="$OUT/tsunagi-ime-$VERSION-macos.pkg"
+fi
 productbuild \
 	--distribution "$OUT/distribution.xml" \
 	--package-path "$OUT" \

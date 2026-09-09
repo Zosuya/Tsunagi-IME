@@ -62,11 +62,11 @@ pub const WIDTH_TOGGLE_KEY: &str = if cfg!(target_os = "macos") {
 };
 
 /// 語言鎖定的切換鍵叫什麼，寫給使用者看的。理由同 `WIDTH_TOGGLE_KEY`。
-pub const LOCK_TOGGLE_KEY: &str = if cfg!(target_os = "macos") {
-    "Shift+空白"
-} else {
-    "單按 Ctrl"
-};
+///
+/// **兩個平台現在是同一顆鍵**（`Shift+空白`）。Windows 早期是「單按 Ctrl」，
+/// 後來因為誤觸與軟體衝突換掉了（見 `keymap::Action::CycleLock` 的說明），
+/// 這裡一度沒跟著改，設定頁就對使用者講了一個不存在的鍵。
+pub const LOCK_TOGGLE_KEY: &str = "Shift+空白";
 
 /// 有沒有東西被藏起來。有的話設定頁要說一聲，不然使用者會以為選項不見了。
 pub const HIDES_ANYTHING: bool = !HAS_PREVIEW_BAR
