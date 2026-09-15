@@ -1,0 +1,205 @@
+# 打 tag 就產出兩個平台的安裝包，掛成 GitHub Release 的草稿。
+#
+#     git tag v1.0.0 && git push origin v1.0.0
+#
+# 也可以**反過來**：在 GitHub 網頁建好 Release（含說明）按 Publish，
+# tag 隨之建立、觸發這支，安裝包自動掛上去。
+#
+# # 說明永遠是人寫的
+#
+# 這支只產檔案、只掛檔案，**不碰 Release 的說明與發布狀態**。改了什麼、
+# 安裝要注意什麼（未簽章的 SmartScreen、macOS 的 `xattr`）都不是機器
+# 寫得出來的。兩種用法都能走，見下方 `release` job 的註解。
+#
+# # 為什麼詞庫在這裡下載、CI 不下載
+#
+# 詞庫原始檔 119MB、不進版控（`data/download.ps1` 各機自己跑一次）。
+# 每次 push 都抓一輪不划算，而只有打包需要它——所以放在這支，且有 tag
+# 才跑。
+#
+# # 這支要在公開 repo 跑
+#
+# 跟 `ci.yml` 同一個理由（私人 repo 的 macOS runner 是 ×10 倍率），而且
+# **將來要接簽章的話一定得在公開那邊**——SignPath 驗的是公開 repo 的
+# commit 與 build job URL。開發 repo 這邊只用來把流程驗通。
+#
+# # 簽章要接在哪裡（尚未做）
+#
+# SignPath 那類免費開源簽章**一定要走 CI 管線**（金鑰在他們的 HSM，本機
+# 拿不到），所以位置預留在下面標著「簽章掛點」的地方：Windows 是建置完
+# 打包前簽 DLL 與 exe、打包後再簽安裝程式本身。
+#
+# **但那不是唯一的路**：2026-09-15 查證，付費方案裡 SSL.com 的
+# CodeSignTool／eSigner CKA 官方明載可以無人值守，本機 `build-installer.ps1`
+# 直接簽得了，不必走 CI。決定見發布筆記。
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本號（例如 1.0.0）'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows 安裝程式
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # 詞庫原始檔會依上游而變，但產出的二進位詞庫只跟原始檔有關——
+      # 用 download.ps1 自己的雜湊當 key，腳本改了就重抓
+      - name: 快取詞庫
+        id: dict-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            data/bopomofo
+            data/japanese
+            data/english
+          key: dict-${{ hashFiles('data/download.ps1') }}
+
+      - name: 下載並編譯詞庫
+        if: steps.dict-cache.outputs.cache-hit != 'true'
+        run: .\data\download.ps1
+        shell: pwsh
+
+      # 發布用的東西不能只靠「本機測過」
+      - name: cargo test
+        run: cargo test --workspace
+
+      # `build-installer.ps1` 會去三個固定路徑找 ISCC.exe，runner 上
+      # 沒有就整支失敗。
+      #
+      # **用 choco 不要自己抓**：`jrsoftware.org/download.php/is.exe`
+      # 是**轉址頁面不是檔案**，curl 抓回來的是 10KB 的 HTML，存成
+      # .exe 再執行就報「檔案損毀」——第一次跑就是這樣掛的。
+      # choco 在 windows runner 上是預裝的。
+      - name: 安裝 Inno Setup
+        run: |
+          choco install innosetup --no-progress -y
+          # **裝完立刻確認腳本找得到**——choco 說成功不代表檔案在
+          # `build-installer.ps1` 找的那三個路徑裡。在這裡失敗比等到
+          # 打包那步才報「缺 Inno Setup」好追。
+          $iscc = @(
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "choco 裝完了，但三個預期路徑都沒有 ISCC.exe" }
+          Write-Host "✓ $iscc"
+        shell: pwsh
+
+      # === 簽章掛點 1（尚未啟用）===
+      # 這裡簽 target/release 底下的 ime_tip_windows.dll、ime_settings.exe、
+      # register_tool.exe。要在打包之前——安裝程式會把它們包進去。
+
+      # **要自己建一次 release**：上一步的 `cargo test` 編的是 test
+      # profile，產不出 `target/release/` 底下的東西。建完才能用
+      # `-SkipBuild` 讓打包腳本跳過重編。
+      - name: cargo build --release
+        run: cargo build --release
+
+      - name: 建安裝程式
+        run: .\installer\build-installer.ps1 -SkipBuild
+        shell: pwsh
+
+      # === 簽章掛點 2（尚未啟用）===
+      # 這裡簽安裝程式本身（target/installer 底下那個 .exe）。
+
+      - name: 上傳產物
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-installer
+          path: target/installer/*.exe
+          if-no-files-found: error
+
+  macos:
+    name: macOS .pkg
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 快取詞庫
+        id: dict-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            data/bopomofo
+            data/japanese
+            data/english
+          key: dict-${{ hashFiles('data/download.ps1') }}
+
+      # Mac 上也是同一支腳本——pwsh 在 macos runner 上是預裝的
+      - name: 下載並編譯詞庫
+        if: steps.dict-cache.outputs.cache-hit != 'true'
+        run: pwsh ./data/download.ps1
+
+      # **要指定 -p**：workspace 含 platform/windows 與 settings，
+      # 兩者都要 windows crate（CLAUDE.md 的「在 Mac 上」那段）
+      - name: cargo test -p ime-core
+        run: cargo test -p ime-core
+
+      - name: cargo test -p ime-tip-macos
+        run: cargo test -p ime-tip-macos
+
+      # === 簽章掛點 3（尚未啟用）===
+      # macOS 是另一套（Apple Developer ID ＋ notarization），跟 Windows
+      # 的簽章方案無關。未簽章也能用，但安裝前要 `xattr -dr
+      # com.apple.quarantine`——那行要寫進 Release 說明。
+
+      - name: 建 .pkg
+        run: ./platform/macos/build-release.sh
+
+      - name: 上傳產物
+        uses: actions/upload-artifact@v5
+        with:
+          name: macos-pkg
+          path: target/release-pkg/*.pkg
+          if-no-files-found: error
+
+  release:
+    name: 掛上 Release 產物
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+
+      # **只掛檔案，不碰說明也不碰發布狀態。**
+      #
+      # 這支的兩種用法都要能走：
+      #
+      # 1. 指令打 tag（`git push origin v1.0.0`）→ 這裡建一個草稿，
+      #    人工補說明再發布
+      # 2. **在網頁直接建 Release 並 Publish** → tag 隨之建立、觸發這支，
+      #    這裡只把安裝包掛上去
+      #
+      # 第 2 種是關鍵：`softprops` 遇到同 tag 的既有 Release 是**更新**
+      # 它，所以這裡若寫死 `draft: true` 與 `body`，會把已發布的 Release
+      # 打回草稿、還把人寫好的說明蓋成樣板。
+      #
+      # `draft` 留空＝沿用現狀（沒有就建草稿，有就不動）；`body` 不給＝
+      # 不覆寫既有說明。
+      - name: 掛上安裝包
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*

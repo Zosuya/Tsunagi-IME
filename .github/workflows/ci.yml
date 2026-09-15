@@ -1,0 +1,78 @@
+# 每次 push 與 PR 跑的檢查。
+#
+# # 這支主要在公開 repo 跑
+#
+# 開發 repo 是**私人**的，而私人 repo 的 Actions 分鐘數要算額度，倍率
+# 還很兇（Windows ×2、**macOS ×10**）——兩個 job 跑一次就吃掉 40～60
+# 分鐘，免費的 2000 分鐘撐不了幾天。**公開 repo 則是無限制**。
+#
+# 所以用法是：在開發 repo 手動觸發幾次把流程驗通（`workflow_dispatch`），
+# 確定沒問題之後把自動觸發拿掉或整個刪掉，讓 CI 長住在公開那邊。
+# 快照腳本 `tools/publish-snapshot.ps1` 不排除 `.github`，所以這兩支
+# 會跟著發布快照過去。
+#
+# # 為什麼不跑漏斗（check_all）
+#
+# 它要詞庫——119MB 的原始檔，而且不進版控（`data/download.ps1` 各機自己
+# 跑一次）。每次 push 都抓一輪不划算，而漏斗本來就是「改排序或選詞之後
+# 手動跑」的東西，不是每次提交都該付的成本。
+#
+# 產安裝包的 workflow 才需要詞庫，那支有 tag 才跑，見 release.yml。
+
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # CI 上的 debug info 只讓 target/ 變大，沒人會在 runner 上除錯
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  windows:
+    name: Windows（測試 / clippy / fmt）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 安裝 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      # fmt 最先跑：它最快，而且失敗的修法最單純（本機跑一次 cargo fmt）
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # 整個 workspace：core 之外還有 platform/windows 與 settings，
+      # 那兩個只有在 Windows 上才編得起來（要 windows crate）
+      - name: cargo test
+        run: cargo test --workspace
+
+  macos:
+    name: macOS（core 與平台層）
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # **要指定 -p**：根目錄的 workspace 含 platform/windows 與 settings，
+      # 兩者都要 windows crate，裸的 cargo test 在 Mac 上一定失敗
+      # （CLAUDE.md 的「在 Mac 上」那段）
+      - name: cargo test -p ime-core
+        run: cargo test -p ime-core
+
+      - name: cargo test -p ime-tip-macos
+        run: cargo test -p ime-tip-macos
