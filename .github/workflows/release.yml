@@ -199,7 +199,11 @@ jobs:
       #
       # `draft` 留空＝沿用現狀（沒有就建草稿，有就不動）；`body` 不給＝
       # 不覆寫既有說明。
+      # **手動觸發時要自己給 tag**：`workflow_dispatch` 跑在分支上、
+      # 沒有 tag，`softprops` 會直接失敗（`GitHub Releases requires a
+      # tag`）。打 tag 觸發時 `github.ref` 本身就是 tag，留空即可。
       - name: 掛上安裝包
         uses: softprops/action-gh-release@v2
         with:
           files: dist/**/*
+          tag_name: ${{ github.event.inputs.version && format('v{0}', github.event.inputs.version) || '' }}
