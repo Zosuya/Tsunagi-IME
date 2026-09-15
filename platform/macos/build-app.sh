@@ -48,6 +48,13 @@ printf 'APPLTSNG' > "$BUILT/Contents/PkgInfo"
 #     ./target/mkicon 通 platform/macos/menuTemplate.tiff
 cp "$HERE/menuTemplate.tiff" "$BUILT/Contents/Resources/"
 
+# 解除安裝腳本。**發布用的 `build-release.sh` 一直有帶，自己建的沒有**
+# ——於是設定頁「關於」分頁的解除安裝按鈕在自建版上是死的
+# （`settings/src/platform.rs` 的 `uninstall_script()` 找不到檔案就回
+# `None`，按下去什麼都不會發生），而 README 給的那條路徑也會是
+# no such file。2026-09-15 補上，兩條建置路徑一致。
+cp "$HERE/uninstall.sh" "$BUILT/Contents/Resources/"
+
 # ★ 設定頁跟輸入法一起裝 ★
 #
 # 放進 `Contents/Resources/`，`paths::settings_exe()` 就是去那裡找。輸入法

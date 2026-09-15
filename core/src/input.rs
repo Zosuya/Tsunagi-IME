@@ -52,6 +52,13 @@ pub enum Changed {
 }
 
 /// 輸入模式。**兩種完全獨立的輸入邏輯**，見模組說明。
+///
+/// **變體大小差很多是刻意的**（clippy 會抓 `large_enum_variant`）：
+/// `Cascade` 帶著瀑布式那一整套狀態，另外兩個只有單語言的按鍵串。
+/// 把大的那個 `Box` 起來確實能讓 enum 變小，但 `Input` 在**每一次按鍵**
+/// 都要 match 與改寫，多一層指標追逐換來的是熱路徑變慢——而這個 enum
+/// 同時間只有一個實例，省下來的記憶體是個位數 KB。不划算。
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Input {
     Cascade(Cascade),
@@ -907,7 +914,7 @@ mod tests {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        crate::dict::bopomofo_loaded()
+        crate::dict::all_loaded()
     }
 
     #[test]

@@ -85,7 +85,7 @@ fn refresh_packs(l: &mut Loaded) {
     // 純符號包（內建的那兩個就是）會顯示「載入 0 條」，看起來像失敗。
     // 實測踩過，所以這裡把索引實際的內容印出來。
     let idx = ime_core::pack::index();
-    eprintln!("[通譯] 領域包：詞 {n} 條、符號 {} 組", idx.sym.len());
+    eprintln!("[通譯] 領域包：詞 {n} 條、符號 {} 組", idx.sym_len());
 }
 
 /// 確保設定是新的。**回傳「這次有沒有重載」**——有的話呼叫端要重新套用。
@@ -166,10 +166,13 @@ pub fn apply_to(session: &mut ime_core::session::Session) {
             width,
             engines,
             backspace_whole_cell,
+            delete_marked_seg,
+            delete_marked_cell,
             packs,
             packs_dir,
             lock_punct,
             ctrl_punct,
+            fuzzy_tone,
         } = &l.config.behavior;
 
         // 全半形的開機預設。使用者按 Shift+空白切過之後以那個為準，
@@ -181,6 +184,10 @@ pub fn apply_to(session: &mut ime_core::session::Session) {
         session.set_backspace_whole_cell(*backspace_whole_cell);
         // 鎖定注音時 , . ; / - 這五個一鍵兩用的鍵怎麼處理。
         session.set_lock_punct(*lock_punct);
+        // 注音打錯音的自動修正（ㄣ/ㄥ 那類）。**是全域旗標不是 session
+        // 狀態**——`compose` 是純函式、四個入口都不收設定，而這個開關
+        // 一個行程一份，語意跟 `learn::any()` 一樣。
+        ime_core::compose::set_fuzzy_tone(*fuzzy_tone);
 
         // ── 以下不在這裡套用，但**必須交代** ──
         //
@@ -198,6 +205,10 @@ pub fn apply_to(session: &mut ime_core::session::Session) {
         // 領域包：**獨立的一層**，換掉索引就生效，時間戳也跟設定分開記，
         // 所以走 `refresh_packs` 而不是這裡（見那支的說明）。
         let _ = (packs, packs_dir);
+        // 刪整段／刪整格：同上，在按鍵當下現查（`delete_marked_seg()`／
+        // `delete_marked_cell()`）。2026-09-13 鍵位表上搬 core 之後 macOS 才有
+        // 入口——以前這兩個動作只有 Windows 綁得到。
+        let _ = (delete_marked_seg, delete_marked_cell);
         // ★ macOS 用不到 ★
         //
         // `ctrl_punct` 是「鎖定注音時按 Ctrl+標點鍵明講我要標點」的逃生口，
@@ -304,6 +315,36 @@ pub fn commit_on_last_seg() -> bool {
         slot.as_ref()
             .map(|l| l.config.behavior.commit_on_last_seg)
             .unwrap_or(false)
+    })
+}
+
+/// 選字時「刪掉反白這一格」綁哪顆鍵（`behavior.delete_marked_cell`）。
+///
+/// **跟段選單那一組（`delete_marked_seg`）是分開的兩個設定**——格與段是
+/// 兩種粒度，習慣可以不一樣。一個設定套到兩層時兩邊都要各自查，漏掉一邊
+/// 不會有編譯錯誤也不會有測試失敗。
+pub fn delete_marked_cell() -> ime_core::config::DeleteUnitKey {
+    CFG.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(load());
+        }
+        slot.as_ref()
+            .map(|l| l.config.behavior.delete_marked_cell)
+            .unwrap_or_default()
+    })
+}
+
+/// 段選單「刪掉反白這一段」綁哪顆鍵（`behavior.delete_marked_seg`）。
+pub fn delete_marked_seg() -> ime_core::config::DeleteUnitKey {
+    CFG.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(load());
+        }
+        slot.as_ref()
+            .map(|l| l.config.behavior.delete_marked_seg)
+            .unwrap_or_default()
     })
 }
 

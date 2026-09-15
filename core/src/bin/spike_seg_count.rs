@@ -113,19 +113,17 @@ fn main() {
         let n = row.keys.chars().count();
         let paths = count_paths(&per_start, n);
         match paths {
-            Some(p) if p > cuttings.len() => {
-                if verbose && worst.len() < 40 {
-                    worst.push((
-                        p.saturating_sub(cuttings.len()),
-                        format!(
-                            "  {:<28} 整句 {:>4} 種 → 段拼回 {:>6} 種（多 {}）",
-                            row.keys,
-                            cuttings.len(),
-                            p,
-                            p - cuttings.len()
-                        ),
-                    ));
-                }
+            Some(p) if p > cuttings.len() && verbose && worst.len() < 40 => {
+                worst.push((
+                    p.saturating_sub(cuttings.len()),
+                    format!(
+                        "  {:<28} 整句 {:>4} 種 → 段拼回 {:>6} 種（多 {}）",
+                        row.keys,
+                        cuttings.len(),
+                        p,
+                        p - cuttings.len()
+                    ),
+                ));
             }
             None => {
                 t.recomb_blown += 1;
@@ -165,7 +163,7 @@ fn main() {
     println!("\n拼回去會爆炸（>10^9 種走法）的句數：{}", all.recomb_blown);
 
     if verbose && !worst.is_empty() {
-        worst.sort_by(|a, b| b.0.cmp(&a.0));
+        worst.sort_by_key(|x| std::cmp::Reverse(x.0));
         println!("\n拆成段之後多出最多「引擎沒承認過」組合的句子：");
         for (_, s) in worst.iter().take(15) {
             println!("{s}");

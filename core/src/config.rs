@@ -39,6 +39,32 @@ pub enum EnterInSelect {
     Exit,
 }
 
+/// 「刪掉反白的那一個單位」要綁哪顆鍵。
+///
+/// # 為什麼是三態而不是開／關
+///
+/// 倒退鍵在選單裡**已經有用途**（刪一個鍵）。要讓「刪整個單位」進來，
+/// 就得決定兩者誰佔倒退鍵——而這件事**兩派都有道理**（使用者裁定
+/// 2026-09-10，A／B 做成可選而不是替他決定）：
+///
+/// | | 倒退鍵 | 刪整個單位 | 代價 |
+/// |---|---|---|---|
+/// | `Backspace` | 刪整個單位 | 倒退鍵 | 選單裡刪不了單鍵（要先關選單） |
+/// | `ShiftBackspace` | 刪一個鍵 | `Shift+`倒退鍵 | 多佔一顆組合鍵 |
+/// | `Off` | 刪一個鍵 | —— | 沒有這個功能 |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeleteUnitKey {
+    /// 不啟用——倒退鍵維持「刪一個鍵」
+    Off,
+    /// 倒退鍵就是「刪掉反白這個單位」（跟鎖定注音的
+    /// `backspace_whole_cell` 一致）
+    #[default]
+    Backspace,
+    /// `Shift+`倒退鍵刪整個單位，倒退鍵維持刪一個鍵——**兩者並存**
+    ShiftBackspace,
+}
+
 /// 行為設定。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -84,6 +110,29 @@ pub struct Behavior {
     /// 而且刪完會重新斷句，剩下的字可能被切成完全不同的樣子。
     #[serde(default = "default_true")]
     pub backspace_whole_cell: bool,
+    /// **段選單**（TAB）裡「刪掉反白這一段」綁哪顆鍵。
+    ///
+    /// 段選單的語意本來就是「這一段要當成什麼」，多一個「不要這一段」
+    /// 是同一個心智模型的延伸。
+    ///
+    /// **跟選字那層的 `delete_marked_cell` 分開**——理由同
+    /// `enter_in_segmenu`：段與格是兩種粒度，習慣可以不一樣，而且
+    /// 共用一個設定正是「一邊修了一邊沒修」那類 bug 的溫床。
+    #[serde(default)]
+    pub delete_marked_seg: DeleteUnitKey,
+    /// **選字時**（有反白框）「刪掉反白這一格」綁哪顆鍵。
+    ///
+    /// 跟段選單那一組（`delete_marked_seg`）分開，理由同
+    /// `enter_in_segmenu`——格與段是兩種粒度，習慣可以不一樣。
+    ///
+    /// # 跟 `backspace_whole_cell` 的差別
+    ///
+    /// 那個是**鎖定模式**的（一格恆等於一個字，倒退鍵一鍵兩用）。
+    /// 這個是**自動模式**的：一格未必是一個字（日文一格可能是整句），
+    /// 而且刪完會重新斷句、剩下的字可能被切成不同的樣子——所以預設
+    /// 關掉，要的人自己開。
+    #[serde(default)]
+    pub delete_marked_cell: DeleteUnitKey,
     /// 啟用哪些領域包（詞表），依檔名（不含 `.txt`）。
     ///
     /// **清單順序就是優先序**——同一個讀音在兩個包裡都有時，前面的贏。
@@ -108,6 +157,19 @@ pub struct Behavior {
     /// 會失效。會用到那兩個的人可以關掉。
     #[serde(default = "default_true")]
     pub ctrl_punct: bool,
+    /// 注音打錯音要不要自動修正（`ㄣ`／`ㄥ` 那類）。
+    ///
+    /// 開著的話「今天」打成 `ㄐㄧㄥㄊㄧㄢ` 會**直接顯示成「今天」**
+    /// ——原鍵串查不到詞、把易混的音換一個就查得到，用詞庫當證據
+    /// 反推使用者打錯了哪個音。四組：`ㄣ/ㄥ`、`ㄓ/ㄗ`、`ㄔ/ㄘ`、`ㄕ/ㄙ`。
+    ///
+    /// **預設開**。實測弄壞 0、修好 575（開發文件 §2.81.11），而且
+    /// 原鍵串查得到詞就完全不觸發，成本只在 miss 時付。
+    ///
+    /// 退路是按選字鍵：候選第一個是修正後的字，後面接原鍵串的同音字，
+    /// 選過那一格就鎖住（`Slot::picked`）不再自動修正。
+    #[serde(default = "default_true")]
+    pub fuzzy_tone: bool,
 }
 
 /// 鎖定注音時，一鍵兩用的那五個鍵怎麼處理。
@@ -188,6 +250,13 @@ impl Default for Behavior {
             width: crate::width::Width::Auto,
             engines: Engines::default(),
             backspace_whole_cell: true,
+            // 段刪除預設用倒退鍵——跟鎖定注音的 `backspace_whole_cell`
+            // 一致，使用者不必記兩套。要並存改成 `ShiftBackspace`。
+            delete_marked_seg: DeleteUnitKey::Backspace,
+            // **格刪除預設關掉**（跟段刪除不同）。自動模式的一格未必是
+            // 一個字，而且刪完會重新斷句——開發文件 §2.21 當初否決這件事
+            // 的顧慮仍然部分成立，讓要的人自己開比較誠實。
+            delete_marked_cell: DeleteUnitKey::Off,
             packs: vec![
                 crate::pack::BUNDLED_SYMBOLS.to_string(),
                 crate::pack::BUNDLED_EMOJI.to_string(),
@@ -195,6 +264,9 @@ impl Default for Behavior {
             packs_dir: String::new(),
             lock_punct: LockPunct::default(),
             ctrl_punct: true,
+            // 模糊音修正預設開——實測弄壞 0、修好 575，而且原鍵串
+            // 查得到詞就完全不觸發（§2.81.11）。
+            fuzzy_tone: true,
         }
     }
 }
@@ -328,7 +400,7 @@ impl HighlightStyle {
 pub const SCALE_STEPS: [i32; 7] = [50, 75, 100, 125, 150, 175, 200];
 
 /// 一整份設定。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// 顯示設定頁的「除錯」分頁嗎？
@@ -336,11 +408,34 @@ pub struct Config {
     /// 放在最外層而不是 `[behavior]`——它不是輸入法的行為，
     /// 是設定頁自己的事。預設關閉，平常使用者不需要看到。
     pub debug: bool,
+    /// 打開設定頁時去 GitHub 查有沒有新版。
+    ///
+    /// 跟 `debug` 一樣是設定頁自己的事，放最外層。**只有設定頁會查**，
+    /// 輸入法本體不連網——它載在每一個宿主行程裡，各查一次既浪費也可疑。
+    ///
+    /// 預設開，但**一定要能關**：查詢會讓 GitHub 知道「這台電腦裝了這個
+    /// 輸入法」（開發文件 §2.32）。
+    pub check_updates: bool,
     pub behavior: Behavior,
     pub colors: Colors,
     pub font: Font,
     pub metrics: Metrics,
     pub background: Background,
+}
+
+/// 手寫而不是 `derive(Default)`：`check_updates` 預設要開，`bool` 的預設是關。
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            debug: false,
+            check_updates: true,
+            behavior: Behavior::default(),
+            colors: Colors::default(),
+            font: Font::default(),
+            metrics: Metrics::default(),
+            background: Background::default(),
+        }
+    }
 }
 
 /// 候選視窗的背景圖。
@@ -776,12 +871,18 @@ mod tests {
 
         #[test]
         fn 真的存在的檔案找得到() {
-            // 用專案裡一定有的檔案當標的
+            // 用專案裡一定有的檔案當標的。
+            //
+            // **不要用 `CLAUDE.md`**——那份是內部文件，
+            // `tools/publish-snapshot.ps1` 的排除清單第一項就是它，
+            // 公開版的 repo 裡沒有這個檔案，這條測試會在那邊掛掉
+            // （2026-09-15 公開 repo 第一次跑 CI 時踩到）。
+            // `LICENSE` 是 GPL 專案一定要有的，兩邊都在。
             let base = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-            let got = resolve_image_path("CLAUDE.md", Some(base));
+            let got = resolve_image_path("LICENSE", Some(base));
             assert!(got.is_some(), "相對路徑該以基準目錄解讀");
             // 前後空白要被吃掉
-            assert_eq!(got, resolve_image_path("  CLAUDE.md  ", Some(base)));
+            assert_eq!(got, resolve_image_path("  LICENSE  ", Some(base)));
         }
     }
 
@@ -887,6 +988,19 @@ mod tests {
         let c = Config::parse("").unwrap();
         assert_eq!(c.metrics.scale_percent, 100);
         assert!(!c.debug, "除錯分頁預設關閉");
+        assert!(c.check_updates, "更新檢查預設開啟");
+    }
+
+    /// 關掉更新檢查要能存回去再讀出來——**讀不回來等於關不掉**，
+    /// 下次開設定頁又會去連 GitHub。
+    #[test]
+    fn 更新檢查關掉之後存得回去() {
+        let c = Config {
+            check_updates: false,
+            ..Default::default()
+        };
+        let back = Config::parse(&c.to_toml()).unwrap();
+        assert!(!back.check_updates);
     }
 
     #[test]

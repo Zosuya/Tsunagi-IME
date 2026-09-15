@@ -23,11 +23,57 @@ Desktop.ini
 # 面看，底下的 `!` 例外規則就永遠不會生效。
 data/bopomofo/*
 data/japanese/
-data/english/
+data/english/*
 
 # priority.txt 例外：那是人工判斷寫出來的排序調整表，不是下載來的
 # 資料，重新下載不會產生它，必須進版控。
 !data/bopomofo/priority.txt
+
+# ── 釘死的上游原料（2026-09-12）──────────────────────────────
+#
+# 這四份**體積小、而且踩過坑**，所以改成進版控：
+#
+# 1. **上游會錯**。`BPMFBase.txt` 的「公」「夫」兩列輕聲按鍵串是錯的
+#    （見開發文件 §2.20.5），錯在上游、不是我們轉壞的。不進版控就
+#    改不得——改了下次 `download.ps1` 重跑又被蓋掉，別台機器也拿不到。
+# 2. **上游會飄**。`en_50k.txt` 飄過一次，害
+#    `cutpoint::prune::tests::英文段_是詞的保留` 在全新下載的資料上掛掉
+#    （CLAUDE.md 記過）。釘死一份就根治。
+#
+# 體積：四份共約 1.9MB。**其餘的不進**——日文辭典 58MB、國教院 xlsx
+# 17MB 太大，而 `*.bin`／`word_freq.txt` 是 `gen_*` 產的成品，重跑就有。
+#
+# 授權（2026-09-02 §2.31 已逐項查證，可散布）：
+#   BPMFBase / en_50k / zh_tw_50k … MIT，保留授權聲明即可
+#   char_freq.txt ………………………… 教育部字頻，CC BY-ND 3.0 TW
+#
+# ⚠ **`char_freq.txt` 是 ND（禁止改作），只能原樣保存、不得修改內容。**
+#    格式轉換不算改作（CC 官方明示），所以那份 Big5→兩欄的轉檔合規；
+#    但將來發現它有錯**不可以直接改這個檔**，要另外做覆寫表。
+#    另外三份是 MIT，可以直接修。
+!data/bopomofo/BPMFBase.txt
+!data/bopomofo/char_freq.txt
+!data/bopomofo/zh_tw_50k.txt
+!data/english/en_50k.txt
+
+# ── 中文那兩個「成品」也進版控（2026-09-12）─────────────────
+#
+# `gen_*` 產的東西原則上不進版控（重跑就有），**這兩個是例外**：
+#
+# 1. **踩過**：偏好表抬分那個修正 2026-09-10 就寫好了，但
+#    `dict_zh.bin` 一直是舊的——程式優先讀現成的 `.bin`，沒人重跑
+#    `gen_dict_zh` 就永遠不生效，症狀是「學過任何一個字之後，ㄉㄧˋ
+#    的第一名從『第』變回『地』」。詞庫版本號補到 4 之後舊檔會被拒收、
+#    自動重建（見 `dict_bin_zh.rs` 的 `VERSION`），但**版控裡直接有
+#    一份對的**才是最省事的——別台機器 pull 下來就是好的
+# 2. **可重現**：實測連跑兩次 MD5 完全相同，所以進版控不會每次重建
+#    都產生假 diff。真的有 diff 就代表建表邏輯或原料變了，那正是
+#    要看到的訊號
+#
+# 體積 3.9MB。**日文那兩個不進**——`dict_ja.bin` 41MB、`connection.bin`
+# 14MB 太大，而且它們是 mozc 資料的機械轉換，建表邏輯很少動。
+!data/bopomofo/dict_zh.bin
+!data/bopomofo/char_freq_by_reading.txt
 
 # 除錯 log 的開關檔（見 platform/windows/src/debug_log.rs）
 data/debug.on
@@ -81,3 +127,19 @@ packs/*
 # installer/tsunagi.iss 的 [Components]），建包時要抓得到。
 # 上游更新後重跑 spike_taigi_pack 重產，見 tools/取台語資料.md。
 !packs/台語.txt
+
+# Obsidian 的每次開關都會重寫 workspace.json（分頁、視窗大小、捲動位置），
+# 進版控只會產生跟內容無關的雜訊 commit。外掛清單與外掛設定要留著——
+# 換一台電腦開 vault 就直接有 Dataview，不必重裝重設。
+docs/**/.obsidian/workspace.json
+docs/**/.obsidian/workspace-mobile.json
+docs/**/.obsidian/cache
+
+# repo 根目錄不該是 Obsidian vault——開成 vault 會連 target/ 的建置產物
+# 一起索引。vault 是 docs/Tsunagi-ime note/，這條純粹防止誤開之後被 commit 進來。
+/.obsidian/
+
+# 專案層的 Claude Code 設定與 skill：正本在 D:\CODE\通用.claude，
+# 那邊是跨專案共用的 repo。這裡只是安裝後的複本，不進版控。
+# worktrees/ 是工作區暫存，更不該進。
+/.claude/

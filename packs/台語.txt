@@ -1,11 +1,17 @@
 # name: 台語
+# readonly: true
 # version: 0.2
 # description: 用注音打華語詞、候選出台語漢字。資料：台文華文線頂辭典
+# license: CC BY-SA 4.0（姓名標示-相同方式分享）
+# author: 鄭良偉教授（基礎資料）；楊允言教授與眾義工（增補校訂）
+# homepage: https://github.com/ChhoeTaigi/ChhoeTaigiDatabase
+#
+# 上面那三行是**正式欄位**（半形冒號），程式讀得到、設定頁顯示得出來，
+# 而且進得了 .bin。CC BY-SA 4.0 的姓名標示是授權條件，不是說明文字
+# ——**不可以拿掉，也不可以改回全形冒號的寫法**（那樣 parse_meta 認不得，
+# 等於散布一份沒有授權聲明的包）。
 #
 # 資料來源：ChhoeTaigi 找台語｜2002+ 台文華文線頂辭典
-#   基礎資料：鄭良偉 教授；增補校訂：楊允言 教授與眾義工
-#   https://github.com/ChhoeTaigi/ChhoeTaigiDatabase
-# 授權：CC BY-SA 4.0（姓名標示-相同方式分享）
 #   https://creativecommons.org/licenses/by-sa/4.0/deed.zh_TW
 #
 # 只收「整詞查得到注音」的條目，見 tools/取台語資料.md。

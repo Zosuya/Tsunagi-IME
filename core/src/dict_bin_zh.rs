@@ -52,7 +52,16 @@ const MAGIC: &[u8; 8] = b"TSNGZH01";
 // 舊檔會被拒收、自動退回從文字重建，不必靠人記得。
 // 3：同讀音的詞改成全部存下來（`SEP` 分隔）。版面沒變、內容變了，
 // 舊檔讀得動但每個鍵只有一個詞，症狀是「選了第一個字，後面不跟著改」。
-const VERSION: u16 = 3;
+// 4：偏好表的字**建表時就把分數抬到最高**（`build_zh_layout`），讓清單
+// 順序與分數順序一致。版面沒變、內容變了——舊檔讀得動，但學習層一開
+// （`learn::any()` 為真時取「分數最高」而不是「清單第一個」）整張偏好表
+// 就失效，`ㄉㄧˋ` 的第一名從「第」變回「地」。
+//
+// **這一版是補的**：那個修正在 2026-09-10 就寫好了（見 `dict.rs` 的
+// `chars_out`），卻忘了把這裡加一，於是成品一直是舊的——程式優先讀
+// 現成的 `.bin`，沒人重跑 `gen_dict_zh` 就永遠不生效。上面第 2 版的
+// 註解早就寫過這個道理，還是漏用了一次。**改建表邏輯就要動這個號碼**。
+const VERSION: u16 = 4;
 
 /// 同一個讀音的多個詞之間的分隔符。
 ///
@@ -227,6 +236,52 @@ impl ZhDict {
     /// 這串按鍵是詞表裡的詞嗎？
     pub fn has_word(&self, keys: &str) -> bool {
         self.words.find(keys).is_some()
+    }
+
+    /// 掃過整份詞表：`(按鍵, 這串按鍵的所有詞)`。
+    ///
+    /// **給反查用**（詞 → 按鍵）。詞典本身是單向的，設定頁的擴充包
+    /// 編輯器要拿它建反向索引才能「打胡桃自動填出 cj6wl6」（§2.75.3）。
+    ///
+    /// 慢：每一把鍵都要從所屬區塊的開頭還原。**一次掃完建表就好**，
+    /// 不要放進熱路徑。
+    pub fn iter_words(&self) -> impl Iterator<Item = (String, &'static str)> + '_ {
+        (0..self.words.len()).filter_map(move |i| {
+            let key = self.words.key_at(i)?;
+            let (s, e) = self.words.range(i);
+            let text =
+                std::str::from_utf8(&self.bytes[self.off_text + s..self.off_text + e]).ok()?;
+            Some((key, text))
+        })
+    }
+
+    /// 掃過整份單字表：`(讀音的按鍵, 這個讀音的所有字)`。
+    ///
+    /// 給反查用（字 → 按鍵）。**詞表只收「詞」**——「個」「年」「行」
+    /// 這些常用單字在裡面根本查不到，逐字拼非它不可
+    /// （`mkkeys` 的註解記著：第一版漏了這條，句型模式一測就全滅）。
+    ///
+    /// 慢：每一把鍵都要從所屬區塊的開頭還原。**一次掃完建表就好**。
+    /// **分數要一起給**：同一個字會出現在好幾個讀音底下（多音字），
+    /// 反查時得挑分數最高的那個，不然「行」可能拿到 `ㄏㄤˊ`。
+    pub fn iter_chars(&self) -> impl Iterator<Item = (String, Vec<(&'static str, u32)>)> + '_ {
+        (0..self.chars.len()).filter_map(move |i| {
+            let key = self.chars.key_at(i)?;
+            let (s, e) = self.chars.range(i);
+            let list: Vec<(&'static str, u32)> = (s..e)
+                .filter_map(|k| {
+                    let at = self.off_chars + k * CHAR_SIZE;
+                    let off = get_u32(self.bytes, at) as usize;
+                    let len = self.bytes[at + 4] as usize;
+                    let score = get_u32(self.bytes, at + 5);
+                    let start = self.off_text + off;
+                    std::str::from_utf8(&self.bytes[start..start + len])
+                        .ok()
+                        .map(|t| (t, score))
+                })
+                .collect();
+            Some((key, list))
+        })
     }
 
     /// 這個讀音有同音字嗎？

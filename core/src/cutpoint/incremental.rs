@@ -827,7 +827,11 @@ mod tests {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        if !crate::english::is_loaded() {
+        // **要問 `all_loaded()` 不是 `english::is_loaded()`**：英文詞庫
+        // 進版控、日文沒有，只問英文的話在 CI 上會放行，然後死在
+        // 「`sushi` 應該有日文段」——那一串正是要靠日文詞庫才判得出來。
+        // 見 `dict::all_loaded` 的說明。
+        if !crate::dict::all_loaded() {
             eprintln!("詞庫未下載，跳過（跑 data/download.ps1）");
             return;
         }
@@ -882,7 +886,11 @@ mod tests {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        if !crate::english::is_loaded() {
+        // **要問 `all_loaded()` 不是 `english::is_loaded()`**：英文詞庫
+        // 進版控、日文沒有，只問英文的話在 CI 上會放行，然後死在
+        // 「`sushi` 應該有日文段」——那一串正是要靠日文詞庫才判得出來。
+        // 見 `dict::all_loaded` 的說明。
+        if !crate::dict::all_loaded() {
             eprintln!("詞庫未下載，跳過（跑 data/download.ps1）");
             return;
         }

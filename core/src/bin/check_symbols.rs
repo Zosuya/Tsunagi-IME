@@ -26,7 +26,7 @@ fn main() {
     ime_core::pack::load("__不存在的使用者資料夾__", &names.map(String::from));
 
     let idx = ime_core::pack::index();
-    println!("載入 {} 個符號名字\n", idx.sym.len());
+    println!("載入 {} 個符號名字\n", idx.sym_len());
 
     let mut problems = 0;
 
@@ -56,7 +56,8 @@ fn main() {
                     continue;
                 }
                 *file_names.entry(name.to_string()).or_default() += 1;
-                if !idx.sym.contains_key(name) {
+                // 沒有專門的「有沒有這個名字」方法，查出來是空的就是載不進去
+                if idx.sym_get(name).is_empty() {
                     println!("✗ {n}.txt 第 {} 行的「{name}」載不進去", ln + 1);
                     println!("   多半是那一列有不可見字元，被 sanitize 整列擋掉");
                     problems += 1;
@@ -69,7 +70,7 @@ fn main() {
     // ── 2. 每個名字的符號都是完整的圖嗎 ──
     let mut zwj_groups = 0;
     let mut lone_zwj = 0;
-    for (name, syms) in idx.sym.iter() {
+    for (name, syms) in idx.sym_iter() {
         for s in syms {
             if s.contains('\u{200D}') {
                 zwj_groups += 1;
@@ -93,7 +94,7 @@ fn main() {
     println!("ZWJ 組合 {zwj_groups} 個（頭尾錯位 {lone_zwj}）");
 
     // ── 3. 同一組裡重複 ──
-    for (name, syms) in idx.sym.iter() {
+    for (name, syms) in idx.sym_iter() {
         let mut seen = Vec::new();
         for s in syms {
             if seen.contains(&s) {
@@ -112,7 +113,9 @@ fn main() {
         .collect();
     println!("\n跨包同名（會合併）{} 個：", merged.len());
     for name in merged.iter().take(8) {
-        if let Some(syms) = idx.sym.get(name) {
+        // sym_get 查不到會回空的，空的就不印（等同舊的 get() 回 None）
+        let syms = idx.sym_get(name);
+        if !syms.is_empty() {
             let show: Vec<&str> = syms.iter().take(10).map(String::as_str).collect();
             println!("  \\{name}\\ → {} 個：{}", syms.len(), show.join(" "));
         }
@@ -122,9 +125,9 @@ fn main() {
     }
 
     // ── 5. 規模 ──
-    let total_syms: usize = idx.sym.values().map(Vec::len).sum();
-    let max = idx.sym.iter().max_by_key(|(_, v)| v.len());
-    println!("\n共 {} 個名字、{total_syms} 個符號", idx.sym.len());
+    let total_syms: usize = idx.sym_iter().map(|(_, v)| v.len()).sum();
+    let max = idx.sym_iter().max_by_key(|(_, v)| v.len());
+    println!("\n共 {} 個名字、{total_syms} 個符號", idx.sym_len());
     if let Some((n, v)) = max {
         println!("最大的一組：\\{n}\\ 有 {} 個", v.len());
     }

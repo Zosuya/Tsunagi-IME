@@ -41,6 +41,8 @@ use objc2_foundation::{
 };
 use objc2_input_method_kit::{IMKInputController, IMKServer};
 
+use ime_core::binding::{self, Action, Key, KeyEvent, Mode};
+use ime_core::config::DeleteUnitKey;
 use ime_core::session::Session;
 
 use crate::{candidate_panel, guard, keyprobe, paths, settings, width_panel};
@@ -479,102 +481,362 @@ impl EchoController {
         }
     }
 
-    /// 段選單的按鍵。回 `None` 代表這個鍵不歸段選單管。
+    /// macOS 的 `keyCode` → 中性的 `Key`，查 `ime_core::binding` 的鍵位表用。
     ///
-    /// 鍵位照 Windows 的 `DEFAULT_BINDINGS`。**跟選字同一組手勢，只是反白
-    /// 的單位是「段」不是「格」**——使用者不必學新東西，換一個粒度而已。
+    /// **鍵位表只有一份**（2026-09-13 上搬 core），這裡只負責翻譯。以前這裡是
+    /// 照著 Windows 的表人工抄一份 `match keyCode`，抄漏過三處（§2.52.32），
+    /// 還有數字鍵盤被當成注音鍵、F1 會打散組字這兩個洞，一併由查表補上。
     ///
-    /// | 鍵 | 段選單 | 選字 |
-    /// |---|---|---|
-    /// | ←→ | 換一段 | 換一格 |
-    /// | ↑↓ | 換這段的解釋 | 換這格的字 |
-    /// | Shift+←→ | 推這段的邊界 | 推日文詞界 |
-    /// | 1-9 | 直接挑 | 直接挑 |
-    fn on_key_segmenu(
-        &self,
-        sender: &AnyObject,
-        code: u16,
-        ch: Option<char>,
-        shift: bool,
-    ) -> Option<bool> {
-        // 數字直接挑這一段的第 n 個解釋，挑完直接定案。
-        if let Some(n) = ch
-            .and_then(|c| c.to_digit(10))
-            .filter(|d| (1..=9).contains(d))
-            .map(|d| d as usize - 1)
-        {
-            let mut s = self.session().borrow_mut();
-            if let Some(i) = s.seg_number_index(n) {
-                s.seg_set_cand(i);
-                // 挑了就直接定案（數字鍵的語意是「就是這個」），但**往不往
-                // 下一段仍照 `enter_in_segmenu`**——跟 Enter 同一個開關，
-                // 不然數字鍵與 Enter 的行為會不一致。
-                s.seg_confirm_with(settings::enter_advance_seg());
-            }
-            drop(s);
-            self.after_seg(sender);
-            return Some(true);
+    /// 順序：有名字的控制鍵 → 數字鍵盤 → 印得出來的字元 → 其他。
+    /// 控制鍵要看 `keyCode` 而不是字元——空白鍵的字元是 `' '`，但它在表裡
+    /// 是 `Key::Space`（打字中是一聲、選字中是展開），不能當一般輸入。
+    fn to_key(code: u16, ch: Option<char>) -> Key {
+        match code {
+            49 => Key::Space,
+            // Return 36 與數字鍵盤的 Enter 76 是同一個動作（Windows 也不分）
+            36 | 76 => Key::Enter,
+            48 => Key::Tab,
+            53 => Key::Esc,
+            51 => Key::Backspace,
+            123 => Key::Left,
+            124 => Key::Right,
+            125 => Key::Down,
+            126 => Key::Up,
+            // ── 數字鍵盤 ──
+            //
+            // **要翻成 `Numpad` 而不是 `Char`**：`characters()` 對數字鍵盤的 5
+            // 回的就是 `"5"`，照字元走的話會被當成注音的ㄓ。鍵碼不連續
+            // （8 和 9 跳過了 90），照 Carbon 的 `kVK_ANSI_Keypad*` 逐一列。
+            // 數字鍵盤的 `=`（81）Windows 那邊沒有，照一般字元走。
+            82 => Key::Numpad('0'),
+            83 => Key::Numpad('1'),
+            84 => Key::Numpad('2'),
+            85 => Key::Numpad('3'),
+            86 => Key::Numpad('4'),
+            87 => Key::Numpad('5'),
+            88 => Key::Numpad('6'),
+            89 => Key::Numpad('7'),
+            91 => Key::Numpad('8'),
+            92 => Key::Numpad('9'),
+            65 => Key::Numpad('.'),
+            67 => Key::Numpad('*'),
+            69 => Key::Numpad('+'),
+            75 => Key::Numpad('/'),
+            78 => Key::Numpad('-'),
+            // Home／End／PgUp／PgDn／F1… 的字元落在私用區，`printable_char`
+            // 會回 `None`，於是變成 `Other`——組字中一律吞掉
+            _ => ch.map_or(Key::Other, Key::Char),
         }
+    }
 
-        {
-            let mut s = self.session().borrow_mut();
-            match code {
-                // ── 台語模式下這四顆鍵換的是「詞」不是「段」 ──
-                //
-                // 鎖定注音＋裝了台語包時（`tw_mode()`），整串按鍵就是一段，
-                // 換段沒有意義；反白單位改成「詞」（`tw_words` 的最大匹配
-                // 斷詞），所以 `←→` 是跳詞、`Shift+←→` 是調那個詞的寬度
-                // （「我們」↔「我」）。
-                //
-                // **起點固定、只調長度**（使用者裁定）：要選「們」用 `←→`
-                // 跳過去，不必再加一組推左邊界的鍵。
-                //
-                // 這四處跟 Windows 的 `SegRight`／`SegLeft`／`SegWiden`／
-                // `SegNarrow` 一字對一字。**接上語言鎖定之後這條路才通**
-                // （§2.52.46），在那之前 macOS 根本進不了台語模式。
-                124 if shift && s.tw_mode() => s.tw_widen(),
-                123 if shift && s.tw_mode() => s.tw_narrow(),
-                124 if shift => s.seg_widen(),
-                123 if shift => s.seg_narrow(),
-                124 if s.tw_mode() => s.tw_next(),
-                123 if s.tw_mode() => s.tw_prev(),
-                124 => s.seg_right(),
-                123 => s.seg_left(),
-                125 => s.seg_next_cand(),
-                126 => s.seg_prev_cand(),
-                // Enter 是「選定這一段」——前面定案、後面重算，反白自動
-                // 移到下一段。**不是送出**：送出要先關掉選單回到打字。
-                //
-                // **段選單有自己的開關**（`behavior.enter_in_segmenu`，使用者
-                // 要求 2026-09-09 拆開）：`Next` 是「選完往下一段」，`Exit`
-                // 是「選完就停住」。
-                //
-                // 原本跟選字的 `enter_in_select` 共用，但兩層的粒度不同——
-                // 選字是逐**字**挑、段選單是逐**段**挑，習慣可以不一樣。
-                // **這裡查錯一支不會有任何症狀**，只有使用者去改那個設定時
-                // 才會發現改的是另一層。
-                36 | 76 => s.seg_confirm_with(settings::enter_advance_seg()),
-                // **TAB 與 Esc 都是關掉選單、退回組字狀態**，已經定案的段留著。
-                //
-                // Windows 那邊兩顆鍵**效果不同**：`Esc` 走 `SegReset`
-                // ——除了關選單，還會**丟掉已定案的段**，整串按鍵重新交給
-                // 引擎判斷；`TAB` 才是「關掉但保留」。
-                //
-                // macOS 這裡兩顆都是「關掉但保留」（使用者裁定）。差別只在
-                // 已定案的段留不留，關選單那半是一樣的。`seg_reset()` 因此
-                // 在 macOS 沒有入口——要重來就關掉選單、用 Esc 取消組字重打。
-                48 | 53 => {
-                    drop(s);
-                    self.ivars().seg_menu.set(false);
-                    self.refresh(sender);
-                    return Some(true);
-                }
-                51 => s.backspace(),
-                _ => return None,
+    /// 現在的模式。**判斷順序跟 Windows 的 `mode_of` 一致**：沒字 → 選字 → 段選單 → 打字。
+    fn mode(&self) -> Mode {
+        let s = self.session().borrow();
+        if s.is_empty() {
+            Mode::Idle
+        } else if s.select_index().is_some() {
+            if s.cand_expanded() {
+                Mode::SelectingExpanded
+            } else {
+                Mode::Selecting
             }
+        } else if self.ivars().seg_menu.get() {
+            Mode::SegMenu
+        } else {
+            Mode::Typing
         }
-        self.after_seg(sender);
-        Some(true)
+    }
+
+    /// 刪整格／整段那兩組設定的共同判斷：這一下要不要刪整個單位。
+    ///
+    /// 跟 Windows 的 `DeleteCell`／`DeleteSeg` 分派一字對一字。
+    fn want_delete_unit(setting: DeleteUnitKey, shift: bool) -> bool {
+        match setting {
+            // 關掉：倒退鍵與 Shift+倒退鍵都退回刪單鍵
+            DeleteUnitKey::Off => false,
+            // 倒退鍵刪整個單位。**`Shift+`倒退鍵也算**——這個設定下 Shift
+            // 沒有別的意思，讓它一起生效比「按了沒反應」好
+            DeleteUnitKey::Backspace => true,
+            // 並存：只有按著 Shift 才刪整個單位
+            DeleteUnitKey::ShiftBackspace => shift,
+        }
+    }
+
+    /// 執行查表查出來的動作。回傳「有沒有處理」（`true` = 宿主不要再看）。
+    ///
+    /// **動作的實作是平台的事**（組字區、面板怎麼畫），按哪顆鍵觸發是
+    /// `ime_core::binding` 的事——兩邊分開，換鍵位不必動這裡。
+    fn dispatch(&self, action: Action, sender: &AnyObject, shift: bool) -> bool {
+        match action {
+            // ── 輸入 ──
+            Action::Input(c) => {
+                // 打字就離開段選單（跟 Windows 一致）；手勢必須是連續四下，
+                // 打了字就重來
+                self.ivars().seg_menu.set(false);
+                self.ivars().gesture.borrow_mut().clear();
+                self.session().borrow_mut().push(c);
+                self.refresh(sender);
+            }
+            // **數字鍵盤打的就是數字**，不進組字區。
+            //
+            // 正在組字的話先把它送出，再打數字進去——像是「這一段打完了，
+            // 接著輸入數字」。混進注音串裡的話 `5` 會被當成ㄓ。
+            Action::NumpadInput(c) => {
+                if self.is_composing() {
+                    self.commit(sender);
+                }
+                // 全形模式下數字也要變全形，跟組字那條路一致
+                let c = ime_core::width::convert(c, self.session().borrow().width(), None);
+                let s = NSString::from_str(&c.to_string());
+                unsafe {
+                    let _: () = msg_send![sender, insertText: &*s, replacementRange: none_range()];
+                }
+            }
+            // Backspace：退一個鍵（**按字元退，不是位元組**）
+            Action::Backspace => {
+                self.ivars().seg_menu.set(false);
+                self.session().borrow_mut().backspace();
+                self.refresh(sender);
+            }
+            // **刪掉反白這一格**（選字）。刪不了（設定關掉、對不上）就退回一般的退格，
+            // 使用者按下去總得有反應。刪完留在選字模式，框往前挪一格。
+            Action::DeleteCell => {
+                let want = Self::want_delete_unit(settings::delete_marked_cell(), shift);
+                let mut s = self.session().borrow_mut();
+                if !want || !s.delete_marked_cell() {
+                    s.backspace();
+                    self.ivars().seg_menu.set(false);
+                }
+                drop(s);
+                self.refresh(sender);
+            }
+            // **刪掉反白這一段**，選單留著——刪掉一段之後使用者多半要接著改
+            // 遞補上來的那一段。整串刪光了才關選單。
+            Action::DeleteSeg => {
+                let want = Self::want_delete_unit(settings::delete_marked_seg(), shift);
+                let mut s = self.session().borrow_mut();
+                if !want || !s.delete_marked_seg() {
+                    s.backspace();
+                    self.ivars().seg_menu.set(false);
+                } else if s.seg_done() {
+                    self.ivars().seg_menu.set(false);
+                }
+                drop(s);
+                self.refresh(sender);
+            }
+            // Esc：選字開著時先退回打字；再按一次才取消組字
+            Action::Cancel => {
+                self.ivars().seg_menu.set(false);
+                if self.is_selecting() {
+                    self.session().borrow_mut().exit_select();
+                    self.refresh(sender);
+                } else {
+                    self.session().borrow_mut().clear();
+                    self.set_marked(sender, "");
+                }
+            }
+            Action::Commit => self.commit(sender),
+
+            // ── 段選單 ──
+            //
+            // 打字中與選字中都是同一個入口。開之前先退出選字——兩層互斥。
+            Action::OpenSegMenu => {
+                {
+                    let mut s = self.session().borrow_mut();
+                    s.exit_select();
+                    s.seg_open();
+                }
+                self.ivars().seg_menu.set(true);
+                self.refresh(sender);
+            }
+            // **TAB 與 Esc 都是關掉選單、退回組字狀態**，已經定案的段留著。
+            // `seg_reset()` 因此沒有入口——要重來就關掉選單、再按 Esc 取消組字。
+            Action::CloseSegMenu => {
+                self.ivars().seg_menu.set(false);
+                self.refresh(sender);
+            }
+            // ── 台語模式下這四個動作換的是「詞」不是「段」 ──
+            //
+            // 鎖定注音＋裝了台語包時（`tw_mode()`），整串按鍵就是一段，換段沒有
+            // 意義；反白單位改成「詞」（`tw_words` 的最大匹配斷詞），所以 `←→` 是
+            // 跳詞、`Shift+←→` 是調那個詞的寬度（「我們」↔「我」）。
+            //
+            // **起點固定、只調長度**（使用者裁定）：要選「們」用 `←→` 跳過去，
+            // 不必再加一組推左邊界的鍵。
+            Action::SegRight | Action::SegLeft | Action::SegWiden | Action::SegNarrow => {
+                {
+                    let mut s = self.session().borrow_mut();
+                    match (action, s.tw_mode()) {
+                        (Action::SegRight, true) => s.tw_next(),
+                        (Action::SegRight, false) => s.seg_right(),
+                        (Action::SegLeft, true) => s.tw_prev(),
+                        (Action::SegLeft, false) => s.seg_left(),
+                        (Action::SegWiden, true) => s.tw_widen(),
+                        (Action::SegWiden, false) => s.seg_widen(),
+                        (_, true) => s.tw_narrow(),
+                        (_, false) => s.seg_narrow(),
+                    }
+                }
+                self.after_seg(sender);
+            }
+            Action::SegNextCand => {
+                self.session().borrow_mut().seg_next_cand();
+                self.after_seg(sender);
+            }
+            Action::SegPrevCand => {
+                self.session().borrow_mut().seg_prev_cand();
+                self.after_seg(sender);
+            }
+            // Enter 是「選定這一段」——前面定案、後面重算，反白自動移到下一段。
+            // **不是送出**：送出要先關掉選單回到打字。
+            //
+            // **段選單有自己的開關**（`behavior.enter_in_segmenu`，使用者要求
+            // 2026-09-09 拆開）。原本跟選字的 `enter_in_select` 共用，但兩層的
+            // 粒度不同——選字是逐**字**挑、段選單是逐**段**挑。**這裡查錯一支
+            // 不會有任何症狀**，只有使用者去改那個設定時才會發現改的是另一層。
+            Action::SegConfirm => {
+                self.session()
+                    .borrow_mut()
+                    .seg_confirm_with(settings::enter_advance_seg());
+                self.after_seg(sender);
+            }
+            // 數字直接挑這一段的第 n 個解釋，挑完直接定案。**往不往下一段仍照
+            // `enter_in_segmenu`**——跟 Enter 同一個開關，不然兩條路行為不一致。
+            Action::SegPick(n) => {
+                {
+                    let mut s = self.session().borrow_mut();
+                    if let Some(i) = s.seg_number_index(n) {
+                        s.seg_set_cand(i);
+                        s.seg_confirm_with(settings::enter_advance_seg());
+                    }
+                }
+                self.after_seg(sender);
+            }
+
+            // ── 選字 ──
+            //
+            // **左鍵從最後一格進**：使用者按左鍵的直覺是「從右邊選過來」，
+            // 從第一格進來會看起來像跳過了最後一個字。進了選字就把清單打開，
+            // 不然畫面上只有框、沒有候選字可以看。
+            Action::EnterSelect | Action::EnterSelectLast => {
+                {
+                    let mut s = self.session().borrow_mut();
+                    if action == Action::EnterSelectLast {
+                        s.enter_select_last();
+                    } else {
+                        s.enter_select_first();
+                    }
+                    s.open_cands();
+                }
+                self.refresh(sender);
+            }
+            // ↑↓ 先走手勢偵測（`ime_core::command::Gesture`）——組字內容是指令時，
+            // 上上下下就直接執行。湊不成手勢的話原樣退回「進選字」。
+            Action::Gesture(dir) => self.on_gesture(sender, dir),
+            // ── Shift+←→：日文詞界（文節）伸縮 ──
+            //
+            // 推不動就**什麼都不做**（已經到頭了），但仍然吃掉——放行的話宿主
+            // 會拿去移動自己的游標，組字就散了。
+            Action::WidenWord | Action::NarrowWord => {
+                let ok = {
+                    let mut s = self.session().borrow_mut();
+                    if action == Action::WidenWord {
+                        s.widen_word()
+                    } else {
+                        s.narrow_word()
+                    }
+                };
+                if ok {
+                    self.refresh(sender);
+                }
+            }
+            Action::SelectLeft
+            | Action::SelectRight
+            | Action::NextCand
+            | Action::PrevCand
+            | Action::NextColumn
+            | Action::PrevColumn
+            | Action::ExpandAllChars
+            | Action::CollapseChars => {
+                {
+                    let mut s = self.session().borrow_mut();
+                    match action {
+                        Action::SelectLeft => s.select_left(),
+                        Action::SelectRight => s.select_right(),
+                        Action::NextCand => s.next_cand(),
+                        Action::PrevCand => s.prev_cand(),
+                        Action::NextColumn => s.cand_right_column(),
+                        Action::PrevColumn => s.cand_left_column(),
+                        Action::ExpandAllChars => s.expand_cands(),
+                        _ => s.collapse_cands(),
+                    }
+                }
+                self.refresh(sender);
+            }
+            // Enter：選中反白的那個。**不是送出**——送出要退出選字回到打字再按一次。
+            Action::ConfirmCand => {
+                // **照設定走**（`behavior.enter_in_select`）：新注音式是選完往下一格
+                // 繼續選，另一種是選完直接離開選字。
+                //
+                // 數字鍵與滑鼠那兩條路**刻意不看這個設定**，一律當成「我要這個」
+                // 直接收掉清單——那是明確指名某一個候選，跟方向鍵逐格慢慢挑不是
+                // 同一回事（Windows 的數字鍵也一樣不套）。
+                let left_select = self
+                    .session()
+                    .borrow_mut()
+                    .confirm_cand_with(settings::enter_advance());
+                // 離開選字（沒有下一格可挑了）而且設定要「選完直接送出」的話，
+                // 就在這裡送出，不必再按一次 Enter。
+                if left_select && settings::commit_on_last() {
+                    self.commit(sender);
+                } else {
+                    self.refresh(sender);
+                }
+            }
+            // **數字是選字，不是輸入**——打字時十個數字全是注音鍵，但選字時已經
+            // 在挑字了，數字就空出來了（跟新注音一致）。
+            Action::PickChar(n) => {
+                let pick = {
+                    let s = self.session().borrow();
+                    // 清單沒開就沒東西可以按號碼選——那時畫面上只有框，
+                    // 使用者看不到編號，按下去等於盲選。
+                    if !s.cands_open() {
+                        return true;
+                    }
+                    s.cand_number_index(n)
+                        .and_then(|i| s.char_candidates().get(i).cloned())
+                };
+                if let Some(choice) = pick {
+                    let mut s = self.session().borrow_mut();
+                    s.pick_char(&choice);
+                    // **按號碼就是「我要這個」**，挑完直接收掉清單，
+                    // 不像方向鍵那條路是逐格慢慢挑。
+                    s.exit_select();
+                }
+                self.refresh(sender);
+            }
+
+            // ── 全半形與語言鎖定 ──
+            Action::ToggleWidth => {
+                let (before, after) = {
+                    let mut sess = self.session().borrow_mut();
+                    let before = sess.width();
+                    sess.toggle_width();
+                    (before, sess.width())
+                };
+                // 組字中要重畫——**標點的形狀跟著全半形變**（`,` ↔ `，`）。
+                if self.is_composing() {
+                    self.refresh(sender);
+                }
+                width_panel::show(before, after, sender);
+            }
+            Action::CycleLock => self.cycle_lock(sender),
+
+            // 組字中沒綁定的鍵一律吃掉（Home／End／F1…），放行的話宿主會把
+            // 游標移出組字區，組字就散了
+            Action::Swallow => {}
+        }
+        true
     }
 
     /// 段選單動作之後的收尾：全部定案就自己關掉選單，然後重畫。
@@ -596,132 +858,6 @@ impl EchoController {
             }
         }
         self.refresh(sender);
-    }
-
-    /// 選字模式的按鍵。
-    ///
-    /// 回 `None` 代表「這個鍵不歸選字管」，讓打字那邊接手（例如選字中
-    /// 直接打注音）。鍵位照 Windows 的 `DEFAULT_BINDINGS` 對過，兩個平台
-    /// 的手勢要一樣——使用者不該為了換平台重學。
-    ///
-    /// | 鍵 | 未展開 | 展開後 |
-    /// |---|---|---|
-    /// | ↑↓ | 換候選字 | 同欄上下 |
-    /// | ←→ | 在字與字之間移動 | 換欄 |
-    /// | 空白 | 展開全部 | 收合（同一個鍵開關） |
-    /// | 1-9 | 直接挑**這一頁**的第 n 個 | 同左 |
-    /// | Enter | 選中反白的，往下一格 | 同左 |
-    /// | Esc | 離開選字 | 先收合，再按才離開 |
-    fn on_key_selecting(
-        &self,
-        sender: &AnyObject,
-        code: u16,
-        ch: Option<char>,
-        shift: bool,
-    ) -> Option<bool> {
-        let expanded = self.session().borrow().cand_expanded();
-
-        // **數字是選字，不是輸入**——打字時十個數字全是注音鍵，但選字時
-        // 已經在挑字了，數字就空出來了（跟新注音一致）。
-        if let Some(n) = ch
-            .and_then(|c| c.to_digit(10))
-            .filter(|d| (1..=9).contains(d))
-            .map(|d| d as usize - 1)
-        {
-            let pick = {
-                let s = self.session().borrow();
-                // 清單沒開就沒東西可以按號碼選——那時畫面上只有框，
-                // 使用者看不到編號，按下去等於盲選。
-                if !s.cands_open() {
-                    return Some(true);
-                }
-                s.cand_number_index(n)
-                    .and_then(|i| s.char_candidates().get(i).cloned())
-            };
-            if let Some(choice) = pick {
-                let mut s = self.session().borrow_mut();
-                s.pick_char(&choice);
-                // **按號碼就是「我要這個」**，挑完直接收掉清單，
-                // 不像方向鍵那條路是逐格慢慢挑。
-                s.exit_select();
-            }
-            self.refresh(sender);
-            return Some(true);
-        }
-
-        // 空白：展開／收合的開關。
-        if ch == Some(' ') {
-            let mut s = self.session().borrow_mut();
-            if expanded {
-                s.collapse_cands();
-            } else {
-                s.expand_cands();
-            }
-            drop(s);
-            self.refresh(sender);
-            return Some(true);
-        }
-
-        {
-            let mut s = self.session().borrow_mut();
-            match code {
-                // ── Shift+←→：日文詞界（文節）伸縮 ──
-                //
-                // 日文 IME 的通用慣例，而且我們的 Shift+方向鍵本來就是空的。
-                // **只在未展開時有意義**——展開後 ←→ 是換欄，那時框停在
-                // 哪一格已經不是重點了（Windows 也只綁在 `Selecting`，
-                // 沒綁 `SelectingExpanded`）。
-                //
-                // 推不動就**什麼都不做**（已經到頭了），但仍然回「吃掉」
-                // ——放行的話宿主會拿去移動自己的游標，組字就散了。
-                124 if shift && !expanded => {
-                    if !s.widen_word() {
-                        return Some(true);
-                    }
-                }
-                123 if shift && !expanded => {
-                    if !s.narrow_word() {
-                        return Some(true);
-                    }
-                }
-                // 左 123／右 124：未展開是換格，展開後是換欄
-                123 if expanded => s.cand_left_column(),
-                124 if expanded => s.cand_right_column(),
-                123 => s.select_left(),
-                124 => s.select_right(),
-                // 下 125／上 126：換候選字
-                125 => s.next_cand(),
-                126 => s.prev_cand(),
-                // Enter：選中反白的那個。預設往下一格（新注音式），
-                // 沒有下一格就離開選字。**不是送出**——送出要退出選字
-                // 回到打字再按一次。
-                36 | 76 => {
-                    // **照設定走**（`behavior.enter_in_select`）：新注音式
-                    // 是選完往下一格繼續選，另一種是選完直接離開選字。
-                    //
-                    // 數字鍵與滑鼠那兩條路**刻意不看這個設定**，一律當成
-                    // 「我要這個」直接收掉清單——那是明確指名某一個候選，
-                    // 跟方向鍵逐格慢慢挑不是同一回事（Windows 的數字鍵也
-                    // 一樣不套）。
-                    let left_select = s.confirm_cand_with(settings::enter_advance());
-                    // 離開選字（沒有下一格可挑了）而且設定要「選完直接送出」
-                    // 的話，就在這裡送出，不必再按一次 Enter。
-                    if left_select && settings::commit_on_last() {
-                        drop(s);
-                        self.ivars().seg_menu.set(false);
-                        self.commit(sender);
-                        return Some(true);
-                    }
-                }
-                // Esc：展開時先收合，再按一次才離開選字。
-                53 if expanded => s.collapse_cands(),
-                53 => s.exit_select(),
-                51 => s.backspace(),
-                _ => return None,
-            }
-        }
-        self.refresh(sender);
-        Some(true)
     }
 
     /// 組字區的 attributed string——**逐格上屬性**。
@@ -820,208 +956,50 @@ impl EchoController {
             return false;
         }
 
-        // ★ 帶 Cmd／Ctrl／Option 的一律讓回宿主 ★
+        // ★ Ctrl／Option 的一律讓回宿主，Cmd 交給鍵位表判斷 ★
         //
-        // **這是快捷鍵，不是輸入。** `charactersIgnoringModifiers` 對
-        // `Cmd+C` 回的是 `"c"`——單一可見字元，底下那條「收印得出來的
-        // 字元」會把它當成打字吞進組字區，結果就是複製貼上全被輸入法
-        // 攔走（實測回報）。
+        // **`Ctrl+…` 根本到不了輸入法**（`keyprobe.log` 154KB 一筆都沒有，
+        // §2.52.46），偶爾進得來也是系統層的東西。Option 放行是因為
+        // `Option+字母` 是 macOS 輸入特殊字元的正規用法（`Option+A` 打 å、
+        // `Option+R` 打 ®，§2.52.22），交給宿主處理才對。
         //
-        // spike 5（§2.52.22）量到 `Cmd+C/V/X/Z` **到得了輸入法**，但
-        // 「到得了」跟「該不該吃」是兩件事——到得了只代表我們有機會
-        // 決定，而正確的決定是放行。
+        // **Cmd 是這個平台的「主修飾鍵」**（Windows 是 Ctrl），跟著按鍵一起
+        // 送去查表：表裡只有 `Cmd+Shift+空白`（全半形）是刻意收編的，其餘
+        // `Cmd+C/V/X/Z` 查不到就回 `None`、讓回宿主。spike 5（§2.52.22）量到
+        // 那些**到得了輸入法**，但「到得了」跟「該不該吃」是兩件事。
         //
-        // Shift 不算：`Shift+字母`是打大寫，那是真的輸入。
-        //
-        // Option 也放行。macOS 的 `Option+字母` 是輸入特殊字元的正規用法
-        // （`Option+A` 打 å、`Option+R` 打 ®，§2.52.22），交給宿主處理才
-        // 對；**要不要改成由輸入法自己產生那些字元，接 core 時再決定**。
+        // 以前這裡是自己寫「Cmd 一律放行、只開 `Cmd+Shift+空白` 一個洞」，
+        // 而且洞一定要開在放行之前（順序寫反過：`keyprobe.log` 裡 50 次
+        // `Shift+Cmd+Space` 全是「放行」）。查表之後順序由 `lookup` 保證。
         let flags = event.modifierFlags();
-        let code = event.keyCode();
-
-        // ★ 唯一的例外：`Cmd+Shift+空白`（全半形）★
-        //
-        // **一定要在放行之前判**——順序寫反的話 `Cmd` 系會在這裡整批讓回
-        // 宿主，我們的判斷永遠輪不到（實測踩過：`keyprobe.log` 裡 50 次
-        // `Shift+Cmd+Space` 全是「放行」）。
-        //
-        // 洞開得很窄：只有這一個組合，其餘 Cmd 系照舊。
-        if code == 49
-            && flags.contains(NSEventModifierFlags::Command)
-            && flags.contains(NSEventModifierFlags::Shift)
-            && !flags.contains(NSEventModifierFlags::Option)
-        {
-            let (before, after) = {
-                let mut sess = self.session().borrow_mut();
-                let before = sess.width();
-                sess.toggle_width();
-                (before, sess.width())
-            };
-            // 組字中要重畫——**標點的形狀跟著全半形變**（`,` ↔ `，`）。
-            if self.is_composing() {
-                self.refresh(sender);
-            }
-            width_panel::show(before, after, sender);
-            return true;
-        }
-
-        if flags.contains(NSEventModifierFlags::Command)
-            || flags.contains(NSEventModifierFlags::Control)
+        if flags.contains(NSEventModifierFlags::Control)
             || flags.contains(NSEventModifierFlags::Option)
         {
             return false;
         }
-
         let shift = flags.contains(NSEventModifierFlags::Shift);
+        let ev = KeyEvent {
+            key: Self::to_key(event.keyCode(), Self::printable_char(event)),
+            shift,
+            primary: flags.contains(NSEventModifierFlags::Command),
+        };
 
-        // ── Shift+空白：語言鎖定輪替 ──
+        let Some(action) = binding::lookup(self.mode(), ev) else {
+            return false;
+        };
+
+        // **輪替型的動作要擋自動重複**。
         //
-        // 自動 → 注音 → 日文 → 英文。全半形是 `Cmd+Shift+空白`，判斷在更
-        // 上面（那個要在 Cmd 放行之前攔）。
-        //
-        // # 為什麼不是 Windows 那邊的「單按 Ctrl」
-        //
-        // **`Ctrl+…` 根本到不了輸入法。** 這不是推論，是量出來的：
-        // `keyprobe.log` 累積 154KB、涵蓋 spike 5 那輪完整的快捷鍵量測，
-        // **一筆 `Ctrl` 組合都沒有**；同一份紀錄裡 `Cmd+V` 23 次、`Cmd+A`
-        // 5 次、`Cmd+C` 4 次、`Cmd+Shift+空白` 50 次，全都進得來。macOS 把
-        // Ctrl 系當成應用層／系統層的指令事件，IMK 不轉給我們。
-        //
-        // 挑組合鍵時**要分開驗兩件事**（§2.52.22 的教訓）：
-        //
-        // 1. 系統快捷鍵有沒有佔用它——查 `com.apple.symbolichotkeys`
-        // 2. **它到不到得了我們**——只能靠 `keyprobe` 實測
-        //
-        // 第一次選 `⌃⇧空白` 就是只驗了第 1 件（0 衝突）而漏了第 2 件。
-        //
-        // 也不用「單按 Ctrl」：修飾鍵走 `flagsChanged`，IMK 預設不送，要放寬
-        // `recognizedEvents:` 才收得到——而放寬之後**系統就不再自動送
-        // `commitComposition:`**（點組字區外面的收尾），得自己補。
-        if code == 49 && flags.contains(NSEventModifierFlags::Shift) {
-            self.cycle_lock(sender);
+        // 按著 `Shift+空白` 不放，系統會持續重送 keyDown（修飾鍵本身不重複，
+        // 但空白鍵會）——不擋的話語言鎖定會瘋狂輪替，放開時停在哪一格全看
+        // 運氣。一般打字相反，按著注音鍵就是要連續輸入，所以只擋這兩個。
+        // 吃掉而不是放行——這一下本來就是我們的鍵。跟 Windows 的
+        // `keymap::is_repeat` 那段同一件事。
+        if matches!(action, Action::CycleLock | Action::ToggleWidth) && event.isARepeat() {
             return true;
         }
 
-        // ── 段選單最優先 ──
-        //
-        // **兩層是互斥的**（使用者裁定）：段選單開著就只選段，不進選字。
-        if self.ivars().seg_menu.get() {
-            if let Some(handled) =
-                self.on_key_segmenu(sender, code, Self::printable_char(event), shift)
-            {
-                return handled;
-            }
-        }
-
-        // ── TAB 開段選單 ──
-        //
-        // 打字中與選字中都是同一個入口（跟 Windows 一致）。開之前先退出
-        // 選字——兩層互斥。
-        if code == 48 && self.is_composing() {
-            {
-                let mut s = self.session().borrow_mut();
-                s.exit_select();
-                s.seg_open();
-            }
-            self.ivars().seg_menu.set(true);
-            self.refresh(sender);
-            return true;
-        }
-
-        // ── 選字模式優先 ──
-        //
-        // 同一顆鍵在兩個模式意思不同（方向鍵在打字中是「進選字」，在選字
-        // 中是「換字／換格」），所以要先分模式再看鍵。回 `None` 代表這個鍵
-        // 不歸選字管，往下走打字那條——例如選字中直接打注音。
-        if self.is_selecting() {
-            if let Some(handled) =
-                self.on_key_selecting(sender, code, Self::printable_char(event), shift)
-            {
-                return handled;
-            }
-        }
-
-        match code {
-            // Esc：有字就取消（吃掉），沒字就讓回宿主
-            53 => {
-                if !self.is_composing() {
-                    return false;
-                }
-                self.session().borrow_mut().clear();
-                self.set_marked(sender, "");
-                true
-            }
-            // Return / Enter：有字就送出
-            36 | 76 => {
-                if !self.is_composing() {
-                    return false;
-                }
-                self.commit(sender);
-                true
-            }
-            // ── 方向鍵：組字中進選字，沒組字就讓回宿主 ──
-            //
-            // 讓回去的話宿主會去移動它自己的游標，組字區當場被打斷。
-            //
-            // **左鍵從最後一格進**：使用者按左鍵的直覺是「從右邊選過來」，
-            // 從第一格進來會看起來像跳過了最後一個字。這條跟 Windows 的
-            // `EnterSelectLast` 一致。
-            // ↑↓ 先走手勢偵測（`ime_core::command::Gesture`）——組字內容
-            // 是指令時，上上下下就直接執行，不必往下找選項。湊不成手勢
-            // 的話原樣退回「進選字」，方向鍵不會因為多了手勢而失去本來
-            // 的功能。
-            125 | 126 if self.is_composing() => {
-                let dir = if code == 126 {
-                    ime_core::command::Dir::Up
-                } else {
-                    ime_core::command::Dir::Down
-                };
-                self.on_gesture(sender, dir);
-                true
-            }
-            123..=126 if self.is_composing() => {
-                {
-                    let mut sess = self.session().borrow_mut();
-                    if code == 123 {
-                        sess.enter_select_last();
-                    } else {
-                        sess.enter_select_first();
-                    }
-                    // 進了選字就把清單打開，不然畫面上只有框、沒有候選字
-                    // 可以看（Windows 的 `PickChar` 註解講的是同一件事）。
-                    sess.open_cands();
-                }
-                self.refresh(sender);
-                true
-            }
-            // Home 115／PageUp 116／End 119／PageDown 121：組字中吃掉但不
-            // 做事——它們同樣會移動宿主的游標，放行就散了。
-            123..=126 | 115 | 116 | 119 | 121 => self.is_composing(),
-            // Backspace：退一個字（**按字元退，不是位元組**）
-            51 => {
-                if !self.is_composing() {
-                    return false;
-                }
-                self.session().borrow_mut().backspace();
-                let now = self.composition();
-                self.set_marked(sender, &now);
-                true
-            }
-            _ => {
-                let Some(c) = Self::printable_char(event) else {
-                    return false;
-                };
-                // **沒在組字時的空白就是空白**，讓回宿主。組字中的空白是
-                // 注音的一聲，要吃掉——一聲必須前面已經有構成合法注音的
-                // 鍵，不會憑空從空白開始（跟 Windows 的鍵位表一致）。
-                if c == ' ' && !self.is_composing() {
-                    return false;
-                }
-                self.session().borrow_mut().push(c);
-                self.refresh(sender);
-                true
-            }
-        }
+        self.dispatch(action, sender, shift)
     }
 }
 
@@ -1352,5 +1330,89 @@ mod tests {
             EchoController::printable_char(&key("\u{1b}", "\u{1b}")),
             None
         );
+    }
+
+    /// 鍵位表搬進 core 之後，macOS 這邊唯一會錯的地方就是翻譯。表裡用到的
+    /// 每一顆控制鍵都要翻對，不然那一整列綁定等於消失。
+    ///
+    /// **控制鍵要看鍵碼不看字元**：空白鍵的字元是 `' '`，照字元走會變成
+    /// `Char(' ')`，選字中按空白就不會展開、而是打出一個空白。
+    #[test]
+    fn 控制鍵照鍵碼翻() {
+        for (code, ch, key) in [
+            (49, Some(' '), Key::Space),
+            (36, Some('\r'), Key::Enter),
+            (76, Some('\u{3}'), Key::Enter),
+            (48, Some('\t'), Key::Tab),
+            (53, Some('\u{1b}'), Key::Esc),
+            (51, Some('\u{7f}'), Key::Backspace),
+            (123, None, Key::Left),
+            (124, None, Key::Right),
+            (125, None, Key::Down),
+            (126, None, Key::Up),
+        ] {
+            assert_eq!(EchoController::to_key(code, ch), key, "keyCode {code}");
+        }
+    }
+
+    /// 以前 macOS 沒分數字鍵盤，**數字鍵盤的 5 會被當成注音的ㄓ**。
+    /// `characters()` 對它回的就是 `"5"`，所以一定要靠鍵碼分出來。
+    #[test]
+    fn 數字鍵盤翻成numpad不是char() {
+        let pad = [
+            (82, '0'),
+            (83, '1'),
+            (84, '2'),
+            (85, '3'),
+            (86, '4'),
+            (87, '5'),
+            (88, '6'),
+            (89, '7'),
+            (91, '8'),
+            (92, '9'),
+            (65, '.'),
+            (67, '*'),
+            (69, '+'),
+            (75, '/'),
+            (78, '-'),
+        ];
+        for (code, ch) in pad {
+            assert_eq!(
+                EchoController::to_key(code, Some(ch)),
+                Key::Numpad(ch),
+                "keyCode {code}"
+            );
+        }
+        // 主鍵盤那排的 5（keyCode 23）照字元走
+        assert_eq!(EchoController::to_key(23, Some('5')), Key::Char('5'));
+    }
+
+    /// 印不出來的鍵（Home、F1、向前刪除）翻成 `Other`——組字中靠它吞掉。
+    /// 以前這些會放行給宿主，按 F1 或 Delete 組字就散了。
+    #[test]
+    fn 印不出來的鍵翻成other() {
+        for code in [115u16, 119, 116, 121, 122, 117] {
+            assert_eq!(
+                EchoController::to_key(code, None),
+                Key::Other,
+                "keyCode {code}"
+            );
+        }
+        assert_eq!(EchoController::to_key(0, Some('a')), Key::Char('a'));
+    }
+
+    /// 刪整格／整段的三態設定。**兩層各查各的設定**，但判斷規則一樣。
+    #[test]
+    fn 刪整個單位的三態() {
+        use DeleteUnitKey::*;
+        assert!(!EchoController::want_delete_unit(Off, false));
+        assert!(!EchoController::want_delete_unit(Off, true));
+        assert!(EchoController::want_delete_unit(Backspace, false));
+        assert!(
+            EchoController::want_delete_unit(Backspace, true),
+            "Shift 也算"
+        );
+        assert!(!EchoController::want_delete_unit(ShiftBackspace, false));
+        assert!(EchoController::want_delete_unit(ShiftBackspace, true));
     }
 }

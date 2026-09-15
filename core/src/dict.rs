@@ -116,7 +116,7 @@ pub fn write_data_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// 注音版面載好了嗎？拿得到才查。
-fn zh() -> Option<&'static crate::dict_bin_zh::ZhDict> {
+pub(crate) fn zh() -> Option<&'static crate::dict_bin_zh::ZhDict> {
     ZH.get().and_then(|d| d.as_ref())
 }
 /// 日文詞庫：假名 → 表記，**一整塊二進位 bytes**，見 `dict_bin`。
@@ -170,7 +170,7 @@ pub(crate) fn bump_generation() {
 /// 注音符號 → 按鍵的反查表。
 ///
 /// `keymap` 只有「按鍵→符號」的方向，這裡把它反過來。
-pub(crate) fn reverse_keymap() -> HashMap<char, char> {
+pub fn reverse_keymap() -> HashMap<char, char> {
     let mut rev = HashMap::new();
     // 大千鍵盤用到的所有鍵
     for k in "1qaz2wsxedcrfv5tgbyhnujm8ik,9ol.0p;/- 3467".chars() {
@@ -505,10 +505,30 @@ pub fn build_zh_layout(data_dir: &Path) -> Option<Vec<u8>> {
                     v.dedup_by(|a, b| a.0 == b.0);
                     // 偏好表列的依序搬到最前面，其餘維持字頻順序
                     if let Some(wanted) = priority.get(&k) {
+                        let mut moved = 0usize;
                         for w in wanted.iter().rev() {
                             if let Some(i) = v.iter().position(|(c, _)| c == w) {
                                 let c = v.remove(i);
                                 v.insert(0, c);
+                                moved += 1;
+                            }
+                        }
+                        // **分數要跟著順序走**，不能只搬位置。
+                        //
+                        // 取字有兩條路：學習關著時取「清單第一個」，
+                        // 學習一開就改取「分數最高」——而 `learn::any()`
+                        // 是全域的。分數沒搬的話，**使用者只要學過任何
+                        // 一個字，整張偏好表就失效**（`ㄉㄧˋ` 從「第」
+                        // 變回「地」），而且學再多次也回不去：偏好表沒
+                        // 給分數優勢，`k^N` 乘的是一個本來就比較小的數。
+                        //
+                        // 計分器一律不載學習層，所以這個洞每一支都照不到，
+                        // 只有真的使用者會踩。詞表那邊本來就是這樣做的
+                        // （下面偏好表的詞給 `u64::MAX`）。見 §2.72。
+                        if moved > 0 {
+                            let top = v.iter().map(|(_, f)| *f).max().unwrap_or(0);
+                            for (i, (_, f)) in v.iter_mut().take(moved).enumerate() {
+                                *f = top.saturating_add((moved - i) as u32);
                             }
                         }
                     }
@@ -575,7 +595,7 @@ pub fn build_zh_layout(data_dir: &Path) -> Option<Vec<u8>> {
 ///
 /// 一聲在書寫時不標符號但打字要按空白，所以換音節或收尾時，
 /// 前一個音節沒有聲調就補一個空白。
-pub(crate) fn symbols_to_keys(symbols: &str, rev: &HashMap<char, char>) -> Option<String> {
+pub fn symbols_to_keys(symbols: &str, rev: &HashMap<char, char>) -> Option<String> {
     use crate::bopomofo::keymap::Role;
     let mut out = String::new();
     let mut last: Option<Role> = None;
@@ -771,8 +791,9 @@ pub fn has_chars(syllable: &str) -> bool {
 pub fn chars_for(syllable: &str) -> Vec<String> {
     let mut v: Vec<(&str, u64)> = zh()
         .map(|d| {
+            let (t1, t2) = top_two(d, syllable);
             d.chars(syllable)
-                .map(|(c, f)| (c, weighted(syllable, c, f)))
+                .map(|(c, f)| (c, weighted(syllable, c, f, rival_of(f, t1, t2))))
                 .collect()
         })
         .unwrap_or_default();
@@ -793,9 +814,54 @@ pub fn best_char_for(syllable: &str) -> Option<&'static str> {
     if !crate::learn::any() {
         return d.chars(syllable).next().map(|(c, _)| c);
     }
-    d.chars(syllable)
-        .max_by_key(|(c, f)| weighted(syllable, c, *f))
-        .map(|(c, _)| c)
+    let (t1, t2) = top_two(d, syllable);
+    // **平手取前面那個**，不能用 `max_by_key`——它回傳的是最後一個
+    // 最大值，跟 `chars_for` 的穩定排序（保留前面）剛好相反，同分時
+    // 「候選清單的第一個」與「直接送出的字」會是不同的字。
+    // 分數會平手：字頻上限是 `u32::MAX`，飽和之後大家一樣大
+    let mut best: Option<(&'static str, u64)> = None;
+    for (c, f) in d.chars(syllable) {
+        let w = weighted(syllable, c, f, rival_of(f, t1, t2));
+        if best.is_none_or(|(_, bw)| w > bw) {
+            best = Some((c, w));
+        }
+    }
+    best.map(|(c, _)| c)
+}
+
+/// 這個讀音分數最高的兩個字的**原始分數**。
+///
+/// **只有 `Curve::Rival` 需要**，其餘曲線一律回 `(0, 0)`——那條路要多
+/// 一次索引查詢，而這裡是熱路徑（每一鍵、每個候選切法的每個音節各一
+/// 次），不能為了一個沒被選中的曲線讓所有人付錢（§2.57.8 的教訓）。
+fn top_two(d: &crate::dict_bin_zh::ZhDict, syllable: &str) -> (u32, u32) {
+    if !matches!(crate::learn::curve(), crate::learn::Curve::Rival { .. }) {
+        return (0, 0);
+    }
+    // **不能只取前兩個**：清單的順序是「偏好表列的搬到最前面、其餘依
+    // 字頻」，而偏好表**不改分數**——第一個未必是分數最高的那個
+    let (mut t1, mut t2) = (0u32, 0u32);
+    for (_, f) in d.chars(syllable) {
+        if f >= t1 {
+            t2 = t1;
+            t1 = f;
+        } else if f > t2 {
+            t2 = f;
+        }
+    }
+    (t1, t2)
+}
+
+/// 分數是 `f` 的那個字，**它的**最強競爭者是誰。
+///
+/// **自己不算自己的競爭者**——不然學習永遠頂在自己的天花板上，
+/// 等於學不動（這個坑量出來過：反悔成本 28 次）。
+fn rival_of(f: u32, t1: u32, t2: u32) -> u32 {
+    if f >= t1 {
+        t2
+    } else {
+        t1
+    }
 }
 
 /// 學習權重：**原本的分數乘上 `k^N`**（`N` 是使用者選過幾次）。
@@ -805,21 +871,53 @@ pub fn best_char_for(syllable: &str) -> Option<&'static str> {
 /// 「學過就贏」正是 libchewing 被抱怨的那條曲線（選一次就衝到第一，
 /// 之後每次都要手動改回來）。乘上去的話：常用字選一次翻不動，罕見字
 /// 選三四次才會贏——**兩條既定規則同時成立**，見開發文件 §2.22.5.1。
-fn weighted(syllable: &str, ch: &str, base: u32) -> u64 {
+fn weighted(syllable: &str, ch: &str, base: u32, rival: u32) -> u64 {
     if !crate::learn::any() {
         return base as u64;
     }
-    learned_weight(base, crate::learn::index().count(syllable, ch))
+    learned_weight(base, crate::learn::index().count(syllable, ch), rival)
 }
 
-/// 原本的分數乘上 `k^N`。**純函式，方便單獨測**——學習的索引是全域的，
-/// 測試又平行跑，碰它會害到別的測試（這個坑踩過一次）。
-fn learned_weight(base: u32, n: u32) -> u64 {
+/// 原本的分數乘上曲線給的倍率。**純函式，方便單獨測**——學習的索引是
+/// 全域的，測試又平行跑，碰它會害到別的測試（這個坑踩過一次）。
+///
+/// `rival` 是**同一個讀音裡最強的別人**的原始分數，只有 `Curve::Rival`
+/// 用得到；另外兩條曲線傳什麼都不影響結果。
+fn learned_weight(base: u32, n: u32, rival: u32) -> u64 {
     if n == 0 {
         return base as u64;
     }
-    // 上限擋溢位：`k^10` 已經是 10 億倍，再多沒有意義
-    (base as u64).saturating_mul(crate::learn::GROWTH.pow(n.min(10)))
+    let base = base as u64;
+    // 指數先算好：三條曲線的前段都是它。`n` 夾在 20 以內擋溢位
+    // （`8^20 ≈ 1.15e18`，還在 u64 裡）
+    let pow = |cap: u32| crate::learn::GROWTH.saturating_pow(n.min(cap.min(20)));
+    match crate::learn::curve() {
+        // 上限擋溢位：`k^10` 已經是 10 億倍，再多沒有意義
+        crate::learn::Curve::Exp { cap } => base.saturating_mul(pow(cap)),
+        // `m(N) = ceil · k^N / (k^N + ceil − 1)`：`k^N ≪ ceil` 時分母
+        // 約等於 `ceil`，倍率就退化成 `k^N`；`N` 大時趨近 `ceil`。
+        // **用 u128 算**——`base · ceil · k^N` 三個乘起來會爆 u64
+        crate::learn::Curve::Saturate { ceil } => {
+            let e = pow(20) as u128;
+            let ceil = ceil as u128;
+            // **先乘 base 再除**——倍率自己先取整的話 `7.98` 會塌成 7，
+            // 前段就跟指數對不上了
+            let w = base as u128 * ceil * e / (e + ceil - 1);
+            u64::try_from(w.max(base as u128)).unwrap_or(u64::MAX)
+        }
+        // 天花板綁在競爭者身上：贏得過，但只贏一個身位。
+        // **沒有競爭者時退回指數**（`rival == 0`）——這個讀音只有一個字，
+        // 沒有人要壓過，天花板無意義
+        crate::learn::Curve::Rival { permille } => {
+            let grown = base.saturating_mul(pow(10));
+            if rival == 0 {
+                return grown;
+            }
+            let ceiling = (rival as u64).saturating_mul(permille) / 1000;
+            // `base` 本來就比天花板高的話不能反而被壓低——學習只會加分
+            grown.min(ceiling).max(base)
+        }
+    }
 }
 
 /// 這串按鍵對應哪個多字詞？
@@ -840,8 +938,8 @@ pub fn word_for(keys: &str) -> Option<Cow<'static, str>> {
     }
     // 領域包是獨立的一層，接著問它
     if crate::pack::any() {
-        if let Some(w) = crate::pack::index().zh.get(keys) {
-            return Some(Cow::Owned(w.clone()));
+        if let Some(w) = crate::pack::index().zh_get(keys) {
+            return Some(Cow::Owned(w.to_string()));
         }
     }
     zh().and_then(|d| d.word(keys)).map(Cow::Borrowed)
@@ -868,8 +966,8 @@ pub fn words_for(keys: &str) -> Vec<Cow<'static, str>> {
         }
     }
     if crate::pack::any() {
-        if let Some(w) = crate::pack::index().zh.get(keys) {
-            push(Cow::Owned(w.clone()));
+        if let Some(w) = crate::pack::index().zh_get(keys) {
+            push(Cow::Owned(w.to_string()));
         }
     }
     if let Some(d) = zh() {
@@ -939,8 +1037,8 @@ pub fn cands_for_kana(kana: &str) -> Cands {
     }
     if crate::pack::any() {
         let idx = crate::pack::index();
-        if let Some(w) = idx.ja.get(kana) {
-            extra.push(w.clone());
+        if let Some(w) = idx.ja_get(kana) {
+            extra.push(w.to_string());
         }
     }
     if extra.is_empty() {
@@ -1036,8 +1134,8 @@ pub fn best_kana_word(kana: &str) -> Option<Cow<'static, str>> {
         }
     }
     if crate::pack::any() {
-        if let Some(w) = crate::pack::index().ja.get(kana) {
-            return Some(Cow::Owned(w.clone()));
+        if let Some(w) = crate::pack::index().ja_get(kana) {
+            return Some(Cow::Owned(w.to_string()));
         }
     }
     let d = ja()?;
@@ -1053,7 +1151,7 @@ pub fn is_bopomofo_word(keys: &str) -> bool {
     {
         return true;
     }
-    if crate::pack::any() && crate::pack::index().zh.contains_key(keys) {
+    if crate::pack::any() && crate::pack::index().zh_has(keys) {
         return true;
     }
     zh().is_some_and(|d| d.has_word(keys))
@@ -1362,8 +1460,74 @@ pub fn japanese_loaded() -> bool {
     ja().is_some_and(|d| !d.is_empty())
 }
 
+/// 三本詞庫與語言模型**全部**到齊了嗎？測試的守門用這支。
+///
+/// # 為什麼不能只問 `bopomofo_loaded()`
+///
+/// **注音詞庫進版控，日文與語言模型沒有**（`dict_ja.bin` 40MB、
+/// `zh_bigram.gram` 9.8MB，見 `.gitignore` 的「釘死的上游原料」）。
+/// 所以在一台只 clone 沒跑過 `data/download.ps1` 的機器上，
+/// `bopomofo_loaded()` 會回 `true`——守門放行，測試往下跑，然後死在
+/// 查日文或 bigram 的那一行。
+///
+/// 2026-09-15 接 GitHub Actions 時就是這樣炸的：13 個測試在 CI 上掛掉，
+/// 而本機全過（本機詞庫齊全，看不到這個洞）。症狀很誤導——錯誤訊息是
+/// 「詞典最佳排第一：["すし","スシ","ｽｼ"]」那種**看起來像排序寫錯**的
+/// 斷言失敗，不是「找不到詞庫」。
+///
+/// **測試要嘛在完整詞庫下跑、要嘛整個跳過**，沒有中間狀態。
+pub fn all_loaded() -> bool {
+    bopomofo_loaded() && japanese_loaded() && crate::lm::get().is_some()
+}
+
 #[cfg(test)]
 mod tests {
+    /// 輕聲的按鍵一律以 `7` 結尾——**守著上游那兩列被修好的錯**。
+    ///
+    /// `BPMFBase.txt` 的「公」「夫」兩列，上游把輕聲的按鍵串寫錯了
+    /// （見開發文件 §2.20.5）。成因是第三欄的漢語拼音用 `5` 表示輕聲
+    /// （`gong5`／`fu5`），轉成大千按鍵時沒換成 `7`：
+    ///
+    /// ```text
+    /// 公 ㄍㄨㄥ˙ gong5 ej/5   ← 5 在大千是ㄓ，尾巴變成別的音
+    /// 夫 ㄈㄨ˙  fu5   zj     ← 聲調鍵整個掉了，跟一聲撞在一起
+    /// ```
+    ///
+    /// **這條測試守的是資料不是程式碼**，能成立是因為 `BPMFBase.txt`
+    /// 從 2026-09-12 起進版控了（見 `.gitignore`）。它直接讀那個文字檔，
+    /// 不載入整個詞庫——`dict_zh.bin` 是成品、不進版控，依賴它的測試
+    /// 在全新的機器上會掛。
+    ///
+    /// 上游要是哪天把這兩列修好、或又弄壞別的列，這裡會紅。
+    #[test]
+    fn 輕聲的按鍵一律以7結尾() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("core 的上層")
+            .join("data")
+            .join("bopomofo")
+            .join("BPMFBase.txt");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            panic!("{} 讀不到——它應該要在版控裡", path.display());
+        };
+        let mut checked = 0;
+        for (i, line) in text.lines().enumerate() {
+            let cols: Vec<&str> = line.split(' ').collect();
+            if cols.len() < 4 || !cols[1].contains('˙') {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                cols[3].ends_with('7'),
+                "第 {} 列的輕聲按鍵沒有以 7 結尾：{line}",
+                i + 1
+            );
+        }
+        // 106 條是 2026-09-12 的實際數量。上游增刪都可能讓它變動，
+        // 這裡只要求「有掃到東西」，避免格式變了卻靜靜地零通過。
+        assert!(checked > 50, "只掃到 {checked} 條輕聲，格式可能變了");
+    }
+
     /// **搭配不是詞**：`好得`／`大的` 這種語料統計來的高頻搭配不該進詞層，
     /// 而真正的詞（`記得`／`曉得`／`懂得`，「得」是詞的一部分）必須留著。
     ///
@@ -1516,18 +1680,86 @@ mod tests {
         let common = 100_000u32;
         let rare = 100u32;
         assert!(
-            learned_weight(rare, 1) < common as u64,
+            learned_weight(rare, 1, common) < common as u64,
             "選一次翻不動差一千倍的字"
         );
-        assert!(learned_weight(rare, 2) < common as u64, "選兩次也還不夠");
         assert!(
-            learned_weight(rare, 4) > common as u64,
+            learned_weight(rare, 2, common) < common as u64,
+            "選兩次也還不夠"
+        );
+        assert!(
+            learned_weight(rare, 4, common) > common as u64,
             "選四次該贏（8⁴ = 4096 > 1000）"
         );
         // 差距小的話一次就夠——那是對的，兩個都常用時使用者說了算
-        assert!(learned_weight(90, 1) > 100);
+        assert!(learned_weight(90, 1, 100) > 100);
         // 沒選過就是原分數
-        assert_eq!(learned_weight(123, 0), 123);
+        assert_eq!(learned_weight(123, 0, 100), 123);
+    }
+
+    /// **飽和曲線的兩端**（§2.72 的候選之一）：前段要跟指數幾乎一樣，
+    /// 後段要真的停下來——停不下來就是現況那個病。
+    #[test]
+    fn 飽和曲線前段像指數後段會停() {
+        let _g = 曲線守衛::new(crate::learn::Curve::Saturate { ceil: 4096 });
+        let base = 100u32;
+        // 前段：`k^N ≪ ceil` 時倍率**幾乎**就是 `k^N`（差在分母那個 −1，
+        // 離天花板越遠差越小），所以拿純指數當基準、容許 5% 以內
+        let 幾乎等於 = |got: u64, want: u64| got * 100 >= want * 95 && got <= want;
+        assert!(
+            幾乎等於(learned_weight(base, 1, 0), 800),
+            "選一次還是約 8 倍"
+        );
+        assert!(幾乎等於(learned_weight(base, 2, 0), 6400), "選兩次約 64 倍");
+        // 後段：怎麼選都過不了天花板——這就是「反悔追得上」的前提
+        assert!(learned_weight(base, 8, 0) < 4096 * base as u64);
+        let (八次, 二十次) = (learned_weight(base, 8, 0), learned_weight(base, 20, 0));
+        assert!(
+            八次 * 1000 >= 二十次 * 999,
+            "選 8 次跟選 20 次差不到千分之一——後段真的平了（{八次} vs {二十次}）"
+        );
+    }
+
+    /// **相對競爭只贏一個身位**：學到再多次也只比最強的別人高一點點，
+    /// 所以反悔的成本跟第一次學會對稱。
+    #[test]
+    fn 相對競爭的天花板綁在競爭者身上() {
+        let _g = 曲線守衛::new(crate::learn::Curve::Rival { permille: 1050 });
+        let (common, rare) = (100_000u32, 100u32);
+        // 選一次還翻不動——爬升段沒有被改掉
+        assert!(learned_weight(rare, 1, common) < common as u64);
+        // 選很多次也只贏 5%，不會像 `8^10` 那樣衝到十億倍
+        let top = learned_weight(rare, 10, common);
+        assert!(top > common as u64, "終究要贏");
+        assert!(top <= common as u64 * 105 / 100, "但只贏一個身位");
+        // 自己就是最強的那個（沒有競爭者）時退回指數，不會被自己壓住
+        assert_eq!(learned_weight(common, 1, 0), common as u64 * 8);
+    }
+
+    /// 換曲線是**全域狀態**，而 `cargo test` 預設平行跑——兩支測試同時
+    /// 換就會互相踩到，症狀是隨機掛（§2.64.16 那個坑）。所以守衛除了
+    /// 「用完換回來」還要**互斥**：拿得到鎖才動全域。
+    struct 曲線守衛 {
+        /// 只是握著，不讀——鎖的壽命就是守衛的壽命
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl 曲線守衛 {
+        fn new(c: crate::learn::Curve) -> Self {
+            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let g = LOCK.lock().unwrap_or_else(|e| {
+                LOCK.clear_poison();
+                e.into_inner()
+            });
+            crate::learn::set_curve(c);
+            Self { _lock: g }
+        }
+    }
+
+    impl Drop for 曲線守衛 {
+        fn drop(&mut self) {
+            crate::learn::set_curve(crate::learn::DEFAULT_CURVE);
+        }
     }
 
     #[test]
@@ -1566,5 +1798,52 @@ mod tests {
         // 詞頻表收錄的一律贏過沒收錄的——單位不同，只能分層比
         wf.insert("乙乙".to_string(), 1u64);
         assert!(word_score("乙乙", &wf, &cf) > word_score("甲甲", &wf, &cf));
+    }
+}
+
+#[cfg(test)]
+mod 學習與偏好表 {
+    use super::*;
+
+    /// **偏好表在學習開啟之後被繞過**（§2.72 順手量到的）。
+    ///
+    /// 偏好表是「搬順序、不改分數」（見 `chars_out` 的建表），而
+    /// `chars_for`／`best_char_for` 一旦 `learn::any()` 為真就改用
+    /// 「分數最高」而不是「清單第一個」——所以**使用者學過任何一個字
+    /// 之後，所有音節的偏好表順序一起失效**：`ㄉㄧˋ` 的第一名從
+    /// 「第」變成「地」。
+    ///
+    /// 每支計分器都看不到這件事（它們一律不載學習層），只有真的使用者
+    /// 會踩到。`bench_learn --revert` 的「卡死 15 組」就是它。
+    ///
+    /// **2026-09-10 修好**（使用者裁決）。
+    ///
+    /// **修法**：偏好表的字在建表時就把分數抬到當時的最高分之上
+    /// （見 `chars_out`），清單順序與分數順序從此一致。
+    #[test]
+    fn 學了不相干的字不該動到別的音節() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("data");
+        crate::preload(&dir, crate::config::Engines::default());
+        if zh().is_none() {
+            return;
+        }
+        let 乾淨 = best_char_for("2u4").map(|s| s.to_string());
+        // 學一個**完全不相干**的音節
+        let slot = crate::compose::Slot {
+            keys: "su3".into(),
+            text: "你".into(),
+            lang: crate::language::Language::Bopomofo,
+            selectable: true,
+            is_mark: false,
+            cands: None,
+            picked: true,
+        };
+        crate::learn::record(&[slot]);
+        let 學過之後 = best_char_for("2u4").map(|s| s.to_string());
+        crate::learn::clear();
+        assert_eq!(乾淨, 學過之後, "學了不相干的字，這個音節的第一名不該變");
     }
 }

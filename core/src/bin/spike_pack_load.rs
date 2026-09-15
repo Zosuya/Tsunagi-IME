@@ -41,7 +41,7 @@ fn main() {
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
     let info = ime_core::pack::index();
-    println!("載入結果：sym {} 個名字", info.sym.len());
+    println!("載入結果：sym {} 個名字", info.sym_len());
     println!(
         "載入耗時：中位 {:.2} ms  最快 {:.2} ms  最慢 {:.2} ms",
         times[5], times[0], times[9]

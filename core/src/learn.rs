@@ -40,7 +40,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
 /// 次數到幾算「學會」。
@@ -62,6 +62,108 @@ pub const LEARNED: u32 = 2;
 /// 上百倍），罕見字選三四次會贏（8³=512、8⁴=4096）。
 /// 見開發文件 §2.22.5.1、§2.22.6.2。
 pub const GROWTH: u64 = 8;
+
+/// 學習曲線的**形狀**——`GROWTH` 管爬升速度，這個管**後段收不收斂**。
+///
+/// §2.72 的病灶不在底數：`Exp { cap: 10 }` 的天花板是 `8^10 ≈ 10.7 億`，
+/// 而字頻差距最大也才幾百倍——**封頂遠在所有競爭之外，等於沒有封頂**。
+/// 選到第四次就壓過任何統計，之後每再選一次只是把「反悔」推得更貴，
+/// 症狀就是使用者回報的「學會之後再也翻不回來」。
+///
+/// 三個候選形狀都放在這裡，用 `bench_learn --revert` 量反悔成本。
+/// **預設維持現況**（`DEFAULT_CURVE`），換形狀要使用者裁決（§2.72.5）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Curve {
+    /// 現況：`base · k^min(N, cap)`。`cap` 壓小就是「壓低封頂」那個方向。
+    Exp { cap: u32 },
+    /// 飽和：`m(N) = ceil · k^N / (k^N + ceil − 1)`。
+    ///
+    /// 前段幾乎等於 `k^N`（`k^N ≪ ceil` 時分母約等於 `ceil`），後段平滑
+    /// 趨近 `ceil`——**沒有 `Exp` 那個封頂懸崖**，形狀是要的 S 形。
+    Saturate { ceil: u64 },
+    /// 相對競爭：天花板綁在**同鍵最強的別人**身上，永遠只贏一個身位。
+    ///
+    /// `permille` 是身位寬度（1050 = 只贏 5%）。最貼近「贏但不霸道」，
+    /// 代價是查詢要先知道競爭者的分數，熱路徑成本要量（§2.57.8）。
+    Rival { permille: u64 },
+}
+
+/// 現況的形狀。**改這個等於改所有使用者的手感**，要裁決過才動。
+pub const DEFAULT_CURVE: Curve = Curve::Exp { cap: 10 };
+
+/// 目前選的形狀，編碼成 `(kind, param)`。**只有計分器會改**。
+static CURVE_KIND: AtomicU8 = AtomicU8::new(0);
+static CURVE_PARAM: AtomicU64 = AtomicU64::new(10);
+
+/// **選字的記法：加減分**——選了誰，同一串鍵的其他候選各扣 1。
+///
+/// # 為什麼不是只加分（2026-09-10，§2.72）
+///
+/// 只加不減的話，被冷落的那個永遠掛在 `k^N` 的高處：使用者改選別的字
+/// 幾十次，舊的還是壓在上面。這就是「學會之後再也翻不回來」的成因
+/// ——**病在記法，不在曲線形狀**。
+///
+/// `bench_learn --revert` 量的（325 組同音字對，反悔要選幾次）：
+///
+/// | 記法 | 教 3 次 | 教 12 次 | 教 30 次 | 卡死 |
+/// |---|---|---|---|---|
+/// | 只加分 | 2.7 | 10.6 | 10.6 | 15 組 |
+/// | 加減分 | 1.7 | 5.9 | 10.1 | 0 |
+/// | **加減分＋次數封頂** | **1.7** | **1.9** | **1.9** | **0** |
+///
+/// 學會成本（1.4 次）與學不會的組數（24）三種記法完全一樣——
+/// **反悔變便宜沒有付任何代價**。
+static DEMOTE: AtomicBool = AtomicBool::new(true);
+
+/// 次數自己的上限。
+///
+/// 曲線封頂只擋「權重能長多高」，擋不住次數繼續累積——選過 30 次的字
+/// 要一次一次扣回來，反悔就得選 27 次（上表中間那列 30 次那欄的 10.1）。
+/// 次數在記的時候就封住，對手最多欠這麼多級。
+///
+/// **4 是量出來的**：反悔穩定在 1.9 次、最壞 3 次，正好是 §2.72.4 說的
+/// 「跟第一次學會對稱」。比 `LEARNED`（2）高兩級，學會與沒學會之間還
+/// 留得下層次。
+static CEILING: AtomicU32 = AtomicU32::new(4);
+
+/// 目前的記法：`(要不要扣分, 次數上限)`。
+pub fn demote() -> (bool, u32) {
+    (
+        DEMOTE.load(Ordering::Relaxed),
+        CEILING.load(Ordering::Relaxed),
+    )
+}
+
+/// 換記法。**只有 `bench_learn` 會叫它**——量三種記法要就地切換。
+pub fn set_demote(on: bool, ceiling: u32) {
+    DEMOTE.store(on, Ordering::Relaxed);
+    CEILING.store(ceiling, Ordering::Relaxed);
+}
+
+/// 目前的學習曲線。
+pub fn curve() -> Curve {
+    let p = CURVE_PARAM.load(Ordering::Relaxed);
+    match CURVE_KIND.load(Ordering::Relaxed) {
+        1 => Curve::Saturate { ceil: p.max(2) },
+        2 => Curve::Rival {
+            permille: p.max(1000),
+        },
+        _ => Curve::Exp {
+            cap: p.min(20) as u32,
+        },
+    }
+}
+
+/// 換一條曲線。**只有 `bench_learn` 會叫它**——量三個方向要就地切換。
+pub fn set_curve(c: Curve) {
+    let (k, p) = match c {
+        Curve::Exp { cap } => (0u8, cap as u64),
+        Curve::Saturate { ceil } => (1, ceil),
+        Curve::Rival { permille } => (2, permille),
+    };
+    CURVE_PARAM.store(p, Ordering::Relaxed);
+    CURVE_KIND.store(k, Ordering::Relaxed);
+}
 
 /// 記到幾個字為止。
 ///
@@ -143,6 +245,37 @@ impl Index {
         // **每次都重排**：清單很短（同一串鍵的競爭者通常一兩個），
         // 排好之後 `best` 只要看第一個
         v.sort_by(|a, b| b.count.cmp(&a.count).then(a.seq.cmp(&b.seq)));
+    }
+
+    /// 記一次，**同時把同一串鍵的其他候選各扣 1**（加減分，§2.72）。
+    ///
+    /// 純加法的毛病是「被冷落的那個永遠停在原地」——使用者改選別的字
+    /// 幾十次，舊的還是掛在 `8^N` 的高處。扣分讓差距**兩頭一起收**：
+    /// 選一次，領先者的優勢就少 2 級而不是 1 級。
+    ///
+    /// **扣到 0 為止不扣成負的**：0 就是「沒學過」，語意剛好，學習檔的
+    /// 格式（次數是無號數）也不用動。
+    /// `ceiling` 是**次數自己的上限**（0 ＝不封）。
+    ///
+    /// 曲線封頂只擋「權重能長多高」，擋不住次數繼續累積——選過 30 次的
+    /// 字要一次一次扣回來，反悔就得選 27 次。次數在記的時候就封住，
+    /// 對手最多欠 `ceiling` 級，扣也只要扣那麼多次。
+    fn bump_demoting(&mut self, keys: &str, text: &str, ceiling: u32) {
+        if let Some(v) = self.map.get_mut(keys) {
+            for e in v.iter_mut() {
+                if e.text != text {
+                    e.count = e.count.saturating_sub(1);
+                }
+            }
+        }
+        self.bump(keys, text);
+        if ceiling > 0 {
+            if let Some(v) = self.map.get_mut(keys) {
+                for e in v.iter_mut() {
+                    e.count = e.count.min(ceiling);
+                }
+            }
+        }
     }
 
     /// 超過上限就淘汰。**只丟從沒重複過的候選**（次數 1），
@@ -327,6 +460,22 @@ fn read_index(data_dir: Option<&Path>) -> Index {
     for v in idx.map.values_mut() {
         v.sort_by(|a, b| b.count.cmp(&a.count).then(a.seq.cmp(&b.seq)));
     }
+    // **舊檔的次數也要收進上限**（§2.72，2026-09-10）。
+    //
+    // 不收的話，加減分對已經存在的學習檔沒有用——使用者手上那些累積到
+    // 幾十次的條目還是要一次一次扣回來，而那正是他回報的症狀。
+    //
+    // **只降不升，而且保住原本的名次**：清單已經依次數排好，第 i 名的
+    // 上限是 `上限 − i`，所以 `[30, 12, 1]` 收成 `[4, 3, 1]`——誰在前面
+    // 不會變，本來就沒學會的（1）也不會被抬成學會的。
+    let (減分, 上限) = demote();
+    if 減分 && 上限 > 0 {
+        for v in idx.map.values_mut() {
+            for (i, e) in v.iter_mut().enumerate() {
+                e.count = e.count.min(上限.saturating_sub(i as u32).max(1));
+            }
+        }
+    }
     idx
 }
 
@@ -379,6 +528,18 @@ pub fn record(slots: &[crate::compose::Slot]) -> usize {
     if !slots.iter().any(|s| s.picked) {
         return 0;
     }
+    // **隱私守門**（§2.81）：整句看起來像機敏資料就整句不記。
+    //
+    // 看的是**送出的文字**不是按鍵——注音的按鍵串是 QWERTY 亂碼，
+    // 拿規則去套會把正常的中文整片吃掉（`privacy` 的長註解）。
+    //
+    // **整句一起判斷**：`0912345678` 會被切成好幾格（數字鍵是注音鍵，
+    // 中間那幾位常被判成注音），逐格看的話每一格都太短、每一條都放行。
+    let whole: String = slots.iter().map(|s| s.text.as_str()).collect();
+    if privacy::is_sensitive(&whole) {
+        privacy::note_skipped();
+        return 0;
+    }
     let cur = index();
     let mut idx = Index {
         map: cur.map.clone(),
@@ -421,6 +582,20 @@ pub fn record(slots: &[crate::compose::Slot]) -> usize {
     n
 }
 
+/// 依目前的記法記一條。**選字的四個記錄點共用**——記法只寫一次，
+/// 不然改記法要改四個地方，漏一個不會有編譯錯誤也不會有測試失敗。
+///
+/// **切詞與語言學習不走這裡**（它們仍然只加分）：那兩類的門檻是
+/// `LEARNED_CUT`，各自用 `bench_cut_learn` 量過，跟選字是兩把尺。
+fn 記一格(idx: &mut Index, keys: &str, text: &str) {
+    let (減分, 上限) = demote();
+    if 減分 {
+        idx.bump_demoting(keys, text, 上限);
+    } else {
+        idx.bump(keys, text);
+    }
+}
+
 /// 一個連續可選字段裡，把該記的子段都記下來。
 fn record_run(idx: &mut Index, run: &[crate::compose::Slot]) -> usize {
     if !run.iter().any(|s| s.picked) {
@@ -440,7 +615,7 @@ fn record_run(idx: &mut Index, run: &[crate::compose::Slot]) -> usize {
             && !sl.keys.is_empty()
             && !sl.text.is_empty()
         {
-            idx.bump(&sl.keys, &sl.text);
+            記一格(idx, &sl.keys, &sl.text);
             n += 1;
         }
         if sl.lang == crate::language::Language::Romaji {
@@ -448,7 +623,7 @@ fn record_run(idx: &mut Index, run: &[crate::compose::Slot]) -> usize {
             // 是假名（`compose` 先轉過），鍵不一致就永遠查不到。
             if let Some(kana) = crate::romaji::kana::to_kana(&sl.keys) {
                 if !kana.is_empty() && !sl.text.is_empty() {
-                    idx.bump(&kana, &sl.text);
+                    記一格(idx, &kana, &sl.text);
                     n += 1;
                 }
             }
@@ -462,7 +637,7 @@ fn record_run(idx: &mut Index, run: &[crate::compose::Slot]) -> usize {
             && !sl.keys.is_empty()
             && !sl.text.is_empty()
         {
-            idx.bump(&sl.keys, &sl.text);
+            記一格(idx, &sl.keys, &sl.text);
             n += 1;
         }
     }
@@ -473,7 +648,7 @@ fn record_run(idx: &mut Index, run: &[crate::compose::Slot]) -> usize {
         if keys.is_empty() || text.is_empty() {
             return;
         }
-        idx.bump(&keys, &text);
+        記一格(idx, &keys, &text);
         n += 1;
     };
 
@@ -510,6 +685,233 @@ fn record_run(idx: &mut Index, run: &[crate::compose::Slot]) -> usize {
 // 中文字永遠不會跟真的按鍵串撞。
 
 use crate::language::Language;
+
+/// 隱私守門：**這串文字看起來像機敏資料嗎？**
+///
+/// 見開發文件 §2.81。判準只看**內容長什麼樣**，不看欄位語意——
+/// 原案的「`IS_PRIVATE` 的欄位不學」不能用，Chromium 把網址列以外
+/// 的欄位全標成它，照做等於在瀏覽器裡全面停止學習。
+///
+/// # 誤擋的代價只是「少一個加分」
+///
+/// 查不到學習記錄的地方一律原封不動（`rank::promote_learned_cut`
+/// 查不到就 `return cands`），**不是退回更差的選擇**。所以這裡寧可
+/// 多擋一點——跟選字層那種「改掉使用者選過的字」完全不同量級。
+///
+/// # 套用對象要分辨「鍵即明文」與「鍵只是按鍵」
+///
+/// **規則不能無差別套在按鍵串上**：注音段的按鍵串是 QWERTY 亂碼
+/// （`ru/ 6wu84`），`英數混合 ≥ 8` 會把它整片吃掉，**切詞學習直接
+/// 失效，而且不會有編譯錯誤也不會有測試失敗**。所以：
+///
+/// | 記錄點 | 套用對象 |
+/// |---|---|
+/// | `record`（選字） | **文字**——注音鍵串不是明文 |
+/// | `record_cutting` | 其中的**英文段字面**——英文段的按鍵就是它的文字 |
+pub mod privacy {
+    /// 連續數字幾位就算機敏？**量出來的，不是訂出來的**。
+    ///
+    /// `spike_privacy` 拿 1421 筆測資掃門檻 3～8：
+    ///
+    /// ```text
+    /// 門檻 4   誤擋 4 句（2026年、1000円、2026 report、2026 年度 report）
+    /// 門檻 5   誤擋 0 句   ← 取這個
+    /// ```
+    ///
+    /// 4 誤擋的四句全是**年份與價格**，正是四位數最常見的無害用法。
+    /// 5 誤擋歸零，仍擋得住手機、市話、身分證、信用卡、六位驗證碼、
+    /// 生日、郵遞區號。**漏掉四位數驗證碼是刻意的**——它是一次性的，
+    /// 沒有長期價值，不值得付「每個年份都學不到」的代價。
+    const DIGIT_RUN: usize = 5;
+
+    /// 英數混合到多長算帳號？
+    ///
+    /// 實測（`spike_acct`）這條擋到的情況**比想像少**：英數帳號有
+    /// 8/10 引擎第一次就切對，使用者根本不會按 Tab，也就不會被記。
+    /// 留著是防禦深度，不是主力。
+    const ALNUM_LEN: usize = 8;
+
+    /// 最長的連續數字有幾位。
+    fn max_digit_run(s: &str) -> usize {
+        let (mut best, mut cur) = (0usize, 0usize);
+        for c in s.chars() {
+            if c.is_ascii_digit() {
+                cur += 1;
+                best = best.max(cur);
+            } else {
+                cur = 0;
+            }
+        }
+        best
+    }
+
+    /// 信用卡號的 Luhn 檢查碼對得上嗎？
+    ///
+    /// **13～19 位才算**——再短的連續數字由 `DIGIT_RUN` 那條擋，
+    /// 這裡專門認卡號，避免把長訂單編號誤判成卡號沒意義（反正兩條
+    /// 都會擋，這條存在的意義是**講得出理由**）。
+    fn looks_like_card(s: &str) -> bool {
+        let digits: Vec<u32> = s.chars().filter_map(|c| c.to_digit(10)).collect();
+        if !(13..=19).contains(&digits.len()) {
+            return false;
+        }
+        let sum: u32 = digits
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(i, d)| {
+                if i % 2 == 1 {
+                    let x = d * 2;
+                    if x > 9 {
+                        x - 9
+                    } else {
+                        x
+                    }
+                } else {
+                    *d
+                }
+            })
+            .sum();
+        sum.is_multiple_of(10)
+    }
+
+    /// 台灣身分證：一個英文字母 ＋ 1／2 ＋ 八位數字。
+    fn looks_like_twid(s: &str) -> bool {
+        let c: Vec<char> = s.chars().collect();
+        c.len() == 10
+            && c[0].is_ascii_alphabetic()
+            && (c[1] == '1' || c[1] == '2')
+            && c[2..].iter().all(char::is_ascii_digit)
+    }
+
+    /// 英數混合、夠長——帳號、token、隨機密碼那一型。
+    fn looks_like_account(s: &str) -> bool {
+        if s.chars().count() < ALNUM_LEN {
+            return false;
+        }
+        let (mut has_a, mut has_d) = (false, false);
+        for c in s.chars() {
+            if c.is_ascii_alphabetic() {
+                has_a = true;
+            } else if c.is_ascii_digit() {
+                has_d = true;
+            } else if !matches!(c, '_' | '-' | '.') {
+                // 含其他字元（含中文）就不是帳號的形狀
+                return false;
+            }
+        }
+        has_a && has_d
+    }
+
+    /// email：`@` 兩側都要有東西。
+    fn looks_like_email(s: &str) -> bool {
+        match s.split_once('@') {
+            Some((a, b)) => !a.is_empty() && b.contains('.'),
+            None => false,
+        }
+    }
+
+    /// 因隱私規則跳過了幾次。
+    ///
+    /// **core 不印 log**（`dlog!` 是平台層的，`core` 要保持平台無關），
+    /// 改成記一個數字讓平台層自己去讀——設定頁的除錯分頁想顯示
+    /// 「這次工作階段擋掉幾次」也是問這裡。
+    ///
+    /// 只算次數**不記內容**：記內容等於把守門擋下來的東西又寫到另一
+    /// 個地方，那就白擋了。
+    static SKIPPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    pub(super) fn note_skipped() {
+        SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 這次工作階段因隱私規則跳過幾次？
+    pub fn skipped() -> u32 {
+        SKIPPED.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 這串**看起來像注音按鍵**嗎？看得出來的話一律放行。
+    ///
+    /// # 為什麼需要這一道
+    ///
+    /// 切法裡的 `English` 常常只是「三個引擎都不認得」的預設值，
+    /// 一大段還沒切開的注音也會頂著這個標籤（使用者實測 2026-09-14：
+    /// `jo42841j4zp4h61j4t` 其實是「為大部分詞不超」）。裡頭的
+    /// 「五位數字」是**音節邊界黏出來的假象**——`jo4` 的尾 `4` ＋
+    /// `284` ＋ `1j4` 的頭 `1`，沒有任何一個音節含五位數字。
+    ///
+    /// # 判準：**非數字字母的密度**，不是聲調鍵的密度
+    ///
+    /// 第一版用「聲調鍵（`3467`＋空白）夠密」當判準，**漏掉了手機、
+    /// 身分證與信用卡**——那些號碼裡本來就常出現 3、4、6、7，密度
+    /// 剛好夠高。判準必須抓**號碼沒有而注音一定有**的東西。
+    ///
+    /// 注音的聲母／介音／韻母全在**字母鍵**上（`bpmf`、`ㄧㄨㄩ` 都是），
+    /// 所以真正的注音串每個音節至少有一個字母；**純號碼一個字母都沒有**，
+    /// 身分證也只有開頭一個。
+    ///
+    /// 判準：**字母佔比 ≥ 1/3，而且字母散布在整串**（不是全部擠在
+    /// 開頭）。`A123456789` 只有 1/10 且擠在最前面，`jo42841j4zp4h61j4t`
+    /// 則是 8/18 且平均分布。
+    ///
+    /// # 代價：英數帳號（`user1234abcd`）也會被豁免
+    ///
+    /// 它跟注音串的形狀真的分不開——兩者都是「字母數字交錯、字母散布
+    /// 在整串」。**這個取捨可以接受**，理由是 `spike_acct` 量過的：
+    /// 英數帳號有 **8/10 引擎第一次就切對**，使用者根本不會按 Tab，
+    /// 也就不會走到這個記錄點。真正每次都切歪的是**純數字**
+    /// （手機、身分證、卡號 0/6），而那些字母太少，不會被這道豁免。
+    ///
+    /// 換句話說：**豁免打到的是本來就不太會發生的情況**。
+    ///
+    /// 這道**只放行、不擋**：判斷錯了最多是少擋一條，不會誤擋。
+    fn looks_like_bopomofo_keys(s: &str) -> bool {
+        let cs: Vec<char> = s.chars().collect();
+        if cs.len() < 8 {
+            // 短串不必猜——真正的機敏資料都夠長
+            return false;
+        }
+        let letters = cs.iter().filter(|c| c.is_ascii_alphabetic()).count();
+        // 字母太少就不是注音（純號碼、身分證那一型）
+        if letters * 3 < cs.len() {
+            return false;
+        }
+        // **字母要散布在整串**：後半段也得有字母，不然是「字母開頭＋
+        // 一長串數字」那種（`abc12345678`）
+        let half = cs.len() / 2;
+        cs[half..].iter().any(|c| c.is_ascii_alphabetic())
+    }
+
+    /// 這串**不可以**被記進學習檔嗎？
+    ///
+    /// 空字串與純中文一律放行——後者是絕大多數的正常輸入，先短路掉。
+    pub fn is_sensitive(s: &str) -> bool {
+        let s = s.trim();
+        if s.is_empty() {
+            return false;
+        }
+        // **熱路徑短路**：完全沒有 ASCII 數字與字母就不可能命中任何一條
+        if !s.chars().any(|c| c.is_ascii_alphanumeric()) {
+            return false;
+        }
+        // email 與網址**先判**——它們有明確的結構（`@`、`://`），
+        // 跟注音按鍵串不可能混淆，不必經過下面那道豁免。
+        if looks_like_email(s) || s.contains("://") || s.starts_with("www.") {
+            return true;
+        }
+        // **看起來像注音按鍵就放行**（見上面那個函式的長註解）。
+        //
+        // 這道只豁免下面**靠形狀猜**的那幾條（連續數字、身分證、卡號、
+        // 英數混合）——注音串跟號碼在形狀上真的會撞，所以需要它。
+        if looks_like_bopomofo_keys(s) {
+            return false;
+        }
+        max_digit_run(s) >= DIGIT_RUN
+            || looks_like_twid(s)
+            || looks_like_card(s)
+            || looks_like_account(s)
+    }
+}
 
 /// 段落層級記錄的鍵前綴。
 pub const LANG_PREFIX: &str = "語:";
@@ -729,6 +1131,47 @@ fn cutting_records(
         return Vec::new();
     }
 
+    // **隱私守門**（§2.81，選項①）：整串裡只要有任一段命中，
+    // **這一次什麼都不記**——包括最後那條 `切:整串按鍵`。
+    //
+    // 為什麼是「整串一票否決」而不是逐段跳過：`切:` 的鍵是**整串按鍵**，
+    // 只擋掉個別的 `語:` 段沒有用，號碼仍然以明文躺在 `切:` 那一行裡。
+    //
+    // 判準只看**英文段**的按鍵——英文段的按鍵串就是它的字面
+    // （`0912345678` 打出來就是那串）。注音／日文段的按鍵是 QWERTY
+    // 亂碼，套規則會把正常的中文整片吃掉。
+    //
+    // # 陷阱：**「被判成英文」不等於「真的是英文」**
+    //
+    // 切法清單裡的 `English` 常常只是「三個引擎都不認得」的預設值。
+    // 使用者實測回報（2026-09-14）：
+    //
+    // ```text
+    // up jo42841j4zp4h61j4tl   →  因為大部分詞不超（完整合法的中文）
+    // 第一名切法： 英:up ｜ 英:jo42841j4zp4h61j4t ｜ ㄅ:l
+    //                    ^^^^^^^^^^^^^^^^^^^^^^ 這段被判成英文
+    // ```
+    //
+    // 那一大段其實是**還沒被切開的注音**（`jo4`＝為、`284`＝大、
+    // `1j4`＝部…），裡頭的「五位數字」`42841` 是音節邊界黏出來的假象。
+    // 拿它去套數字規則，整句合法的中文就被擋掉了——**正是 2.81.4
+    // 警告的那個陷阱，只是換了個入口進來**。
+    //
+    // 所以判準改成**跟使用者真正選的那一段走**：只有**確定是英文、
+    // 而且引擎真的認得**（`chosen` 與 `default` 不同、使用者按 Tab
+    // 指定過）的段才拿去問守門。其餘一律放行——漏掉一點的代價只是
+    // 「少擋一條」，誤擋的代價卻是整句中文學不到。
+    let suspicious = chosen.iter().zip(cur.iter()).any(|(seg, sp)| {
+        seg.lang == Language::English
+            && !sp.3
+            && !old.contains(sp) // 使用者改過的段才算數
+            && privacy::is_sensitive(&seg.keys)
+    });
+    if suspicious {
+        privacy::note_skipped();
+        return Vec::new();
+    }
+
     let mut out = Vec::new();
     for (seg, sp) in chosen.iter().zip(cur.iter()) {
         if sp.3 || seg.keys.is_empty() {
@@ -919,6 +1362,127 @@ mod tests {
         );
     }
 
+    /// **隱私守門最危險的那條：正常的中文按鍵串不可以被擋掉。**
+    ///
+    /// 注音段的按鍵是 QWERTY 亂碼（`ru/ 6wu84`），拿「英數混合 ≥ 8」
+    /// 去套會把它整片吃掉——**切詞學習直接失效，而且不會有編譯錯誤、
+    /// 也不會有測試失敗**。這條就是那個測試（§2.81.4）。
+    #[test]
+    fn 守門不可以擋掉正常的中文按鍵串() {
+        // **從使用者真實的 learned.txt 撈的**（2026-09-14 實測回報）。
+        //
+        // 第一版守門把這幾條擋掉了——`up jo42841j4zp4h61j4tl ` 其實是
+        // 「因為大部分詞不超」，裡面那個「五位數」`42841` 是音節邊界
+        // 黏出來的假象（`jo4` 的尾 4 ＋ `284` ＋ `1j4` 的頭 1）。
+        //
+        // **教訓：測試用的按鍵串要夠長、要從真實資料來。** 原本自己
+        // 編的那幾串都太短，長度不夠就湊不出五位連續數字，測不到。
+        for keys in [
+            "up jo42841j4zp4h61j4tl ",
+            "upjo42841j4zp4h61j4t",
+            "1o4z03196vm035j/4,up jo4ul4dk3u3wul65/3m3u061u0 ru,4",
+            ",up jo42841j4zp4h61j4tl eji4n4y4",
+            "ru/ 6wu84",
+            "cl3vu;4y94ru.4",
+            "yl30 ",
+            "su3cl3",
+            "rup wu0 ",
+            "vu;3ru04xu4",
+        ] {
+            assert!(
+                !privacy::is_sensitive(keys),
+                "{keys} 是正常的注音按鍵串，擋掉它等於切詞學習全滅"
+            );
+        }
+        // 中文文字本身更不能擋
+        for text in ["今天天氣真好", "好接上了", "第3版", "2026年", "1000円"] {
+            assert!(!privacy::is_sensitive(text), "{text} 是正常輸入");
+        }
+    }
+
+    /// 該擋的要擋住——量測見 §2.81.36。
+    #[test]
+    fn 守門擋得住機敏資料() {
+        for (name, s) in [
+            ("手機", "0912345678"),
+            ("市話", "0223456789"),
+            ("身分證", "A123456789"),
+            ("信用卡", "4532015112830366"),
+            ("六位驗證碼", "123456"),
+            ("生日", "19900115"),
+            ("email", "someone@example.com"),
+            ("網址", "https://example.com"),
+        ] {
+            assert!(privacy::is_sensitive(s), "{name}（{s}）應該被擋下來");
+        }
+    }
+
+    /// **英數帳號分不出來，這是已知且接受的取捨。**
+    ///
+    /// `user1234abcd` 跟注音按鍵串的形狀一模一樣（字母數字交錯、字母
+    /// 散布整串），要擋它就會連「因為大部分詞不超」一起擋掉。
+    ///
+    /// 可以接受的理由（`spike_acct` 量的）：英數帳號 **8/10 引擎第一次
+    /// 就切對**，使用者不會按 Tab，本來就走不到這個記錄點。真正每次都
+    /// 切歪的純數字（0/6）字母太少，不會被豁免。
+    ///
+    /// **這條測試記錄現狀，不是期望**——哪天有辦法分開了，改掉它。
+    #[test]
+    fn 英數帳號分不出來是已知取捨() {
+        assert!(
+            !privacy::is_sensitive("user1234abcd"),
+            "現狀：跟注音串分不開所以放行。改動守門時如果這條變綠，\
+             要確認 `守門不可以擋掉正常的中文按鍵串` 還是綠的"
+        );
+        // 但**純數字的帳號還是擋得住**——字母太少，不會被豁免
+        assert!(privacy::is_sensitive("user12345678"));
+    }
+
+    /// 門檻是 **5** 不是 4——4 會把年份與價格擋掉（§2.81.36 量的）。
+    #[test]
+    fn 數字門檻是五位() {
+        assert!(!privacy::is_sensitive("2026"), "四位數是年份，不能擋");
+        assert!(!privacy::is_sensitive("1000"), "四位數是價格，不能擋");
+        assert!(privacy::is_sensitive("12345"), "五位就擋");
+    }
+
+    /// **切詞守門是整串一票否決**（選項①）。
+    ///
+    /// 只擋個別 `語:` 段沒有用——`切:` 的鍵是整串按鍵，號碼仍然
+    /// 以明文躺在那一行裡。
+    #[test]
+    fn 切詞命中隱私就整串不記() {
+        let default = [
+            seg("091234", Language::English),
+            seg("56", Language::Bopomofo),
+        ];
+        let chosen = [seg("0912345678", Language::English)];
+        let rows = cutting_records("0912345678", &chosen, &default);
+        assert!(
+            rows.is_empty(),
+            "含手機號碼的切法一條都不該記（含 切: 那條），實際記了 {rows:?}"
+        );
+    }
+
+    /// 但**正常的混語言切法照記**——守門只看英文段，不碰注音段。
+    #[test]
+    fn 切詞守門不影響正常的句子() {
+        let default = [
+            seg("foote", Language::Romaji),
+            seg("ru3", Language::Bopomofo),
+        ];
+        let chosen = [
+            seg("footer", Language::English),
+            seg("u3", Language::Bopomofo),
+        ];
+        let rows = cutting_records("footeru3", &chosen, &default);
+        assert!(!rows.is_empty(), "正常的句子要照記");
+        assert!(
+            rows.contains(&("切:footeru3".into(), "6".into())),
+            "{rows:?}"
+        );
+    }
+
     /// 一樣的段落沒有新資訊，記了只是佔額度。
     #[test]
     fn 切詞不記沒變的段落() {
@@ -1015,6 +1579,79 @@ mod tests {
             idx.bump("k", "乙");
         }
         assert_eq!(idx.best("k"), Some("乙"), "次數多的贏");
+    }
+
+    /// **加減分**：選了誰，同一串鍵的別人就扣 1（§2.72）。
+    ///
+    /// 只加不減的話「乙」要選到超過甲的絕對次數才翻得動；扣分讓差距
+    /// **兩頭一起收**，選一次差距少 2 級。
+    #[test]
+    fn 選了誰別人就扣一分() {
+        let mut idx = Index::default();
+        for _ in 0..3 {
+            idx.bump("k", "甲");
+        }
+        assert_eq!(idx.count("k", "甲"), 3);
+        idx.bump_demoting("k", "乙", 0);
+        assert_eq!(idx.count("k", "甲"), 2, "甲被冷落，扣 1");
+        assert_eq!(idx.count("k", "乙"), 1);
+        // **扣到 0 為止，不會變負的**——0 就是「沒學過」
+        for _ in 0..5 {
+            idx.bump_demoting("k", "乙", 0);
+        }
+        assert_eq!(idx.count("k", "甲"), 0, "扣到底就停在 0");
+    }
+
+    /// **次數封頂**：對手最多欠這麼多級，反悔就只要扣這麼多次。
+    ///
+    /// 沒有封頂的話，選過 30 次的字要一次一次扣回來，反悔得選 27 次
+    /// （`bench_learn --revert` 量到 10.1）。封在 4 之後穩定在 1.9。
+    #[test]
+    fn 次數封頂讓反悔不隨次數變貴() {
+        let mut idx = Index::default();
+        for _ in 0..30 {
+            idx.bump_demoting("k", "甲", 4);
+        }
+        assert_eq!(idx.count("k", "甲"), 4, "選 30 次也只記到 4");
+        // 反悔：改選乙，四次就追平、第五次超過
+        for _ in 0..4 {
+            idx.bump_demoting("k", "乙", 4);
+        }
+        assert_eq!(idx.count("k", "甲"), 0);
+        assert_eq!(idx.best("k"), Some("乙"), "四次就翻得回來");
+    }
+
+    /// **切詞與語言學習不扣分**——它們的門檻是 `LEARNED_CUT`，
+    /// 各自用 `bench_cut_learn` 量過，跟選字是兩把尺。
+    #[test]
+    fn 切詞學習不受加減分影響() {
+        let mut idx = Index::default();
+        idx.bump("切:k", "0,2");
+        idx.bump("切:k", "0,2");
+        idx.bump("切:k", "0,3");
+        assert_eq!(idx.count("切:k", "0,2"), 2, "記另一種切法不會扣掉舊的");
+    }
+
+    /// 舊學習檔的次數要收進上限，**但不能動到名次**。
+    #[test]
+    fn 舊檔的次數收進上限但名次不變() {
+        let mut idx = Index::default();
+        // 模擬讀進來的舊檔：同一串鍵三個條目，次數天差地遠
+        for (t, n) in [("甲", 30u32), ("乙", 12), ("丙", 1)] {
+            idx.map.entry("k".into()).or_default().push(Entry {
+                text: t.into(),
+                count: n,
+                seq: idx.next_seq,
+            });
+            idx.next_seq += 1;
+        }
+        let v = idx.map.get_mut("k").unwrap();
+        for (i, e) in v.iter_mut().enumerate() {
+            e.count = e.count.min(4u32.saturating_sub(i as u32).max(1));
+        }
+        assert_eq!(idx.count("k", "甲"), 4);
+        assert_eq!(idx.count("k", "乙"), 3, "名次要保住，不能全部壓成 4");
+        assert_eq!(idx.count("k", "丙"), 1, "本來沒學會的不能被抬成學會的");
     }
 
     /// 淘汰只丟候選，學會的留著。

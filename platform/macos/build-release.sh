@@ -95,7 +95,8 @@ for f in "${NEEDED[@]}"; do
 	mkdir -p "$APP/Contents/Resources/data/$(dirname "$rel")"
 	cp "$src" "$APP/Contents/Resources/data/$rel"
 done
-# 內建的領域包（符號、emoji）。**台語不在這裡**——它是選裝的，見下面。
+# 內建的領域包（符號、emoji）。**只有這兩個**：CC0、加起來不到 300KB，
+# 而且 `\星\` 得開箱即用。台語那類語言包走另一條路（見下面）。
 mkdir -p "$APP/Contents/Resources/packs"
 cp "$ROOT/packs/內建"*.txt "$APP/Contents/Resources/packs/" 2>/dev/null || true
 echo "    詞庫 $(du -sh "$APP/Contents/Resources/data" | cut -f1)"
@@ -144,31 +145,24 @@ exit 0
 POST
 chmod +x "$OUT/scripts/postinstall"
 
-# ── 台語詞庫：獨立的元件，使用者可以選裝 ──
+# ── 台語那類語言包不在安裝包裡（2026-09-11 拿掉） ──
 #
-# **為什麼不跟內建包一起塞進去**：
+# 原本做成可選裝的元件，那個元件是**在簽章之後**把檔案塞進
+# `Tsunagi.app/Contents/Resources/packs/`。實測：
 #
-# 1. 它很大（9 萬多筆），而且大多數人用不到
-# 2. **授權不同**——包檔頭那幾行是 CC BY-SA 4.0 的姓名標示與相同方式分享，
-#    是授權的一部分不是說明文字（見 `tools/取台語資料.md`）。做成可以明確
-#    勾選的元件，使用者才知道自己裝了什麼
-# 3. Windows 的安裝程式也做成選項，兩邊語意要一致
+#     原樣驗簽                → 過
+#     事後塞一個包進去再驗    → a sealed resource is missing or invalid
 #
-# **資料不進版控**，所以這裡是「有就做成選項、沒有就跳過」。要產包看
-# `tools/取台語資料.md`（那兩步在 Mac 上照樣跑得動）。
-TAIGI_SRC="$ROOT/packs/台語.txt"
-HAS_TAIGI=0
-if [ -f "$TAIGI_SRC" ]; then
-	HAS_TAIGI=1
-	TAIGI_ROOT="$OUT/root-taigi"
-	TAIGI_PACKS="$TAIGI_ROOT/Library/Input Methods/Tsunagi.app/Contents/Resources/packs"
-	mkdir -p "$TAIGI_PACKS"
-	cp "$TAIGI_SRC" "$TAIGI_PACKS/"
-	echo "==> 台語詞庫：做成選裝元件（$(du -h "$TAIGI_SRC" | cut -f1)）"
-else
-	echo "==> 沒有 packs/台語.txt，安裝包不會有台語選項"
-	echo "    要有的話看 tools/取台語資料.md（資料不進版控）"
-fi
+# `Contents/Resources` 是被簽章封存的，多一個檔案就破封。現在全是 ad-hoc
+# 簽章，執行時只核主執行檔所以看不出來——**等拿到 Developer ID 並公證
+# 之後就會炸**，而且只炸在「有勾台語」的人身上，兩種簽章狀態最難查。
+#
+# 改成走擴充包本來就該走的路（開發文件 §2.49）：使用者從 repo 下載
+# `台語.txt` 丟進擴充包資料夾、設定頁按重新整理。設定頁的資料夾那一行
+# 已經有「建立」「開啟資料夾」「重新整理」，不必寫任何程式。
+#
+# 順帶解掉的兩件：CC BY-SA 4.0 的資料不再跟 GPL-3 的安裝包綁在一起，
+# 詞表更新也不必跟著發一版程式。
 
 # ★ 一定要關掉 bundle relocation ★
 #
@@ -206,21 +200,6 @@ pkgbuild \
 	--scripts "$OUT/scripts" \
 	--install-location "/" \
 	"$COMPONENT" >/dev/null
-
-TAIGI_ID="$BUNDLE_ID.taigi"
-if [ "$HAS_TAIGI" = 1 ]; then
-	# 這個元件只放一個檔進既有的 bundle 裡，**不要再宣告一次 bundle**
-	# ——`--component-plist` 給空陣列，免得兩個元件都說自己擁有那個 app。
-	printf '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><array/></plist>' \
-		> "$OUT/taigi-component.plist"
-	pkgbuild \
-		--root "$TAIGI_ROOT" \
-		--component-plist "$OUT/taigi-component.plist" \
-		--identifier "$TAIGI_ID" \
-		--version "$VERSION" \
-		--install-location "/" \
-		"$OUT/taigi.pkg" >/dev/null
-fi
 
 # ★ 再包一層 product archive，宣告「只能裝在使用者家目錄」★
 #
@@ -293,44 +272,24 @@ cat > "$OUT/resources/conclusion.html" <<'HTML'
 HTML
 
 echo "==> 宣告安裝範圍（只供我使用）"
-# 有台語包時多一個可勾選的元件，`customize="always"` 才會出現選擇畫面。
-#
-# **預設不勾**（使用者裁定）。Windows 的 Inno Setup 那邊是 `Types: full`
-# ＝預設會裝，**這裡刻意不同**：多數人用不到，而且它有自己的授權
-# （CC BY-SA 4.0），讓使用者明確地選才對。
-#
-# 沒勾的人事後要補：重跑同一個安裝程式、把台語勾起來即可——pkg 跟 Inno
-# 一樣可重入，已裝好的部分不受影響。
+# **只有一個元件，所以沒有選擇畫面**（`customize="never"`）。語言包改成
+# 另外下載之後，這裡不再需要可勾選的元件——見上面那段。
 #
 # 主元件標成不可取消（`enabled="false"`），對應 Inno 的 `Flags: fixed`。
-if [ "$HAS_TAIGI" = 1 ]; then
-	CUSTOMIZE='always'
-	TAIGI_CHOICE_LINE='        <line choice="taigi"/>'
-	TAIGI_CHOICE="    <choice id=\"taigi\" title=\"台語擴充包\" description=\"用注音打華語詞、候選出台語漢字（台文華文線頂辭典，CC BY-SA 4.0）。鎖定注音時按 TAB 的段選單會多出台語說法。\" start_selected=\"false\">
-        <pkg-ref id=\"$TAIGI_ID\"/>
-    </choice>
-    <pkg-ref id=\"$TAIGI_ID\" version=\"$VERSION\">taigi.pkg</pkg-ref>"
-else
-	CUSTOMIZE='never'
-	TAIGI_CHOICE_LINE=''
-	TAIGI_CHOICE=''
-fi
 
 cat > "$OUT/distribution.xml" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
     <title>通譯-Tsunagi</title>
-    <options customize="$CUSTOMIZE" require-scripts="false"/>
+    <options customize="never" require-scripts="false"/>
     <domains enable_anywhere="false" enable_currentUserHome="true" enable_localSystem="false"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
     <choices-outline>
         <line choice="ime"/>
-$TAIGI_CHOICE_LINE
     </choices-outline>
     <choice id="ime" title="輸入法主程式" description="輸入法本體，含中文注音／日文羅馬字／英文的詞庫。" enabled="false" selected="true">
         <pkg-ref id="$BUNDLE_ID"/>
     </choice>
-$TAIGI_CHOICE
     <pkg-ref id="$BUNDLE_ID" version="$VERSION">component.pkg</pkg-ref>
 </installer-gui-script>
 XML

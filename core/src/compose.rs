@@ -393,7 +393,24 @@ pub fn compose_all(
     // 是「因月」（ㄧㄣ 的第一名是「因」、ㄩㄝˋ 是「月」），查不到符號，
     // 而畫面上早已顯示成「音樂」——症狀是「字明明對卻不會變成符號」。
     // 它只碰連續的注音格，跟下面兩個合併的對象不重疊，提前是安全的。
+    // 包裡的長輸出（`ㄨㄛˇㄑㄧㄥˇ` → 我請你喝一杯）先併成一格。
+    //
+    // **排在詞層之前**：包是使用者的明確表態，優先權高於詞庫統計，
+    // 讓詞層先填字再拆掉重來沒有意義。合併後那格 `selectable: false`，
+    // 後面每一關都只看 `selectable` 的注音格，不會再碰它。
+    merge_pack_long(&mut out);
     let by_word = apply_word_context(&mut out);
+    // 打錯的音用詞庫當證據反推回來（`ㄐㄧㄥㄊㄧㄢ` → 今天）。
+    //
+    // **排在詞層之後**：它的觸發條件就是「詞層查不到詞」，要等詞層先
+    // 跑過才知道哪裡沒被修好。原鍵串查得到詞就完全不觸發，成本只在
+    // miss 時付。見 `apply_fuzzy_tone` 與開發文件 §2.81。
+    apply_fuzzy_tone(&mut out);
+    // **貪心搶字的補救**：詞層由左往右、命中就跳，左邊的詞會把右邊的
+    // 字搶走（`想建立` → `想見`＋落單的「立」）。這一步在尾端重切一次，
+    // 但**只在剛收完一個字時、只碰離尾端幾格、只在切得更完整時**才動
+    // ——三道閘門的理由見 `recut_tail`。
+    recut_tail(&mut out);
     // 再用中文字級 bigram 看前後文重算一次。**一定要排在
     // `apply_word_context` 之後**——詞層是強證據（查得到的詞就是詞），
     // 語言模型是統計傾向，讓統計覆蓋詞層會把 `這個`、`需求` 這種本來
@@ -502,6 +519,91 @@ fn merge_symbols(slots: &mut Vec<Slot>) {
             }],
         );
         i += 1;
+    }
+}
+
+/// 把擴充包裡的**長輸出**條目合併成一格（`ㄨㄛˇㄑㄧㄥˇ` → 我請你喝一杯）。
+///
+/// # 為什麼要獨立一條路，不能併進詞層
+///
+/// 詞層（`apply_word_context`）是**逐格填字**的——`slots[i+k].text = c`，
+/// 一格一個字。字數跟音節數對不上就填不回去，這是物理限制不是規定。
+/// 所以長輸出只能**多格併一格**，跟 `merge_symbols` 同一個模式。
+///
+/// 以前這種條目在 `pack::build_index` 整條丟掉，於是包裡寫了也沒作用
+/// （死資料）。放寬之後它們進 `Index::zh_long` 走這裡。
+///
+/// # 為什麼排在詞層之前
+///
+/// 包是使用者的**明確表態**（「這串按鍵我就是要這個東西」），跟
+/// `Slot::picked` 同一條原則，優先權高於詞庫統計。排在後面的話詞層
+/// 已經把那幾格填成別的字，還要再拆掉重來。
+///
+/// 同理它也擋在 `apply_fuzzy_tone`／`apply_lm` 前面——合併後的那格
+/// `selectable: false`，後面每一關都只看 `selectable` 的注音格，自然
+/// 不會再碰它。
+///
+/// # 最長優先
+///
+/// 跟詞層一樣從最長的連續注音段開始試。`ㄨㄛˇㄑㄧㄥˇ` 與
+/// `ㄨㄛˇ` 都在包裡時，打完兩個音節該出長的那個。
+///
+/// # 為什麼要 `cands`
+///
+/// 合併之後這一格的 `keys` 是整串按鍵，原本逐格的注音沒了。使用者
+/// 想退回原樣得有退路——候選裡放「長輸出」與「字面原樣」兩個，跟
+/// `merge_symbols` 把 `literal` 放最後是同一個道理。
+fn merge_pack_long(slots: &mut Vec<Slot>) {
+    // **沒設定長輸出的人一次都不掃**——這是每次組字都會走到的路。
+    if !crate::pack::any_zh_long() {
+        return;
+    }
+    let mut i = 0;
+    while i < slots.len() {
+        if !slots[i].selectable || slots[i].lang != Language::Bopomofo {
+            i += 1;
+            continue;
+        }
+        // 這一段連續的注音格到哪裡為止
+        let mut end = i;
+        while end < slots.len() && slots[end].selectable && slots[end].lang == Language::Bopomofo {
+            end += 1;
+        }
+        let mut matched = false;
+        // 從最長的試起
+        for stop in (i + 1..=end).rev() {
+            let keys: String = slots[i..stop].iter().map(|s| s.keys.as_str()).collect();
+            let Some(long) = crate::pack::zh_long(&keys) else {
+                continue;
+            };
+            // **使用者手動選過的字不覆蓋**——他已經表態了，跟詞層同一條原則
+            if slots[i..stop].iter().any(|s| s.picked) {
+                continue;
+            }
+            let literal: String = slots[i..stop].iter().map(|s| s.text.as_str()).collect();
+            let cands = vec![long.clone(), literal];
+            slots.splice(
+                i..stop,
+                [Slot {
+                    keys,
+                    text: long,
+                    lang: Language::Bopomofo,
+                    // **不可選字**：這一格的內容是整串文字，不是一個字的
+                    // 同音字。選字層一格一個字，給它選字會拿到不知所云的
+                    // 候選——`cands` 已經備好「長輸出／原樣」兩條退路。
+                    selectable: false,
+                    is_mark: false,
+                    cands: Some(cands),
+                    picked: false,
+                }],
+            );
+            i += 1;
+            matched = true;
+            break;
+        }
+        if !matched {
+            i = end.max(i + 1);
+        }
     }
 }
 
@@ -677,6 +779,375 @@ fn lm_pick_word<'a>(
     best.map(|(w, _)| w)
 }
 
+/// **重切碰幾段**：只重切最後這麼多段連續中文。
+///
+/// 掃全部段落會讓改寫硬指標從 1 衝到 41——早就捲遠的段落被翻案。
+/// 只做最後一段又漏掉「中間夾了空白」的句子（「我想要建立一套 標準」
+/// 的空格把它切成兩段，壞掉的字在前一段）。
+///
+/// 2 是實測的平衡點：使用者正在打的那個意群通常跨得過一個空白。
+const RECUT_SPANS: usize = 2;
+
+/// 單字邊的代價：把詞拆成單字要付出的分數。
+///
+/// 不付代價的話拆開反而總分高（`下午`→`下五`、`伺服器`→`四氟氣`）
+/// ——中文的詞是有邊界的實體，把詞拆開該付代價。§2.60.2 實測到的，
+/// 這一輪掃過 2～12 完全不敏感，取中間值。
+const RECUT_SINGLE_COST: f32 = 6.0;
+
+/// 詞頻名次的權重。
+///
+/// **這是個窄峰**：掃過 0.5～8，3.0 是唯一的 +2，兩側都掉
+/// （1.0 → −1、5.0 → −3）。所以它不是可以隨手調的旋鈕，
+/// **改它之前先跑漏斗**。
+const RECUT_W_RANK: f32 = 3.0;
+
+/// 擴充包裡的詞在重切時加多少分。
+///
+/// **大到一定贏**：包是使用者的明確表態，不該被 bigram 推翻
+/// （理由見 `pack::zh_word`）。bigram 的分數是對數機率，單項大約在
+/// −1 到 −20 之間，一個詞最多幾對，所以 1000 綽綽有餘——
+/// 不必精算，只要「無論如何都壓過統計」。
+const PACK_BONUS: f32 = 1000.0;
+
+// **「只在剛收完一個字時才重切」那道閘門拿掉了。**
+//
+// 原本的設計（§2.74.4）是用「最後一格是不是成字的中文格」判斷使用者
+// 打完了沒，只在那一刻重算。判準本身很準（88.3%），但**接進產品碼之後
+// 反而製造擺盪**：多打一個還沒成字的按鍵時重切整個不跑，畫面就掉回
+// 貪心的結果，下一鍵成字又跑一次——`在`↔`載` 每一鍵來回，一句貢獻
+// 20 次遠處改寫。
+//
+// **擺盪的來源是「跑／不跑」交替，不是重算本身。** 改成一律跑之後
+// 改寫從 26 降到 5。反直覺但合理：穩定的規則比聰明的規則重要。
+//
+// 防止前文跳動因此完全交給 `more_complete`（切得更完整才套用）與
+// `RECUT_SPANS`（只碰最後兩段）。
+
+/// 這一段被切成哪些詞？**貪心版**，用來當重切的比較基準。
+///
+/// 規則跟 `apply_word_context` 一樣：由左往右、最長先、命中就跳。
+/// 只回傳「切成哪些詞」，不動 slots。
+fn greedy_words(slots: &[Slot], lo: usize, hi: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = lo;
+    while i < hi {
+        let mut matched = false;
+        for stop in ((i + 2)..=hi).rev() {
+            let keys: String = slots[i..stop].iter().map(|s| s.keys.as_str()).collect();
+            if let Some(w) = crate::dict::words_for(&keys)
+                .into_iter()
+                .find(|w| w.chars().count() == stop - i)
+            {
+                out.push(w.to_string());
+                i = stop;
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            out.push(slots[i].text.clone());
+            i += 1;
+        }
+    }
+    out
+}
+
+/// 落單的單字有幾個、最長的詞幾個字。
+fn word_shape(words: &[String]) -> (usize, usize) {
+    let mut singles = 0usize;
+    let mut longest = 0usize;
+    for w in words {
+        let n = w.chars().count();
+        if n == 1 {
+            singles += 1;
+        }
+        longest = longest.max(n);
+    }
+    (singles, longest)
+}
+
+/// **詞完整性閘門**：重切的結果比原本更完整嗎？
+///
+/// 使用者提的判準（§2.74.5）：判斷到打完了要重算時，也要檢查詞的
+/// 完整性才可以做修正。兩邊都是詞的時候（`適合` vs `是合`）純粹是
+/// 分數在打架，那種來回跳沒有收益、只有視覺干擾。
+///
+/// # 第一版判準寫錯了，記在這裡
+///
+/// 第一版比「落單字數」與「最長詞長度」，結果**把目標案例也擋掉**：
+///
+/// | 切法 | 形狀 |
+/// |---|---|
+/// | `想見`＋`立` | 一個雙字詞＋一個落單字 |
+/// | `想`＋`建立` | 一個雙字詞＋一個落單字 |
+///
+/// **形狀完全一樣。** 差別在**哪一個字落單**——「想」單獨成詞很常見，
+/// 「立」單獨出現在句尾很罕見。所以形狀分不出高下時，改比**落單字的
+/// 字頻總和**：越高代表那種切法越自然。
+///
+/// 字頻直接問 `lm`——它建構時就收下了 `char_freq.txt`（當關聯強度的
+/// 分母與台灣用字先驗），**不必再載第二份**。
+fn more_complete(new: &[String], old: &[String]) -> bool {
+    let (ns, nl) = word_shape(new);
+    let (os, ol) = word_shape(old);
+    // **不准把長詞拆短**。
+    //
+    // 少一個落單字不等於更好：`寄出去`＋`了`（落單 1、最長 3）被換成
+    // `祭出`＋`去了`（落單 0、最長 2），落單數確實少了一個，但
+    // 「祭出去了」是錯的。**長詞是強證據**——詞典收了「寄出去」這個
+    // 三字詞，把它拆成兩個雙字詞需要比「落單少一個」更強的理由。
+    if nl < ol {
+        return false;
+    }
+    if ns < os || nl > ol {
+        return true;
+    }
+    if ns != os {
+        return false;
+    }
+    // **形狀一樣 → 比整句讀起來通不通順**（bigram 總分）。
+    //
+    // 這裡原本比「落單字的字頻總和」，用錯地方了：那個判準是為
+    // 「同一個位置該讓誰落單」設計的，但兩種切法的落單字**根本不是
+    // 同一批**，比總和沒有意義。實測擋掉了正解——
+    //
+    // ```text
+    // 請勿｜必｜再騎｜現｜內｜完成   落單 必現內 = 23.57  ← 贏
+    // 請｜務必｜再｜期限｜內｜完成   落單 請再內 = 21.72
+    // ```
+    //
+    // 貪心的落單字剛好都是高頻字，於是「請勿必再騎現內完成」勝出。
+    //
+    // 改比**整條路的 bigram 總分**：同一句話的每一對相鄰字都算進去，
+    // 衡量的是「這樣讀通不通」而不是「誰落單比較常見」。同一例
+    // 43.66 對 34.27，差距很清楚。
+    let Some(lm) = crate::lm::get() else {
+        return false;
+    };
+    let path = |ws: &[String]| -> f32 {
+        let joined: String = ws.concat();
+        let cs: Vec<char> = joined.chars().collect();
+        cs.windows(2)
+            .map(|p| lm.score(p[0], p[1]).unwrap_or(LM_MISS))
+            .sum()
+    };
+    // **不加「要贏多少分」的門檻**：掃過 0～8 都換不到東西
+    // （0 → ⚠10、3 → ⚠11、8 → ⚠6 但漏斗掉 4 分）。
+    //
+    // 因為剩下的改寫**不是擺盪，是一次性的修正**：11 次裡有 6 次
+    // 來自「這批貨物預計明天到達」那一句，而它最終是修對的
+    // （打字中途從「慾記名天道」跳到正解，一次修好 3 個字就記 3 次）。
+    // 加門檻只會連那種修正一起擋掉。
+    path(new) > path(old)
+}
+
+/// 在一段連續注音格上用**詞格維特比**重新切詞。
+///
+/// 跟 `apply_word_context` 的貪心版差別只有一個：**整段一起解，
+/// 所以每個詞的接續分數看得到左右兩邊**。貪心是由左往右、命中就跳，
+/// 右邊還沒算到，因此左邊的詞會把右邊的字搶走——`想建立` 被切成
+/// `想見`＋`立` 就是這樣來的（§2.74.1）。
+fn lattice_words(slots: &[Slot], lo: usize, hi: usize) -> Option<Vec<String>> {
+    let lm = crate::lm::get()?;
+    let n = hi - lo;
+    // best[i] = 走到第 i 格為止的最佳總分、從哪一格接過來、最後一個詞
+    let mut best: Vec<Option<(f32, usize, String)>> = vec![None; n + 1];
+    best[0] = Some((0.0, 0, String::new()));
+
+    for end in 1..=n {
+        for start in 0..end {
+            let Some((prev_score, _, prev_word)) = best[start].clone() else {
+                continue;
+            };
+            let len = end - start;
+            let cands: Vec<String> = if len == 1 {
+                candidates_for(&slots[lo + start])
+                    .into_iter()
+                    .filter(|w| w.chars().count() == 1 && w.chars().all(is_han))
+                    .take(LM_WIDTH)
+                    .collect()
+            } else {
+                let keys: String = slots[lo + start..lo + end]
+                    .iter()
+                    .map(|s| s.keys.as_str())
+                    .collect();
+                crate::dict::words_for(&keys)
+                    .into_iter()
+                    .filter(|w| w.chars().count() == len)
+                    .map(|w| w.to_string())
+                    .collect()
+            };
+            for (rank, w) in cands.iter().enumerate() {
+                let cs: Vec<char> = w.chars().collect();
+                // **手動選過的字不可以被覆蓋**——跟 `apply_word_context`
+                // 同一條原則，使用者已經表態了
+                let fits = (start..end).all(|j| {
+                    !slots[lo + j].picked
+                        || slots[lo + j]
+                            .text
+                            .chars()
+                            .eq(std::iter::once(cs[j - start]))
+                });
+                if !fits {
+                    continue;
+                }
+                let mut s = prev_score - RECUT_W_RANK * rank as f32;
+                if len == 1 {
+                    s -= RECUT_SINGLE_COST;
+                }
+                // **擴充包的詞一定贏**——它是使用者的明確表態，
+                // 不該被 bigram 的統計推翻（理由見 `pack::zh_word`）。
+                // 生造的專有名詞在 bigram 眼裡分數極低，不給這個加分
+                // 的話包裡寫什麼都沒用（實測回報，§2.78）。
+                //
+                // **詞層跟重切兩處都要改**：只改詞層的話重切會再翻回去
+                if len > 1 {
+                    let keys: String = slots[lo + start..lo + end]
+                        .iter()
+                        .map(|s| s.keys.as_str())
+                        .collect();
+                    if crate::pack::zh_word(&keys).as_deref() == Some(w.as_str()) {
+                        s += PACK_BONUS;
+                    }
+                }
+                // 詞內部每一對相鄰的字
+                for pair in cs.windows(2) {
+                    if is_han(pair[0]) && is_han(pair[1]) {
+                        s += lm.score(pair[0], pair[1]).unwrap_or(LM_MISS);
+                    }
+                }
+                // 跟左邊那個詞的接續
+                if let (Some(l), Some(&f)) = (prev_word.chars().last(), cs.first()) {
+                    if is_han(l) && is_han(f) {
+                        s += lm.score(l, f).unwrap_or(LM_MISS);
+                    }
+                }
+                if best[end].as_ref().is_none_or(|(bs, _, _)| s > *bs) {
+                    best[end] = Some((s, start, w.clone()));
+                }
+            }
+        }
+    }
+    best[n].as_ref()?;
+    let mut out = Vec::new();
+    let mut at = n;
+    while at > 0 {
+        let (_, prev, w) = best[at].clone()?;
+        out.push(w);
+        at = prev;
+    }
+    out.reverse();
+    Some(out)
+}
+
+/// **重新切詞**：修掉貪心搶字造成的錯（`想建立`→`想見立`）。
+///
+/// # 一律跑，靠閘門擋，不靠時機也不靠視野
+///
+/// 原本設計的三道閘門有兩道**接進產品碼之後翻案**（§2.74.11），現在
+/// 剩下的是：
+///
+/// 1. **範圍：只重切最後 `RECUT_SPANS` 個連續注音段**——邊界是空白、
+///    別的語言、標點自然形成的，是**結構性**的界線而不是「離尾端幾格」
+/// 2. **套用：只在切得更完整時**（`more_complete`）——兩邊都是詞的
+///    時候純粹是分數在打架，換來換去沒有收益
+/// 3. **填回去時跳過 `picked`**（見 `recut_span`）——使用者表態過的
+///    字不覆蓋
+///
+/// 拿掉的那兩道與理由：
+///
+/// | 拿掉的 | 為什麼 |
+/// |---|---|
+/// | 只在剛收完一個字時跑（`just_settled`） | **它本身就是擺盪的來源**：不成字的按鍵不跑、畫面掉回貪心，下一鍵成字又跑，`在`↔`載` 每鍵來回。一律跑之後改寫 26 → 5 |
+/// | 只重算離尾端 N 格（`RECUT_WINDOW`） | **比對的基準不是畫面上的東西**：窗口把前文擠出去之後，窗口內的貪心本來就對，閘門判定「不需要修」，可畫面上的錯是整句貪心造成的 |
+///
+/// 教訓寫在 §2.74.11：**穩定的規則比聰明的規則重要。**
+fn recut_tail(slots: &mut [Slot]) {
+    let n = slots.len();
+    // **每一段連續的中文都要重切，不是只有尾端那一段。**
+    //
+    // 只做尾端會漏掉「中間夾了空白或別的語言」的句子：
+    // 「我想要建立一套 標準」的空格把它切成兩段，尾端那段只有
+    // 「標準」（本來就對），而壞掉的「件立」在前一段——重切完全
+    // 碰不到它。
+    //
+    // 前面的段落**已經被使用者看過**，照理不該再動——擋住它們的是
+    // 底下的 `RECUT_SPANS`（只碰最後兩段），不是什麼時機判斷。
+    // 真正防止跳動的是 `more_complete`：切得更完整才套用。
+    // **只重切最後兩段**。
+    //
+    // 掃全部段落會讓改寫硬指標從 1 衝到 41——早就打完、捲得很遠的
+    // 段落被翻案，那正是 §2.60 擋下來的東西。
+    //
+    // 但只做最後一段又不夠：「我想要建立一套 標準」的空格把它切成
+    // 兩段，尾端只有「標準」（本來就對），壞掉的「件立」在前一段。
+    // 使用者正在打的那個「意群」通常跨得過一個空白，**兩段是實測
+    // 出來的平衡點**。
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut at = 0usize;
+    while at < n {
+        if !slots[at].selectable || slots[at].lang != Language::Bopomofo {
+            at += 1;
+            continue;
+        }
+        let mut end = at;
+        while end < n && slots[end].selectable && slots[end].lang == Language::Bopomofo {
+            end += 1;
+        }
+        if end - at >= 2 {
+            spans.push((at, end));
+        }
+        at = end;
+    }
+    for &(lo, hi) in spans.iter().rev().take(RECUT_SPANS).rev() {
+        recut_span(slots, lo, hi);
+    }
+}
+
+/// 在一段連續的中文格上重新切詞。範圍是 `[lo, n)`。
+fn recut_span(slots: &mut [Slot], lo: usize, n: usize) {
+    // **整段一起重切，不設固定窗口。**
+    //
+    // 第一版限制「只看離尾端 N 格」，結果**修好的字會在下一鍵掉回去**：
+    // 打完「我想要建立」重切修對了，再打「一」變成 6 格，窗口把「我」
+    // 擠出去，重切只看得到 `想要建立一`——那一段貪心本來就是對的，
+    // 閘門判定「不需要修」，可是畫面上的「件立」是**整句**貪心
+    // （`我想`／`要件`／`立`）造成的。
+    //
+    // 病灶是**拿窗口內的貪心當基準，比對的卻不是實際顯示的東西**。
+    // 連續注音段本來就有長度上限（超過就會被別的語言或標點打斷），
+    // 而 §2.60.2 實測 lattice 的成本比想像中低（p99 8.4ms vs 8.3ms）
+    // ——每一格的候選**詞**數遠小於候選**字**數。
+    //
+    // 防止「前文跳動」靠的是 `more_complete`（切得更完整才套用）與
+    // `RECUT_SPANS`（只碰最後兩段），不是靠縮小視野——**視野縮小反而
+    // 是病因**，見 `recut_tail` 的說明表。
+    let Some(new) = lattice_words(slots, lo, n) else {
+        return;
+    };
+    let old = greedy_words(slots, lo, n);
+    if !more_complete(&new, &old) {
+        return;
+    }
+    // **整段填回去**，不是只填最後一個詞。
+    //
+    // 第一版只填最後一個詞（想防止來回跳），結果**修好的字保不住**：
+    // 打完「我想要建立」是對的，再打「一」就變回「我想要件立一」
+    // ——重切每次都從貪心的結果重算，而貪心每一鍵都會把「建立」重新
+    // 算成「件立」，只填最後一個詞就等於把修正丟掉。
+    //
+    // 來回跳要靠**閘門**擋，不是靠縮小填寫範圍：`more_complete` 已經
+    // 要求「切得更完整」，兩邊都是詞的擺盪（`紀`／`記`）本來就過不了
+    // 那一關。
+    for (i, c) in (lo..n).zip(new.iter().flat_map(|w| w.chars())) {
+        // **手動選過的字不覆蓋**——使用者已經表態了
+        if !slots[i].picked {
+            slots[i].text = c.to_string();
+        }
+    }
+}
+
 fn apply_word_context(slots: &mut [Slot]) -> Vec<(usize, usize)> {
     let n = slots.len();
     // 哪些格是詞層決定的？回報給 `apply_lm`——**詞是強證據**（查得到
@@ -720,8 +1191,15 @@ fn apply_word_context(slots: &mut [Slot]) -> Vec<(usize, usize)> {
             // 第一個——`救回來`／`就回來` 讀音相同，詞頻永遠讓前者贏。
             // 挑不出來（沒有模型、或分數相同）就退回第一個。
             let left = i.checked_sub(1).and_then(|j| slots[j].text.chars().last());
-            let chosen = lm_pick_word(&usable, left)
-                .map(|w| w.to_string())
+            // **擴充包的詞不讓語言模型挑掉**。
+            //
+            // 包是使用者的明確表態（「這串按鍵我就是要這個詞」），跟
+            // `Slot::picked` 同一條原則。而生造的專有名詞在 bigram 眼裡
+            // 分數極低，交給它挑一定輸給常見詞——包裡寫
+            // `ㄊㄧㄢㄑㄧˋ → 屇鼜`，打出來還是「天氣」（實測回報，§2.78）。
+            let from_pack = crate::pack::zh_word(&keys).filter(|w| fits(w));
+            let chosen = from_pack
+                .or_else(|| lm_pick_word(&usable, left).map(|w| w.to_string()))
                 .or_else(|| usable.first().map(|w| w.to_string()));
             if let Some(word) = chosen {
                 for (k, c) in word.chars().enumerate() {
@@ -741,6 +1219,269 @@ fn apply_word_context(slots: &mut [Slot]) -> Vec<(usize, usize)> {
         }
     }
     by_word
+}
+
+/// 注音易混音的按鍵對照（大千配置，見 `bopomofo::keymap`）。
+///
+/// 每組都是**單字元替換**，所以「換一個音」就是換掉音節裡的一個字元。
+///
+/// 為什麼只有這四組（使用者裁決 2026-09-12）：原本列了七組，砍掉
+/// `ㄢ/ㄤ`、`ㄈ/ㄏ`、`ㄋ/ㄌ`——**實際上不太有人搞混**，留著只是白白
+/// 擴大誤傷面。實測砍完誤傷從 3 筆變 0 筆（開發文件 §2.81.11）。
+/// 剩下的是「前後鼻音 ＋ 捲舌平舌」，後三組同一個成因（南部腔）。
+const FUZZY_PAIRS: [(char, char); 4] = [
+    ('p', '/'), // ㄣ / ㄥ  前後鼻音，台灣最常見
+    ('5', 'y'), // ㄓ / ㄗ  捲舌／平舌
+    ('t', 'h'), // ㄔ / ㄘ
+    ('g', 'n'), // ㄕ / ㄙ
+];
+
+/// 模糊音修正的總開關，由平台層在套用設定時呼叫 `set_fuzzy_tone`。
+///
+/// **為什麼是全域旗標而不是參數**：`compose` 是純函式，四個公開入口
+/// （`compose`／`compose_with`／`compose_with_bounds`／`compose_all`）
+/// 都不收設定——加一層參數要動到所有呼叫端。而這個開關的語意跟
+/// `learn::any()`／`pack::any()` 完全一樣：一個行程一份、設定變了才變。
+/// 沿用同一套（`AtomicBool` + relaxed 讀）比開特例誠實。
+///
+/// 預設 `true`，跟 `config::Behavior::fuzzy_tone` 的預設一致——平台層
+/// 還沒套用設定之前的行為要跟套用之後一樣，不然「設定頁沒動過卻跟
+/// 實際行為不符」。
+static FUZZY_TONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// 模糊音修正開著嗎？**熱路徑的第一道關卡**，一次 relaxed 原子讀。
+fn fuzzy_enabled() -> bool {
+    FUZZY_TONE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 套用「注音打錯音自動修正」的設定。平台層讀完設定檔之後呼叫。
+pub fn set_fuzzy_tone(on: bool) {
+    FUZZY_TONE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 打錯的音，用詞庫當證據反推回來。
+///
+/// 想打「今天」(`ru5wu0␣`) 卻打成 `ru/wu0␣`——「京天」詞庫裡沒有，
+/// 把 `ㄥ` 換回 `ㄣ` 就查得到「今天」，那就是證據。
+///
+/// # 三道閘
+///
+/// 1. **原鍵串查得到詞就完全不觸發**。成本只在 miss 時付，而「心理／
+///    行李」這種兩邊都成詞的永遠不會被動——那是對的，不觸發＝不會弄壞
+/// 2. **一次只替換一個音節**。兩個以上是組合爆炸加誤判率
+/// 3. **命中要唯一**。換第一個音節命中一個詞、換第二個又命中另一個，
+///    兩個都不採用
+///
+/// # 範圍
+///
+/// 只碰最後 `RECUT_SPANS` 個連續注音段，跟 `recut_tail` 同一個思路——
+/// **限制的是「改多遠」，不是「看多遠」**。§2.74.6 踩過：固定窗口會讓
+/// 比對的基準跟畫面不一致，修好的字在下一鍵掉回去。
+///
+/// `picked` 的格不動，跟其他所有改字的地方同一條原則。
+fn apply_fuzzy_tone(slots: &mut [Slot]) {
+    if !fuzzy_enabled() {
+        return;
+    }
+    // 連續注音段的邊界，跟 `recut_tail` 的算法一致
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < slots.len() {
+        if !slots[i].selectable || slots[i].lang != Language::Bopomofo {
+            i += 1;
+            continue;
+        }
+        let lo = i;
+        while i < slots.len() && slots[i].selectable && slots[i].lang == Language::Bopomofo {
+            i += 1;
+        }
+        if i - lo >= 2 {
+            spans.push((lo, i));
+        }
+    }
+    for &(lo, hi) in spans.iter().rev().take(RECUT_SPANS).rev() {
+        fuzzy_span(slots, lo, hi);
+    }
+}
+
+/// 在一段連續的中文格上做模糊音修正。範圍是 `[lo, hi)`。
+///
+/// # 只碰「詞層完全沒覆蓋到」的格
+///
+/// **這是這支最容易寫錯的地方，實測退步 4 句才抓出來。**
+///
+/// 直覺的寫法是「由左往右、每個位置查不到詞就做模糊展開」，但那會咬到
+/// **跨詞邊界的切片**：「跟正式」的正確詞邊界是 `跟`＋`正式`，而 2 字窗
+/// 「跟正」查不到詞、模糊展開卻撞得到「更正」——於是整句被改成
+/// 「更正賜環境」。同類的還有 `帶傘出`→`帶閃出`、`他準備`→`他種備`、
+/// `新辦公`→`興辦公`。
+///
+/// 所以要先讓**詞層**（`apply_word_context` 的貪心走法）把它能切的詞
+/// 全部吃掉，模糊展開只在**剩下的、完全沒被任何詞覆蓋的格**上做。
+/// 「跟正式」裡 `正式` 是詞、`跟` 是落單的單格，單格不做模糊展開
+/// （一個音節沒有詞可以當證據，那正是 §2.81.5 說的「救不了單字」）。
+fn fuzzy_span(slots: &mut [Slot], lo: usize, hi: usize) {
+    // 第一遍：詞層的貪心走法，標記哪些格被真正的詞覆蓋了
+    let mut covered = vec![false; hi - lo];
+    let mut i = lo;
+    while i < hi {
+        let max = 4.min(hi - i);
+        let mut ate = 0;
+        for n in (2..=max).rev() {
+            let keys: String = slots[i..i + n].iter().map(|s| s.keys.as_str()).collect();
+            if crate::dict::word_for(&keys).is_some() {
+                ate = n;
+                break;
+            }
+        }
+        if ate > 0 {
+            for k in 0..ate {
+                covered[i - lo + k] = true;
+            }
+            i += ate;
+        } else {
+            i += 1;
+        }
+    }
+    // 第二遍：在連續的「沒被覆蓋」區段上做模糊展開
+    let mut i = lo;
+    while i < hi {
+        if covered[i - lo] {
+            i += 1;
+            continue;
+        }
+        // 這一段連續的空白有多長？
+        let mut end = i;
+        while end < hi && !covered[end - lo] {
+            end += 1;
+        }
+        // 單格不做——一個音節沒有詞可以當證據（§2.81.5「救不了單字」）
+        if end - i >= 2 {
+            fuzzy_fill(slots, i, end);
+        }
+        i = end;
+    }
+}
+
+/// 在一段「詞層完全沒覆蓋到」的格上試模糊展開。範圍是 `[lo, hi)`。
+fn fuzzy_fill(slots: &mut [Slot], lo: usize, hi: usize) {
+    let mut i = lo;
+    while i < hi {
+        let max = 4.min(hi - i);
+        if max < 2 {
+            break;
+        }
+        let mut done = 0;
+        for n in (2..=max).rev() {
+            let Some(word) = fuzzy_lookup(slots, i, n) else {
+                continue;
+            };
+            let cs: Vec<char> = word.chars().collect();
+            if cs.len() != n {
+                continue;
+            }
+            // `picked` 的格不覆蓋；整組有任何一格被鎖住就整個不套用
+            if (0..n).any(|k| slots[i + k].picked) {
+                continue;
+            }
+            for (k, c) in cs.iter().enumerate() {
+                slots[i + k].text = c.to_string();
+            }
+            done = n;
+            break;
+        }
+        i += if done > 0 { done } else { 1 };
+    }
+}
+
+/// 這串按鍵**換一個易混的音**之後查得到詞嗎？
+///
+/// 給切點排序用（`rank::bopomofo_facts` 的 `covered`）。打錯音的注音段
+/// 在詞庫裡查不到，`covered` 就是 0，於是**輸給把同一串當日文的切法**
+/// ——`n;4au04`（上面，ㄕ 打成 ㄙ）被切成 `注:n;4|日:au|注:04`「喪合う案」，
+/// 因為 `au` 是合法假名而且詞典查得到。
+///
+/// 只回答「有沒有」不回傳詞：這裡在熱路徑上，而排序只需要布林。
+fn fuzzy_word_exists(keys: &str) -> bool {
+    let Some(syls) = crate::bopomofo::split_syllables(keys) else {
+        return false;
+    };
+    if syls.len() < 2 {
+        return false;
+    }
+    for (si, syl) in syls.iter().enumerate() {
+        for v in fuzzy_variants(syl) {
+            let cand: String = syls
+                .iter()
+                .enumerate()
+                .map(|(k, s)| if k == si { v.as_str() } else { s.as_str() })
+                .collect();
+            if crate::dict::is_bopomofo_word(&cand) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 給 `cutpoint::rank` 用的入口。開關關掉時直接回 `false`。
+pub fn fuzzy_is_word(keys: &str) -> bool {
+    fuzzy_enabled() && fuzzy_word_exists(keys)
+}
+
+/// 把 `[i, i+n)` 這幾格的按鍵做模糊展開，回傳**唯一**命中的詞。
+///
+/// 撞到兩個以上不同的詞就回 `None`——那時無法判斷使用者想打哪一個，
+/// 猜錯的代價比不猜高。
+fn fuzzy_lookup(slots: &[Slot], i: usize, n: usize) -> Option<String> {
+    let syls: Vec<&str> = slots[i..i + n].iter().map(|s| s.keys.as_str()).collect();
+    let mut hit: Option<String> = None;
+    for (si, syl) in syls.iter().enumerate() {
+        for v in fuzzy_variants(syl) {
+            let keys: String = syls
+                .iter()
+                .enumerate()
+                .map(|(k, s)| if k == si { v.as_str() } else { s })
+                .collect();
+            let Some(w) = crate::dict::word_for(&keys) else {
+                continue;
+            };
+            match &hit {
+                // 撞到第二個不同的詞 → 不唯一，整個放棄
+                Some(prev) if *prev != *w => return None,
+                Some(_) => {}
+                None => hit = Some(w.to_string()),
+            }
+        }
+    }
+    hit
+}
+
+/// 一個音節的所有模糊變體（只換一個字元，不含自己）。
+///
+/// 只接受換完**仍是合法音節**的——`p`→`/` 可能把合法音節變成殘缺的
+/// 東西，那種不必往下查詞庫。
+fn fuzzy_variants(syl: &str) -> Vec<String> {
+    let chars: Vec<char> = syl.chars().collect();
+    let mut out = Vec::new();
+    for (i, &c) in chars.iter().enumerate() {
+        for &(a, b) in FUZZY_PAIRS.iter() {
+            let to = if c == a {
+                b
+            } else if c == b {
+                a
+            } else {
+                continue;
+            };
+            let mut v = chars.clone();
+            v[i] = to;
+            let v: String = v.iter().collect();
+            if crate::bopomofo::validity(&v) == crate::bopomofo::syllable::Validity::Valid {
+                out.push(v);
+            }
+        }
+    }
+    out
 }
 
 /// **維特比的寬度**：每一格只考慮前幾個候選。
@@ -1342,13 +2083,42 @@ mod tests {
             .unwrap();
         crate::preload(&root.join("data"), crate::config::Engines::default());
         // 符號現在全在預載包裡（`packs/內建符號.txt`），不載就查不到。
-        // 使用者目錄指向一個不存在的路徑，測試才不會被本機的包影響。
         crate::pack::set_bundled_dir(Some(root.join("packs")));
+        // **所有測試共用同一份包索引**。
+        //
+        // `cargo test` 預設並行，而包索引是全域的——某個測試自己換掉
+        // 索引的話，別的測試會隨機看到它換的東西（CLAUDE.md §2.64.16：
+        // 「測試隨機掛、每次不同那個 → 先想並行」）。修法是**載入只做
+        // 一次**，不是把測試序列化。
+        //
+        // 使用者目錄指向 `testdata/packs`（進版控、內容釘死），
+        // 不是本機的 `%APPDATA%`——不然結果會被使用者自己的包影響。
+        let user_packs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/packs");
         crate::pack::load(
-            "__測試用_不存在的資料夾__",
-            &[crate::pack::BUNDLED_SYMBOLS.to_string()],
+            user_packs.to_str().unwrap_or(""),
+            &[
+                crate::pack::BUNDLED_SYMBOLS.to_string(),
+                // 釘住「包不被語言模型推翻」，見 `擴充包的詞不被語言模型挑掉`
+                "lm_override".to_string(),
+                // 釘住「兩個注音出一長串」，見 `包的長輸出併成一格`
+                "zh_long".to_string(),
+            ],
         );
-        crate::dict::bopomofo_loaded()
+        crate::dict::all_loaded()
+    }
+
+    /// 「會被全域旗標影響」的測試共用的序列化鎖。
+    ///
+    /// `cargo test` 預設並行，而 `set_fuzzy_tone` 動的是**全域**旗標
+    /// ——關掉的那一瞬間，別的模糊音測試剛好在跑就會看到「沒修正」，
+    /// 症狀是**隨機失敗、每次掛的不一樣**（CLAUDE.md §2.64.16 那個坑）。
+    ///
+    /// 判準是「`--test-threads=1` 跑得過就是它」。修法不是把測試全部
+    /// 序列化，只把**真的共用那個狀態**的幾條收進同一把鎖。
+    static FUZZY_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn fuzzy_guard() -> std::sync::MutexGuard<'static, ()> {
+        FUZZY_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// 取第一名切法的格子
@@ -1366,6 +2136,140 @@ mod tests {
         let slots = slots_of("su3cl3");
         assert_eq!(slots.len(), 2, "你好是兩個字：{slots:?}");
         assert!(slots.iter().all(|s| s.selectable));
+    }
+
+    /// 打錯的音用詞庫當證據反推回來（§2.81）。
+    ///
+    /// 案例都是實際跑過確認的，不是憑想像寫的——`ru/ wu0 ` 的正確鍵是
+    /// `rup wu0 `（ㄐㄧㄣ），`ㄣ` 打成 `ㄥ` 就是 `p` → `/`。
+    #[test]
+    fn 模糊音修正打錯的音() {
+        if !load() {
+            return;
+        }
+        let _g = fuzzy_guard();
+        for (typo, want) in [
+            ("ru/ wu0 ", "今天"),
+            ("vu/ jp6", "新聞"),
+            ("n/ xup6", "森林"),
+            ("e/ 1p3", "根本"),
+        ] {
+            assert_eq!(text_of(&slots_of(typo)), want, "{typo} 應該被修成{want}");
+        }
+    }
+
+    /// **原鍵串查得到詞就完全不觸發**——第一道閘，也是效能的前提。
+    ///
+    /// 兩邊都成詞的組合打哪個就該出哪個，模糊音不可以插手。
+    /// `5/ 2k7`（ㄓㄥ ㄉㄜ˙）查得到「爭得」，所以不會被修成「真的」
+    /// ——**那是對的**，不觸發＝不會弄壞。
+    #[test]
+    fn 模糊音不碰本來就查得到的詞() {
+        if !load() {
+            return;
+        }
+        let _g = fuzzy_guard();
+        // 「行李」與「心裡」讀音只差 ㄣ/ㄥ，兩邊都成詞
+        assert_eq!(text_of(&slots_of("vu/6xu3")), "行李");
+        assert_eq!(text_of(&slots_of("vup xu3")), "心裡");
+        // 「真的」與「爭得」同理
+        assert_eq!(text_of(&slots_of("5p 2k7")), "真的");
+        assert_eq!(text_of(&slots_of("5/ 2k7")), "爭得");
+    }
+
+    /// 跨詞邊界的切片不可以被改——**這條擋的是實測退步 4 句的那個 bug**。
+    ///
+    /// 「跟正式」的詞邊界是 `跟`＋`正式`，而 2 字窗「跟正」查不到詞、
+    /// 模糊展開卻撞得到「更正」，整句會變成「更正賜環境」。詞層先把
+    /// `正式` 吃掉之後，剩下的第一格是落單的單格，單格不做模糊展開。
+    ///
+    /// 第一個字是「根」不是「跟」（`ep ` 一聲的字頻第一名），那是字頻
+    /// 的事、跟模糊音無關——**這條測的是後兩個字沒被改成「更正」**。
+    #[test]
+    fn 模糊音不碰跨詞邊界的切片() {
+        if !load() {
+            return;
+        }
+        let _g = fuzzy_guard();
+        let got = text_of(&slots_of("ep 5/4g4"));
+        assert!(
+            got.ends_with("正式"),
+            "跨詞邊界被模糊音改掉了（該是 ?正式）：{got}"
+        );
+        assert!(
+            !got.contains("更正"),
+            "「跟正」被模糊展開撞成「更正」了：{got}"
+        );
+    }
+
+    /// 手動選過的格不再被自動修正，**重打才解鎖**。
+    ///
+    /// 跟 `recut_span`／`apply_word_context`／`apply_lm` 同一條原則
+    /// （`Slot::picked`）：使用者已經表態了，引擎不該自作聰明改回去。
+    #[test]
+    fn 模糊音不碰選過的格() {
+        if !load() {
+            return;
+        }
+        let _g = fuzzy_guard();
+        // 沒選過 → 會被修正成「今天」
+        let mut slots = slots_of("ru/ wu0 ");
+        assert_eq!(text_of(&slots), "今天");
+
+        // 使用者把第一格選成「京」（他真的想打「京」）
+        let cands = crate::dict::chars_for(&slots[0].keys);
+        let jing = cands
+            .iter()
+            .find(|c| *c == "京")
+            .expect("ㄐㄧㄥ 應該有「京」");
+        pick(&mut slots, 0, jing);
+        assert!(slots[0].picked);
+        // 再跑一次修正：選過的那格不可以被改回「今」
+        apply_fuzzy_tone(&mut slots);
+        assert_eq!(
+            slots[0].text, "京",
+            "選過的格被模糊音改掉了——picked 沒有被尊重"
+        );
+
+        // 重打（重建 slots）→ 解鎖，又會被修正
+        let fresh = slots_of("ru/ wu0 ");
+        assert!(!fresh[0].picked, "重建的格不該帶著 picked");
+        assert_eq!(text_of(&fresh), "今天", "重打之後應該回到自動修正");
+    }
+
+    /// 打錯音的注音段不可以輸給「把同一串當日文」的切法。
+    ///
+    /// `n;4au04`（上面，ㄕ 打成 ㄙ）原本被切成 `注:n;4|日:au|注:04`
+    /// 「喪合う案」——因為打錯音之後詞庫查不到「上面」，`covered` 是 0，
+    /// 而 `au` 是合法假名、詞典查得到，日文那條在 `covered`／`has_dict`／
+    /// `dict_chars` 三欄全贏。修法是讓 `rank` 的 `covered` 也認模糊音
+    /// （`fuzzy_is_word`）。
+    #[test]
+    fn 模糊音的段不輸給日文切法() {
+        if !load() {
+            return;
+        }
+        let _g = fuzzy_guard();
+        assert_eq!(text_of(&slots_of("n;4au04")), "上面");
+        assert_eq!(text_of(&slots_of("nji au/6")), "說明");
+    }
+
+    /// 總開關：關掉不修、開回來要能修（**切換要測兩個方向**）。
+    #[test]
+    fn 模糊音總開關兩個方向() {
+        if !load() {
+            return;
+        }
+        let _g = fuzzy_guard();
+        set_fuzzy_tone(true);
+        assert_eq!(text_of(&slots_of("ru/ wu0 ")), "今天", "開著的時候要修正");
+
+        set_fuzzy_tone(false);
+        let off = text_of(&slots_of("ru/ wu0 "));
+        assert_ne!(off, "今天", "關掉之後不該還在修正");
+
+        set_fuzzy_tone(true);
+        assert_eq!(text_of(&slots_of("ru/ wu0 ")), "今天", "開回來之後要能修正");
     }
 
     #[test]
@@ -1952,6 +2856,173 @@ mod tests {
         for keys in ["a;/b", "a;b", "test;"] {
             let got = text_of(&slots_of(keys));
             assert!(!got.contains(':'), "`{keys}` 不該被當成網址：得到「{got}」");
+        }
+    }
+
+    /// 詞層由左往右貪心，左邊的詞會把右邊的字搶走。
+    ///
+    /// `想見`／`前件` 都是詞庫裡的真詞，命中就跳之後「建」被搶走、
+    /// 「立」落單。單獨打「建立」本來就是對的——**病灶是前文**，
+    /// **擴充包的詞不可以被語言模型挑掉**。
+    ///
+    /// 包是使用者的明確表態，跟 `Slot::picked` 同一條原則。生造的
+    /// 專有名詞在 bigram 眼裡分數極低，不特別處理的話包裡寫什麼都
+    /// 沒用——實測回報：包裡寫 `ㄊㄧㄢㄑㄧˋ → 屇鼜`，打出來還是
+    /// 「天氣」（§2.78）。
+    ///
+    /// 包在 `core/testdata/packs/lm_override.txt`（進版控、內容釘死），
+    /// 由共用的 `load()` 載進來——**測試自己不動全域狀態**，理由見
+    /// `load()` 裡的長註解。
+    #[test]
+    fn 擴充包的詞不被語言模型挑掉() {
+        if !load() {
+            return;
+        }
+        // **兩字與三字各測一次**：詞層與維特比重切走的路不同，
+        // 只改一處的話另一處會把它翻回去
+        assert_eq!(text_of(&slots_of("wu0 fu4")), "屇鼜", "兩字：詞層被推翻");
+        assert_eq!(
+            text_of(&slots_of("wu0 fu61j4")),
+            "酟耆㧫",
+            "三字：重切被推翻"
+        );
+    }
+
+    /// **包的長輸出併成一格**：兩個注音出一長串。
+    ///
+    /// 詞層是逐格填字的，字數對不上填不回去——所以長輸出走
+    /// `merge_pack_long`，幾格併成一格（跟 `merge_symbols` 同一個模式）。
+    ///
+    /// 包在 `core/testdata/packs/zh_long.txt`（進版控、內容釘死），
+    /// 由共用的 `load()` 載進來。
+    #[test]
+    fn 包的長輸出併成一格() {
+        if !load() {
+            return;
+        }
+        // 兩個音節 → 六個字
+        let slots = slots_of("ji3fu/3");
+        assert_eq!(text_of(&slots), "我請你喝一杯");
+        assert_eq!(slots.len(), 1, "六個字要在同一格裡，不是六格");
+
+        // 一個音節 → 一長串。最短的輸入也要成立
+        assert_eq!(text_of(&slots_of("sup6")), "您好，很高興認識您");
+    }
+
+    /// 長輸出那一格**不給選字**，但要留得回原樣的退路。
+    ///
+    /// 一格的內容是整串文字而不是一個字，選字層一格一個字，給它選字
+    /// 會拿到不知所云的候選。退路放在 `cands` 裡（長輸出／字面原樣）。
+    #[test]
+    fn 長輸出那格不可選字但有退路() {
+        if !load() {
+            return;
+        }
+        let slots = slots_of("ji3fu/3");
+        assert!(!slots[0].selectable, "整串文字不是同音字，不給選字");
+        let cands = slots[0].cands.as_ref().expect("要有算好的候選當退路");
+        assert_eq!(cands[0], "我請你喝一杯");
+        assert_eq!(cands.len(), 2, "長輸出與字面原樣兩條");
+        assert_ne!(cands[1], cands[0], "第二條要是原樣，不是重複的長輸出");
+    }
+
+    /// **最長優先**：同一組按鍵的前綴也在包裡時，長的那個要贏。
+    ///
+    /// `ㄍㄨㄥㄙ`（本公司）與 `ㄍㄨㄥㄙㄏㄤˊㄏㄠˋ`（一長串地址）都在
+    /// 包裡，打完四個音節該出長的那個——跟詞層「從最長的連續段試起」
+    /// 同一條原則。
+    #[test]
+    fn 長輸出最長優先() {
+        if !load() {
+            return;
+        }
+        assert_eq!(text_of(&slots_of("ej/ n ")), "本公司", "只打兩個音節");
+        assert_eq!(
+            text_of(&slots_of("ej/ n c;4cl4")),
+            "台北市信義區信義路五段7號",
+            "四個音節要吃掉前綴那條"
+        );
+    }
+
+    /// 分流之後**一般的詞照舊**——長輸出層不該干擾詞層。
+    ///
+    /// 同一個包裡兩種條目都有，字數對得上的仍然走逐格填字那條路
+    /// （所以是兩格、而且可以選字）。
+    #[test]
+    fn 長輸出不影響一般的詞() {
+        if !load() {
+            return;
+        }
+        let slots = slots_of("yl30 ");
+        assert_eq!(text_of(&slots), "早安");
+        assert_eq!(slots.len(), 2, "一般的詞仍然是一格一個字");
+        assert!(slots[0].selectable, "一般的詞照舊可以選字");
+    }
+
+    /// 所以測試一定要帶前文，否則測不到東西（§2.74.1）。
+    #[test]
+    fn 貪心搶字_前文不該把詞拆掉() {
+        if !load() {
+            return;
+        }
+        for (keys, want) in [
+            ("ru04xu4", "建立"),
+            ("vu;3ru04xu4", "想建立"),
+            ("fu06ru04xu4", "前建立"),
+            // 前文越長越容易搶：「我想」吃掉「想要建立」的第一個字，
+            // 連鎖成「我想｜要件｜立」
+            ("ji3vu;3ul4ru04xu4", "我想要建立"),
+            // 空格把句子切成兩段，壞掉的字在**前一段**
+            // ——只重切尾端那段碰不到它（`RECUT_SPANS` 的由來）
+            ("ji3vu;3ul4ru04xu4u wl4 1ul 5jp3", "我想要建立一套 標準"),
+            // 長詞不准被拆短：`寄出去`＋`了` 不該變成 `祭出`＋`去了`
+            ("ru4tj fm4xk7", "寄出去了"),
+            // §2.60.1 的原始案例：貪心的連鎖崩壞。閘門的最後一關
+            // 原本比「落單字的字頻總和」，貪心的落單字（必現內）
+            // 剛好都是高頻字，把正解擋掉了——改比整句 bigram 才過。
+            //
+            // **`再`／`在` 是已知的雙義**（§2.61.2 補量），靠學習層，
+            // 所以期望寫「再」——這一筆守的是前面那四個字。
+            ("fu/3j41u4y94fu6vu04so4j06t/6", "請務必再期限內完成"),
+        ] {
+            let got = text_of(&slots_of(keys));
+            assert_eq!(got, want, "`{keys}` 應該是「{want}」");
+        }
+    }
+
+    /// 逐鍵打的過程中，**已經定案的前綴不可以被翻案**。
+    ///
+    /// 這是重切最容易壞的地方，踩過三次不同的病因：
+    ///
+    /// 1. 只填最後一個詞 → 修好的字下一鍵掉回去
+    /// 2. 用固定窗口 → 窗口把前文擠出去，比對的基準跟畫面不一致
+    /// 3. 只在「剛收完一個字」時跑 → **跑／不跑交替本身就是擺盪**
+    ///    （`在`↔`載` 每一鍵來回，一句 20 次遠處改寫）
+    ///
+    /// 現在靠的是 `more_complete`（切得更完整才套用）＋ `RECUT_SPANS`
+    /// （只碰最後兩段）。`紀`／`記` 兩個都是詞、形狀也一樣，過不了
+    /// 那道閘門，所以不會擺盪。
+    #[test]
+    fn 重切不翻案已定案的前綴() {
+        if !load() {
+            return;
+        }
+        // 「昨天的會議記錄」——`紀`／`記` 兩個都合理，最會擺盪的一句
+        let keys = "yji6wu0 2k7cjo4u4ru4xj4 ";
+        let mut prev = String::new();
+        let mut acc = String::new();
+        for c in keys.chars() {
+            acc.push(c);
+            let now = text_of(&slots_of(&acc));
+            // 只比「兩次都已經成字」的前綴，長度取短的那個減 2
+            // （最後兩格是正在打的，本來就該變）
+            let n = prev.chars().count().min(now.chars().count());
+            if n >= 3 {
+                let a: String = prev.chars().take(n - 2).collect();
+                let b: String = now.chars().take(n - 2).collect();
+                assert_eq!(a, b, "打到「{acc}」時前綴被翻案了");
+            }
+            prev = now;
         }
     }
 }

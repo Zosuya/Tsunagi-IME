@@ -13,7 +13,7 @@ pub(crate) fn show_candidates(context: &ITfContext, state: &mut State) -> Result
     // 預覽列一律顯示「目前會送出的文字」，候選清單則看模式：
     //
     //   打字中      不列（只有預覽）
-    //   切法選單    列前 N 種切法
+    //   段選單      列反白那一段的解釋
     //   選字中      列反白那一格的同音字
     // 選字時預覽列要標出**正在選哪一格**，不然使用者看不出反白在哪。
     // 組字區顯示的是原始按鍵（打什麼顯示什麼），框不上去，
@@ -60,7 +60,7 @@ pub(crate) fn show_candidates(context: &ITfContext, state: &mut State) -> Result
             None => (state.session.text(), None),
         }
     };
-    // 反白哪一列：切法選單反白目前選到的切法，選字模式反白第一個候選字。
+    // 反白哪一列：選字模式反白選到的候選字，段選單反白選到的解釋。
     let selected: Option<usize> = if state.session.select_index().is_some() {
         // **交出去的是畫面上的位置**：展開捲動之後絕對索引跟畫面對不起來
         state
@@ -72,9 +72,6 @@ pub(crate) fn show_candidates(context: &ITfContext, state: &mut State) -> Result
         // **交出去的是畫面上的位置**：一段常有二三十個候選，捲動之後
         // 絕對索引跟畫面對不起來（跟選字同一個道理）
         state.session.seg_cand_in_view()
-    } else if state.cutting_menu {
-        // 反白條只在看得到的範圍內——選到第 12 個但只列 10 個時不反白
-        Some(state.session.cutting_index()).filter(|&i| i < state.session.cutting_shown())
     } else {
         None
     };
@@ -97,9 +94,6 @@ pub(crate) fn show_candidates(context: &ITfContext, state: &mut State) -> Result
         } else if state.seg_menu {
             // 段選單的候選：這一段可以是什麼。
             //
-            // 「logger（英）」——**標記放後面**，使用者先讀文字；
-            // 切法選單那邊標記在前面是因為那一列是一整句，要先分辨
-            // 「這是哪個語言的最佳解」才讀得下去。
             // **只畫看得到的那一段**——候選可能有二三十個，反白走出
             // 畫面時整片跟著捲（見 `Session::seg_visible_range`）
             let view = state.session.seg_visible_range();
@@ -110,18 +104,10 @@ pub(crate) fn show_candidates(context: &ITfContext, state: &mut State) -> Result
                 .map(|c| Candidate {
                     // **不標語言**（使用者裁定）——候選顯示的是輸出的
                     // 文字，`ぉッゲル` 跟 `logger` 一眼就看得出是哪國的，
-                    // 多一個「（日）」只是雜訊。整句選單那邊標是因為
-                    // 一列是一整句、看不出主體是誰。
+                    // 多一個「（日）」只是雜訊。
                     text: c.text,
                     label: "seg",
                 })
-                .collect()
-        } else if state.cutting_menu {
-            state
-                .session
-                .cutting_menu(state.session.cutting_shown())
-                .into_iter()
-                .map(|text| Candidate { text, label: "cut" })
                 .collect()
         } else {
             Vec::new()
@@ -335,8 +321,7 @@ pub(crate) fn on_candidate_scrolled(
 
 /// 使用者用滑鼠點了第 `i` 個候選。
 ///
-/// 行為跟鍵盤一致：切法選單就選那一種切法並關閉選單，選字模式就選那個
-/// 字並確認——等同把反白移過去再按 Enter。
+/// 行為跟鍵盤一致：選字模式就選那個字並確認——等同把反白移過去再按 Enter。
 pub(crate) fn on_candidate_picked(shared: &std::sync::Arc<std::sync::Mutex<State>>, i: usize) {
     use ime_core::config::EnterInSelect;
     let mut state = super::lock_state(shared);
@@ -344,14 +329,6 @@ pub(crate) fn on_candidate_picked(shared: &std::sync::Arc<std::sync::Mutex<State
         return;
     };
     match state.mode() {
-        Mode::CuttingMenu => {
-            state.session.set_cutting_index(i);
-            state.cutting_menu = false;
-            // 同鍵盤那條路：關掉選單就把展開收回來
-            state.session.collapse_cutting();
-            let _ = rewrite_composition(&context, &mut state);
-            let _ = show_candidates(&context, &mut state);
-        }
         Mode::Selecting | Mode::SelectingExpanded => {
             state.session.set_cand_index(i);
             let advance = state.config.behavior.enter_in_select == EnterInSelect::Next;

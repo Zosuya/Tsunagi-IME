@@ -89,36 +89,45 @@ mod 一般 {
             }
         }
 
-        /// **單音節也要有中文代表**——不然選單裡連一個保證的中文選項
-        /// 都沒有，第一名萬一錯了就沒得選。
+        /// **單音節的段選單也要有中文可選**——第一名萬一錯了總得選得回來。
+        ///
+        /// 原本靠整句選單的「三語代表」保證，那套在 2026-09-15 跟整句選單
+        /// 一起刪了；段選單是逐語言窮舉的，這裡守住它確實列得出來。
         #[test]
-        fn 選單裡有中文代表() {
+        fn 段選單裡有中文可選() {
             if !load() {
                 return;
             }
-            let menu = typed("su3").cutting_menu(8);
+            let mut s = typed("su3");
+            s.seg_open();
+            let cands = s.seg_cands();
             assert!(
-                menu.iter().any(|m| m.starts_with("（中")),
-                "該有中文代表：{menu:?}"
+                cands
+                    .iter()
+                    .any(|c| c.lang == crate::language::Language::Bopomofo && c.keys == "su3"),
+                "該有中文：{cands:?}"
             );
         }
 
-        /// **單母音的選單要有日文可選**。
+        /// **單母音的段選單要有日文可選**。
         ///
         /// `a` 在日文引擎是合法的（あ），但它同時是英文最常用的詞，
         /// `lang_of` 那條「很常用的英文詞不讓給日文」（本來是為了擋
         /// `you`→よう）把它判給英文，於是切法裡一個日文段都沒有。
-        /// 英文代表是造出來的，日文原本只能從既有切法裡挑，所以就沒得選。
         #[test]
         fn 單母音也有日文可選() {
             if !load() {
                 return;
             }
             for k in ["a", "i", "u", "e", "o"] {
-                let menu = typed(k).cutting_menu(8);
+                let mut s = typed(k);
+                s.seg_open();
+                let cands = s.seg_cands();
                 assert!(
-                    menu.iter().any(|m| m.starts_with("（日")),
-                    "{k} 該有日文選項：{menu:?}"
+                    cands
+                        .iter()
+                        .any(|c| c.lang == crate::language::Language::Romaji),
+                    "{k} 該有日文選項：{cands:?}"
                 );
             }
         }
@@ -418,7 +427,7 @@ mod 一般 {
             for c in "vu04y".chars() {
                 s.push(c);
             }
-            s.next_cutting();
+            s.set_cutting_index(1);
             let want = s.cutting_index();
             assert_ne!(want, 0, "測試前提：挑的不是第一名");
             let picked = s.text();
@@ -452,168 +461,11 @@ mod 一般 {
             for c in "vu04y".chars() {
                 s.push(c);
             }
-            s.next_cutting();
+            s.set_cutting_index(1);
             for c in "94dk3u3".chars() {
                 s.push(c);
             }
             assert_ne!(s.cutting_index(), 0, "後面的刀合併了也要認得出來");
-        }
-    }
-
-    /// 切法選單的 4～6 名固定放三種語言各自的代表。
-    mod 三語代表 {
-        use super::*;
-
-        #[test]
-        fn 整串英文一定看得到() {
-            if !load() {
-                return;
-            }
-            // `su3cl3` 是中文，純英文 passthrough 在排序裡沒有任何
-            // 依據，不特別補的話翻很久都翻不到
-            let s = typed("su3cl3");
-            let menu = s.cutting_menu(8);
-            // 前面會有「（英）」記號，比對結尾就好
-            assert!(
-                menu.iter().any(|m| m.ends_with("su3cl3")),
-                "整串 passthrough 該在選單裡：{menu:?}"
-            );
-        }
-
-        #[test]
-        fn 第一名不被代表擠掉() {
-            if !load() {
-                return;
-            }
-            // 補代表不可以動到引擎的第一名——那是不按 TAB 直接送出的
-            // 東西。（代表本來就排第一的話另當別論，那是引擎自己算的。）
-            let s = typed("su3cl3");
-            let menu = s.cutting_menu(3);
-            assert!(
-                menu[0].ends_with("你好"),
-                "第一名是引擎算的最佳解，不能被擠掉：{menu:?}"
-            );
-            assert_eq!(menu.len(), 3);
-        }
-
-        #[test]
-        fn 已經在前面的不重複列() {
-            if !load() {
-                return;
-            }
-            let s = typed("sushi");
-            let menu = s.cutting_menu(8);
-            let mut uniq = menu.clone();
-            uniq.sort();
-            uniq.dedup();
-            assert_eq!(uniq.len(), menu.len(), "不該有重複項：{menu:?}");
-        }
-
-        #[test]
-        fn 候選很少時不會出錯() {
-            if !load() {
-                return;
-            }
-            // 只打一個鍵，切法沒幾種
-            let s = typed("a");
-            let menu = s.cutting_menu(8);
-            assert!(!menu.is_empty());
-            let mut uniq = menu.clone();
-            uniq.sort();
-            uniq.dedup();
-            assert_eq!(uniq.len(), menu.len(), "不該有重複項：{menu:?}");
-        }
-
-        #[test]
-        fn 代表前面有語言記號() {
-            if !load() {
-                return;
-            }
-            let s = typed("su3cl3");
-            let menu = s.cutting_menu(8);
-            assert!(menu[0].starts_with("（中）"), "第一名是中文代表：{menu:?}");
-            assert!(
-                menu.iter().any(|m| m.starts_with("（英）")),
-                "整串英文也要標：{menu:?}"
-            );
-        }
-
-        #[test]
-        fn 代表看引擎認可的字數不是按鍵數() {
-            if !load() {
-                return;
-            }
-            // 「ちぇ喝一下」的注音按鍵比「check 一下」多，但那些不是詞。
-            // 用按鍵數挑的話中文代表會挑到前者——那是使用者不要的東西。
-            let s = typed("check u vu84");
-            let menu = s.cutting_menu(8);
-            let zh = menu
-                .iter()
-                .find(|m| m.starts_with("（中"))
-                .expect("該有中文代表");
-            assert!(zh.contains("check 一下"), "中文代表挑錯了：{zh}");
-        }
-
-        /// **整串讀得通的話，（中）那一列就該是純中文**。
-        ///
-        /// 舊做法挑「涵蓋字數最多」的那一種，而 `covered_by` 問的是
-        /// 「整段是不是一個詞」——一整句中文拿 0 分，反而輸給被切碎、
-        /// 每小塊剛好是個詞的那一種，於是（中）混進了日文段。
-        #[test]
-        fn 中文代表整串讀得通時是純中文() {
-            if !load() {
-                return;
-            }
-            // 這種情況就要用切法的
-            let s = typed("5k45j/3fu/6dj;4ru.4ul4m/4fu, z832k7");
-            let menu = s.cutting_menu(8);
-            let zh = menu
-                .iter()
-                .find(|m| m.starts_with("（中"))
-                .expect("該有中文代表");
-            assert!(
-                !zh.chars().any(|c| c.is_ascii_alphanumeric()),
-                "（中）不該混著沒轉換的按鍵：{zh}"
-            );
-            assert!(zh.contains("這種情況"), "中文代表挑錯了：{zh}");
-        }
-
-        /// **句子中間不該露出沒轉換的按鍵**。
-        ///
-        /// `fu/6`（ㄥˊ）是合法的打字中途狀態，但沒有字念這個音，
-        /// 顯示出來就是一串原始按鍵夾在中文裡。
-        #[test]
-        fn 顯示不出來的切法要排後面() {
-            if !load() {
-                return;
-            }
-            let s = typed("5k45j/3fu/6dj;4ru.4g4ul4m/4");
-            let menu = s.cutting_menu(3);
-            assert!(
-                !menu.iter().any(|m| m.contains("fu/6")),
-                "前三名不該有露出按鍵的：{menu:?}"
-            );
-        }
-
-        #[test]
-        fn 同時是兩個語言的代表就都標() {
-            if !load() {
-                return;
-            }
-            // 覆蓋的話畫面上會少一個記號，使用者就找不到那個語言的代表
-            let s = typed("sushi");
-            let menu = s.cutting_menu(8);
-            let marked = menu.iter().filter(|m| m.starts_with("（")).count();
-            assert!(marked >= 2, "至少該標到日文與英文：{menu:?}");
-        }
-
-        #[test]
-        fn 沒打字時不會生出東西() {
-            if !load() {
-                return;
-            }
-            let s = Session::new();
-            assert!(s.cutting_menu(8).is_empty());
         }
     }
 
@@ -625,7 +477,7 @@ mod 一般 {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        crate::dict::bopomofo_loaded()
+        crate::dict::all_loaded()
     }
 
     fn typed(keys: &str) -> Session {
@@ -634,133 +486,6 @@ mod 一般 {
             s.push(c);
         }
         s
-    }
-
-    /// 注音符號直出：選單尾巴那一列。
-    ///
-    /// 它**不是一種切法**（不經過選詞層、沒有候選），所以要確認的不只是
-    /// 「有沒有出現」，還有選中之後的狀態對不對。
-    mod 符號直出 {
-        use super::*;
-
-        /// 選單上找出「（ㄅ）」那一列的位置。
-        fn 符號列(s: &Session) -> Option<(usize, String)> {
-            s.cutting_menu(12)
-                .into_iter()
-                .enumerate()
-                .find(|(_, m)| m.starts_with("（ㄅ）"))
-        }
-
-        #[test]
-        fn 音節連寫不加空格() {
-            if !load() {
-                return;
-            }
-            let s = typed("su3cl3");
-            let (_, row) = 符號列(&s).expect("該有符號那一列");
-            assert_eq!(row, "（ㄅ）ㄋㄧˇㄏㄠˇ", "音節連寫，中間不加空格");
-        }
-
-        /// **單獨的聲母與聲調都要打得出來**——這正是這個功能的用途。
-        ///
-        /// `ㄅ` 不能自成音節，所以「要求合法音節」的版本打不出來；
-        /// 「符號＋空白」那招也救不回聲母（空白是一聲，等於在問
-        /// 「ㄅ 自己能不能成為一個字」，答案是不能）。
-        #[test]
-        fn 單獨的聲母與聲調都打得出來() {
-            if !load() {
-                return;
-            }
-            // 1qaz = ㄅㄆㄇㄈ
-            let (_, row) = 符號列(&typed("1qaz")).expect("聲母序列要打得出來");
-            assert_eq!(row, "（ㄅ）ㄅㄆㄇㄈ");
-            // 3 = ˇ（寫文件講聲調時要用）
-            let (_, row) = 符號列(&typed("3")).expect("聲調符號要打得出來");
-            assert_eq!(row, "（ㄅ）ˇ");
-        }
-
-        /// 一聲是空白鍵、沒有對應符號——跳過才是正確的注音寫法。
-        #[test]
-        fn 一聲不標符號() {
-            if !load() {
-                return;
-            }
-            let (_, row) = 符號列(&typed("y ")).expect("ㄗ 一聲");
-            assert_eq!(row, "（ㄅ）ㄗ", "一聲不該多出任何記號");
-        }
-
-        /// **排在三語代表後面**（使用者定）。
-        #[test]
-        fn 排在中英日後面() {
-            if !load() {
-                return;
-            }
-            let s = typed("su3cl3");
-            let menu = s.cutting_menu(12);
-            let (i, _) = 符號列(&s).unwrap();
-            let 最後一個代表 = menu
-                .iter()
-                .rposition(|m| {
-                    m.starts_with("（中") || m.starts_with("（日") || m.starts_with("（英")
-                })
-                .expect("該有語言代表");
-            assert!(i > 最後一個代表, "符號那列要在代表後面：{menu:?}");
-        }
-
-        /// 選中之後：送出的是符號，而且**不能逐格選字**（沒有候選可挑）。
-        #[test]
-        fn 選中之後送出符號且不給選字() {
-            if !load() {
-                return;
-            }
-            let mut s = typed("su3cl3");
-            let (i, _) = 符號列(&s).unwrap();
-            s.set_cutting_index(i);
-            assert_eq!(s.text(), "ㄋㄧˇㄏㄠˇ");
-            assert_eq!(s.slots().len(), 1, "整串一格");
-            assert!(!s.slots()[0].selectable, "符號沒有候選可選");
-        }
-
-        /// **選了之後再打字要留在這一列**。
-        ///
-        /// 每打一鍵選單都會重排，不記著的話會跳回中文——那正是使用者
-        /// 覺得「前面的字突然變了」的那類問題。
-        #[test]
-        fn 再打一個字仍留在符號列() {
-            if !load() {
-                return;
-            }
-            let mut s = typed("su3");
-            let (i, _) = 符號列(&s).unwrap();
-            s.set_cutting_index(i);
-            for c in "cl3".chars() {
-                s.push(c);
-            }
-            assert_eq!(
-                s.text(),
-                "ㄋㄧˇㄏㄠˇ",
-                "還在符號那一列：{:?}",
-                s.cutting_menu(12)
-            );
-        }
-
-        /// 大千配置把 26 個字母全用掉了，所以幾乎任何輸入都有這一列。
-        /// 真的沒有的情況是**打了不在配置上的鍵**——大寫字母不算
-        /// （輸入層會轉小寫，suE 一樣給得出 ㄋㄧㄍ），要像 = 這種
-        /// 鍵盤上有、注音配置沒有的鍵。
-        #[test]
-        fn 打了配置外的鍵就沒有這一列() {
-            if !load() {
-                return;
-            }
-            let s = typed("su3=");
-            assert!(
-                符號列(&s).is_none(),
-                "有配置外的鍵就不該有：{:?}",
-                s.cutting_menu(12)
-            );
-            assert!(!s.text().is_empty(), "還是要有輸出");
-        }
     }
 
     #[test]
@@ -774,16 +499,16 @@ mod 一般 {
     }
 
     #[test]
-    fn 切法選單可以翻() {
+    fn 切法可以換() {
         if !load() {
             return;
         }
         let mut s = typed("su3cl3");
         let first = s.text();
         assert!(s.cutting_count() > 1, "該有多種切法");
-        s.next_cutting();
+        s.set_cutting_index(1);
         assert_ne!(s.cutting_index(), 0);
-        s.prev_cutting();
+        s.set_cutting_index(0);
         assert_eq!(s.cutting_index(), 0);
         assert_eq!(s.text(), first, "轉一圈要回到原點");
     }
@@ -1130,45 +855,239 @@ mod 一般 {
         assert_eq!(s.select_index(), None, "要退出選字模式");
     }
 
-    #[test]
-    fn 造出來的代表不佔前面的位置() {
-        if !load() {
-            return;
+    /// 自動模式的格刪除（`delete_marked_cell`）。
+    ///
+    /// 跟鎖定模式那條（`鎖定時刪整格`）的差別：鎖定模式一格恆等於一個
+    /// 字、走 `backspace()`；自動模式一格未必是一個字、有自己的三態
+    /// 設定、走獨立的入口。開發文件 §2.21 記了為什麼當初否決、現在
+    /// 為什麼可以做。
+    mod 自動模式刪整格 {
+        use super::*;
+
+        #[test]
+        fn 刪掉反白那一格() {
+            if !load() {
+                return;
+            }
+            let mut s = typed("su3cl3");
+            let before = s.slots().len();
+            assert!(before >= 2, "該有兩格：{:?}", s.text());
+            s.enter_select_last();
+            assert!(s.delete_marked_cell(), "該刪得掉");
+            assert_eq!(s.slots().len(), before - 1, "整格該不見了");
         }
-        // 使用者回報：代表被硬排在固定名次。舊規則是「引擎前三名不動、
-        // 代表一律接在第 4 名起」，於是**造出來的英文 passthrough
-        // 佔走第 4 名**，把引擎真正算出來的切法一路往後推。
-        //
-        // 現在只保底不提前：英文代表沒有排序依據，就該待到第一頁尾巴，
-        // 把前面的位置讓給引擎算的東西。
-        let s = typed("su3cl3");
-        let menu = s.cutting_menu(CUTTING_PAGE);
-        let en = menu
-            .iter()
-            .position(|r| r.starts_with("（英）"))
-            .expect("要有英文代表");
-        // 舊規則下它固定在第 4 名（索引 3），所以門檻要嚴格大於
-        assert!(en > 3, "造出來的英文代表不該卡在第 {} 名：{menu:?}", en + 1);
+
+        /// **框在中間時刪的是中間那一格**——這才是這個功能的價值，
+        /// 尾端那一格用一般的退格連按也刪得掉。
+        #[test]
+        fn 框在中間時刪的是中間那一格() {
+            if !load() {
+                return;
+            }
+            let mut s = typed("su3cl3hello");
+            if s.slots().len() < 3 {
+                return;
+            }
+            let last = s.slots().last().unwrap().text.clone();
+            s.enter_select_first(); // 框停在第 0 格
+            assert_eq!(s.select_index(), Some(0));
+            assert!(s.delete_marked_cell());
+            assert_eq!(
+                s.slots().last().unwrap().text,
+                last,
+                "刪的該是第 0 格，尾巴不該動：{:?}",
+                s.text()
+            );
+        }
+
+        /// **鎖定模式不從這個入口進來**——它有自己的路（`backspace()`
+        /// 裡那條），兩條路的鍵位與設定都不同，混在一起就是
+        /// 「一邊修了一邊沒修」的溫床。
+        #[test]
+        fn 鎖定模式回_false() {
+            if !load() {
+                return;
+            }
+            let mut s = Session::new();
+            s.set_lock(Some(crate::language::Language::Bopomofo));
+            for c in "su3cl3".chars() {
+                s.push(c);
+            }
+            s.enter_select_last();
+            assert!(!s.delete_marked_cell(), "鎖定模式該回 false");
+        }
+
+        /// 沒有反白框的時候刪不了（呼叫端要退回一般的退格）。
+        #[test]
+        fn 沒有框時回_false() {
+            if !load() {
+                return;
+            }
+            let mut s = typed("su3cl3");
+            assert!(s.marked_index().is_none(), "剛打完不該有框");
+            assert!(!s.delete_marked_cell(), "沒有框該回 false");
+        }
+
+        /// **修正過的字要跟著平移，不能貼到別的格上。**
+        ///
+        /// 這是 `Pick::at` 存在的理由——同一個音節出現多次時，按鍵字串
+        /// 比對會誤刪／誤貼（見 `選過的字認位置`）。
+        #[test]
+        fn 刪掉前面那格_後面的修正跟著平移() {
+            if !load() {
+                return;
+            }
+            let mut s = typed("su3cl3su3cl3");
+            s.enter_select_first();
+            while s.select_index() != Some(2) {
+                let b = s.select_index();
+                s.select_right();
+                if s.select_index() == b {
+                    return;
+                }
+            }
+            s.pick_char("擬");
+            // 反白移回第 0 格再刪
+            while s.select_index() != Some(0) {
+                let b = s.select_index();
+                s.select_left();
+                if s.select_index() == b {
+                    return;
+                }
+            }
+            assert!(s.delete_marked_cell(), "第 0 格該刪得掉");
+            // 原本第 2 格 → 現在第 1 格
+            let texts: Vec<&String> = s.slots().iter().map(|x| &x.text).collect();
+            assert_eq!(
+                s.slots().get(1).map(|x| x.text.as_str()),
+                Some("擬"),
+                "修正沒跟著平移：{texts:?}"
+            );
+        }
+
+        /// 一路刪到空不可以 panic。
+        #[test]
+        fn 一路刪到空() {
+            if !load() {
+                return;
+            }
+            let mut s = typed("su3cl3hello");
+            s.enter_select_last();
+            let mut guard = 0;
+            while !s.is_empty() && guard < 20 {
+                if !s.delete_marked_cell() {
+                    break;
+                }
+                guard += 1;
+            }
+            assert!(guard < 20, "刪不完，可能有無窮迴圈");
+        }
     }
 
-    #[test]
-    fn 代表再差也要進得了第一頁() {
-        if !load() {
-            return;
-        }
-        // 「動態排名」的保底：排得再後面也不能要展開選單才找得到。
-        // 54 種切法的輸入，英文 passthrough 在排序裡毫無依據。
-        let s = typed("check u vu84");
-        assert!(
-            s.cutting_count() > CUTTING_PAGE,
-            "這個測試要夠多切法才有意義"
-        );
-        let menu = s.cutting_menu(CUTTING_PAGE);
-        for mark in ["（中）", "（日）", "（英）"] {
-            assert!(
-                menu.iter().any(|r| r.starts_with(mark)),
-                "{mark} 沒進第一頁：{menu:?}"
+    /// 選過的字**認位置不認按鍵**（`Pick::at`）。
+    ///
+    /// 原本只記 `(按鍵, 字)`，靠「由左往右、按鍵相同、用過就不再用」
+    /// 對回去，同一個音節出現多次時順序一變就全錯。這三筆各鎖一個
+    /// 實測到的症狀。
+    mod 選過的字認位置 {
+        use super::*;
+
+        /// `你好擬好` 再打字 → 修正不該跳到第一個「你」上。
+        #[test]
+        fn 繼續打字不會讓修正跳位() {
+            if !load() {
+                return;
+            }
+            let mut s = typed("su3cl3su3cl3");
+            s.enter_select_first();
+            // 反白移到第 2 格（第二個「你」）
+            while s.select_index() != Some(2) {
+                let before = s.select_index();
+                s.select_right();
+                if s.select_index() == before {
+                    return; // 這串切不出四格就沒什麼可測
+                }
+            }
+            s.pick_char("擬");
+            s.exit_select();
+            assert_eq!(s.slots()[2].text, "擬", "選完當下就不對");
+            // 繼續打字
+            for c in "su3".chars() {
+                s.push(c);
+            }
+            assert_eq!(
+                s.slots()[2].text,
+                "擬",
+                "修正跳位了：{:?}",
+                s.slots().iter().map(|x| &x.text).collect::<Vec<_>>()
             );
+            assert!(!s.slots()[0].picked, "第 0 格被誤標成手動選過");
+        }
+
+        /// 同上，觸發者是倒退鍵。
+        #[test]
+        fn 倒退鍵不會讓修正跳位() {
+            if !load() {
+                return;
+            }
+            let mut s = typed("su3cl3su3cl3");
+            s.enter_select_first();
+            while s.select_index() != Some(2) {
+                let before = s.select_index();
+                s.select_right();
+                if s.select_index() == before {
+                    return;
+                }
+            }
+            s.pick_char("擬");
+            s.exit_select();
+            for _ in 0..3 {
+                s.backspace();
+            }
+            assert_eq!(
+                s.slots()[2].text,
+                "擬",
+                "修正跳位了：{:?}",
+                s.slots().iter().map(|x| &x.text).collect::<Vec<_>>()
+            );
+        }
+
+        /// **最嚴重的那個**：兩個 pick 落在同一個音節上會混掉、還丟一個。
+        #[test]
+        fn 同音節兩個修正各自保留() {
+            if !load() {
+                return;
+            }
+            let mut s = typed("su3cl3su3cl3");
+            // 第 0 格選「擬」
+            s.enter_select_first();
+            while s.select_index() != Some(0) {
+                let before = s.select_index();
+                s.select_left();
+                if s.select_index() == before {
+                    break;
+                }
+            }
+            if s.select_index() != Some(0) {
+                return;
+            }
+            s.pick_char("擬");
+            // 第 2 格選「妳」
+            while s.select_index() != Some(2) {
+                let before = s.select_index();
+                s.select_right();
+                if s.select_index() == before {
+                    return;
+                }
+            }
+            s.pick_char("妳");
+            s.exit_select();
+            // 觸發一次重建
+            s.push('3');
+            s.backspace();
+            let texts: Vec<&String> = s.slots().iter().map(|x| &x.text).collect();
+            assert_eq!(s.slots()[0].text, "擬", "第 0 格的修正沒了：{texts:?}");
+            assert_eq!(s.slots()[2].text, "妳", "第 2 格的修正沒了：{texts:?}");
         }
     }
 
@@ -1208,7 +1127,6 @@ mod 一般 {
             probe.enter_select_first();
             probe.pick_char("妳");
             probe.set_cutting_index(i);
-            // 選單那列前面可能有「（中）」之類的語言記號，比對用尾綴
             assert!(
                 row.ends_with(&probe.text()),
                 "第 {i} 列顯示 {row:?}，選下去卻是 {:?}",
@@ -1260,7 +1178,7 @@ mod 一般 {
         }
         let mut s = typed("su3cl3");
         s.set_width(crate::width::Width::Half);
-        s.next_cutting();
+        s.set_cutting_index(1);
         let before = s.text();
         s.push('!');
         assert_eq!(
@@ -1278,8 +1196,8 @@ mod 一般 {
         let mut s = typed("su3cl3");
         s.enter_select_first();
         s.pick_char("妳");
-        s.next_cutting();
-        s.prev_cutting();
+        s.set_cutting_index(1);
+        s.set_cutting_index(0);
         assert_eq!(s.slots()[0].text, "妳", "換切法轉一圈回來還要在");
     }
 
@@ -1707,232 +1625,6 @@ mod 一般 {
         assert_eq!(s.text(), "");
         assert_eq!(s.cutting_count(), 0);
         assert_eq!(s.select_index(), None);
-    }
-}
-
-/// 切法選單的展開：走到底自動展開，跟選字模式同一種手勢。
-///
-/// 舊做法是「400ms 內按兩下 TAB」，但選單開著時 TAB 綁的是「關掉選單」，
-/// 雙擊判斷根本走不到——`CUTTING_PAGE_ALL` 形同死碼，使用者看不到第 10
-/// 列之後的任何東西。
-#[cfg(test)]
-mod 切法選單展開 {
-    use crate::session::*;
-
-    fn load() -> bool {
-        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("data");
-        crate::preload(&data, crate::config::Engines::default());
-        crate::dict::bopomofo_loaded()
-    }
-
-    /// 切法夠多的輸入——沒有超過一頁就測不出展開。
-    fn 多切法() -> Session {
-        let mut s = Session::new();
-        for c in "check u vu84".chars() {
-            s.push(c);
-        }
-        s
-    }
-
-    #[test]
-    fn 一開始只列一頁() {
-        if !load() {
-            return;
-        }
-        let s = 多切法();
-        assert!(s.cutting_count() > CUTTING_PAGE, "這個測試要夠多切法");
-        assert!(!s.cutting_expanded());
-        assert_eq!(s.cutting_shown(), CUTTING_PAGE);
-    }
-
-    #[test]
-    fn 走到最後一列再往下就展開() {
-        if !load() {
-            return;
-        }
-        let mut s = 多切法();
-        // 走到第一頁的最後一列
-        for _ in 0..CUTTING_PAGE - 1 {
-            s.next_cutting();
-        }
-        assert_eq!(s.cutting_index(), CUTTING_PAGE - 1);
-        assert!(!s.cutting_expanded(), "還沒到底不該展開");
-
-        // 再往下：展開，而且直接落在原本看不到的第一列
-        s.next_cutting();
-        assert!(s.cutting_expanded(), "到底再往下要自動展開");
-        assert_eq!(s.cutting_index(), CUTTING_PAGE, "要落在第 11 列");
-        assert!(s.cutting_shown() > CUTTING_PAGE, "看得到的列數要變多");
-    }
-
-    #[test]
-    fn 反白不會跑到畫面外() {
-        if !load() {
-            return;
-        }
-        // 舊 bug：`next_cutting` 對全部切法繞圈，走到第 11 列時畫面只畫
-        // 10 列，反白就整個消失——使用者看到的是「反白不見了」。
-        let mut s = 多切法();
-        for _ in 0..CUTTING_PAGE * 3 {
-            s.next_cutting();
-            assert!(
-                s.cutting_index() < s.cutting_shown(),
-                "反白第 {} 列但只看得到 {} 列",
-                s.cutting_index() + 1,
-                s.cutting_shown()
-            );
-        }
-    }
-
-    #[test]
-    fn 展開後到底繞回第一列() {
-        if !load() {
-            return;
-        }
-        let mut s = 多切法();
-        // 一路按到展開、再走到展開後的最後一列
-        while !s.cutting_expanded() {
-            s.next_cutting();
-        }
-        let shown = s.cutting_shown();
-        while s.cutting_index() + 1 < shown {
-            s.next_cutting();
-        }
-        s.next_cutting();
-        assert_eq!(s.cutting_index(), 0, "展開後到底要繞回第一列");
-        assert!(s.cutting_expanded(), "繞回不該把展開收掉");
-    }
-
-    #[test]
-    fn 往上不會展開也不會跑到畫面外() {
-        if !load() {
-            return;
-        }
-        let mut s = 多切法();
-        s.prev_cutting();
-        assert!(!s.cutting_expanded(), "往上不觸發展開");
-        assert_eq!(s.cutting_index(), CUTTING_PAGE - 1, "繞回看得到的最後一列");
-    }
-
-    #[test]
-    fn 關選單不會弄丟展開區選中的切法() {
-        if !load() {
-            return;
-        }
-        // 使用者展開後挑了第 15 列，關掉選單是「不看清單了」，
-        // 不是「放棄剛才的選擇」——夾回第 10 列等於把他選的字換掉。
-        let mut s = 多切法();
-        while !s.cutting_expanded() {
-            s.next_cutting();
-        }
-        s.next_cutting();
-        let 選中 = s.cutting_index();
-        assert!(選中 >= CUTTING_PAGE, "前提：選在展開區");
-        let 文字 = s.text();
-
-        s.collapse_cutting();
-        assert_eq!(s.cutting_index(), 選中, "選中的列不該被夾走");
-        assert_eq!(s.text(), 文字, "送出的文字不該變");
-        assert!(s.cutting_expanded(), "選中的列還在展開區就維持展開");
-    }
-
-    #[test]
-    fn 關選單時選在第一頁就收回展開() {
-        if !load() {
-            return;
-        }
-        let mut s = 多切法();
-        while !s.cutting_expanded() {
-            s.next_cutting();
-        }
-        // 繞回第一頁
-        while s.cutting_index() >= CUTTING_PAGE {
-            s.next_cutting();
-        }
-        s.collapse_cutting();
-        assert!(!s.cutting_expanded(), "選在第一頁就該收回");
-        assert_eq!(s.cutting_shown(), CUTTING_PAGE);
-    }
-
-    #[test]
-    fn 空白鍵展開不會動到反白() {
-        if !load() {
-            return;
-        }
-        // 空白鍵是「讓我多看幾列」，不是「換一個切法」——
-        // 展開順便把反白往下移的話，使用者只想看看就被換了字。
-        let mut s = 多切法();
-        s.next_cutting();
-        let 選中 = s.cutting_index();
-        let 文字 = s.text();
-
-        s.expand_cutting();
-        assert!(s.cutting_expanded());
-        assert!(s.cutting_shown() > CUTTING_PAGE, "要列出更多");
-        assert_eq!(s.cutting_index(), 選中, "反白不該跟著動");
-        assert_eq!(s.text(), 文字, "送出的文字不該變");
-    }
-
-    #[test]
-    fn 已經展開時再按空白沒事() {
-        if !load() {
-            return;
-        }
-        let mut s = 多切法();
-        s.expand_cutting();
-        let 選中 = s.cutting_index();
-        let 列數 = s.cutting_shown();
-        s.expand_cutting();
-        assert_eq!(s.cutting_index(), 選中);
-        assert_eq!(s.cutting_shown(), 列數, "沒有更多可展開");
-    }
-
-    #[test]
-    fn 又打字就收回展開() {
-        if !load() {
-            return;
-        }
-        let mut s = 多切法();
-        while !s.cutting_expanded() {
-            s.next_cutting();
-        }
-        s.push('a');
-        assert!(!s.cutting_expanded(), "重新打字選單重排過，展開要收回");
-    }
-
-    #[test]
-    fn 看不到的列點不到() {
-        if !load() {
-            return;
-        }
-        // 滑鼠點的是畫面上的列，畫面沒畫出來的就不該選得到
-        let mut s = 多切法();
-        s.set_cutting_index(CUTTING_PAGE + 2);
-        assert_eq!(s.cutting_index(), 0, "沒展開時點不到第 13 列");
-    }
-
-    #[test]
-    fn 切法很少時不會展開() {
-        if !load() {
-            return;
-        }
-        // 只有兩三種切法時走到底就是繞回，沒有「更多」可以展開
-        let mut s = Session::new();
-        for c in "su3".chars() {
-            s.push(c);
-        }
-        let n = s.cutting_count();
-        if n == 0 || n > CUTTING_PAGE {
-            return;
-        }
-        for _ in 0..n * 2 {
-            s.next_cutting();
-            assert!(!s.cutting_expanded(), "沒有更多切法就不該展開");
-            assert!(s.cutting_index() < n);
-        }
     }
 }
 

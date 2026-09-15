@@ -128,10 +128,6 @@ zh.CompMain=輸入法主程式
 ja.CompMain=入力方式本体
 en.CompMain=Input method (required)
 
-zh.CompTaigi=台語擴充包（用注音打華語詞，候選出台語漢字）
-ja.CompTaigi=台湾語辞書パック
-en.CompTaigi=Taiwanese Hokkien pack
-
 [Types]
 ; **[Types] 與 [Components] 是配套的，不能只留一半。**
 ;
@@ -146,19 +142,14 @@ en.CompTaigi=Taiwanese Hokkien pack
 Name: "custom"; Description: "{cm:CompMain}"; Flags: iscustom
 
 [Components]
-; **元件（Components）不是工作（Tasks）**：元件決定「裝哪些檔案」，
-; 工作決定「做哪些動作」。台語包是檔案，所以走元件。
+; **只有一個元件**。台語包原本是可選元件，2026-09-11 拿掉——語言包改成
+; 從 repo 另外下載（開發文件 §2.49 早就這樣決定擴充包了；macOS 那邊還
+; 多一個硬理由：事後往簽好的 bundle 裡塞檔案會破壞簽章封印）。兩個平台
+; 的語意要一致，所以 Windows 這邊也一起拿掉。
 ;
-; **台語預設不勾**：它是給特定族群的 1.7MB，多數人用不到，預設裝等於
-; 替所有人做決定。想要的人自己勾——`Types:` 不寫就是「不屬於任何安裝
-; 類型」，效果就是預設不選中。
-;
-; 主程式相反：掛在 custom 底下（預設選中）而且 `fixed`（取消不掉）。
-;
-; 沒勾的人事後要補：重新執行安裝程式、把台語勾起來即可，Inno 的元件
-; 選擇本來就可重入，已裝好的部分不受影響。
+; 留著 [Components]／[Types] 是因為 [Files] 的每一條都掛 `Components: main`
+; ——兩個區段是配套的，只留一半的話預設會一個檔都不裝（實測踩過兩次）。
 Name: "main";  Description: "{cm:CompMain}";  Types: custom; Flags: fixed
-Name: "taigi"; Description: "{cm:CompTaigi}"
 
 [Files]
 ; 主程式：`Components: main` 而 main 是 fixed，使用者取消不掉。
@@ -195,14 +186,10 @@ Source: "{#Root}\data\bopomofo\zh_bigram.gram"; DestDir: "{app}\data\bopomofo"; 
 Source: "{#Root}\packs\內建符號.txt"; DestDir: "{app}\packs"; Flags: ignoreversion; Components: main
 Source: "{#Root}\packs\內建emoji.txt"; DestDir: "{app}\packs"; Flags: ignoreversion; Components: main
 
-; 台語包（1.7MB）**是可選元件**——只有勾了 taigi 才裝。
-;
-; 為什麼另外拆成元件：它比其他預載包大一個數量級，而且是給特定族群用的。
-; 沒勾的人事後想補，重新執行安裝程式勾起來即可（Inno 的元件選擇可重入）。
-;
-; 資料是 CC BY-SA 4.0，**檔頭的來源與授權那幾行是授權義務的一部分，
-; 不是說明文字**，重產包時不可以拿掉（見 tools/取台語資料.md）。
-Source: "{#Root}\packs\台語.txt"; DestDir: "{app}\packs"; Flags: ignoreversion; Components: taigi
+; **台語包不在安裝程式裡**（2026-09-11 拿掉）。它是擴充包，走擴充包的路：
+; 從 repo 下載 `台語.txt` 丟進擴充包資料夾、設定頁按重新整理就好
+; （開發文件 §2.49）。這樣它自己的授權（CC BY-SA 4.0）也不會跟 GPL-3
+; 的安裝包綁在一起，而且詞表更新不必跟著發一版程式。
 
 [Icons]
 ; **只放一個捷徑，不建資料夾。**

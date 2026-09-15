@@ -63,7 +63,6 @@ $need = @(
     'data\bopomofo\zh_bigram.gram',
     'packs\內建符號.txt',
     'packs\內建emoji.txt',
-    'packs\台語.txt',
     'LICENSE',
     'CREDITS.md'
 )

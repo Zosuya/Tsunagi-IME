@@ -22,9 +22,12 @@ mod image_dialog;
 mod image_load;
 #[cfg(target_os = "macos")]
 mod mac_panel;
+mod pack_editor;
+mod pack_list;
 mod platform;
 mod preview_font;
 mod preview_pane;
+mod update;
 
 // 這兩個是從本檔拆出去的，**用 glob 匯入是刻意的**——拆的目的是
 // 把「畫預覽」跟「設定項」分開看，不是要在呼叫處多一層前綴。
@@ -32,12 +35,24 @@ use color::*;
 use preview_pane::*;
 
 use eframe::egui;
-use ime_core::config::{Colors, Config, EnterInSelect, Font, Metrics};
+use ime_core::config::{Colors, Config, DeleteUnitKey, EnterInSelect, Font, Metrics};
 
 fn main() -> eframe::Result<()> {
     // 預載包（內建符號）跟使用者自己的包一起列在「擴充包」分頁裡，
     // 所以設定頁也要知道它在哪。位置在行程的一生裡不會變，設一次就好。
     ime_core::pack::set_bundled_dir(bundled_packs_dir());
+
+    // **注音詞庫**：擴充包編輯器要拿它反查（打「胡桃」自動填出按鍵，
+    // 見 §2.75.3）。
+    //
+    // **開在背景**——載進來要一兩秒，擋在這裡的話設定頁按下去要等
+    // 才會出現。反查只在使用者真的去編輯擴充包時才用得到，那時早就
+    // 載好了；萬一還沒好也只是那一次填不出按鍵，他可以自己填。
+    if let Some(data) = project_data_dir() {
+        std::thread::spawn(move || {
+            ime_core::dict::load_bopomofo(&data);
+        });
+    }
 
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -221,6 +236,8 @@ struct App {
     /// **一定要快取**——egui 每一幀都重畫，直接在畫的時候掃資料夾＋
     /// 讀檔會每秒摔硬碟幾十次。掃一次存起來，按「重新整理」才重掃。
     packs: Option<Vec<ime_core::pack::Info>>,
+    /// 擴充包編輯器的狀態（開著哪個包、預覽還是編輯中）
+    pack_edit: pack_editor::State,
     /// 學習檔的條數快取。**egui 是 immediate mode**，每一幀都會跑一次
     /// 畫面程式碼——不快取的話等於每秒讀六十次檔。鍵是檔案的修改時間，
     /// 使用者手動刪行之後回到這一頁會自動更新。
@@ -232,6 +249,14 @@ struct App {
     loaded_font: String,
     /// 解除安裝的兩段式確認按到第二段了嗎。**不是設定**，只是畫面狀態。
     uninstall_confirming: bool,
+    /// **輸入法正在組字嗎？**（整個視窗一個旗標）
+    ///
+    /// 用來擋掉被輸入法吃掉、卻又被 egui 補回來的鍵，見 `shield_ime_keys`。
+    ime_composing: bool,
+    /// 更新檢查（背景跑，結果在這裡等畫面來拿）
+    updates: update::Checker,
+    /// 這次開設定頁自動查過了嗎。**一次就好**——`update` 每一幀都會跑。
+    update_auto_started: bool,
 }
 
 impl App {
@@ -246,9 +271,13 @@ impl App {
             dbg: debug_page::DebugState::default(),
             asking_close: false,
             packs: None,
+            pack_edit: pack_editor::State::default(),
             learn_stats: None,
             loaded_font: String::new(),
             uninstall_confirming: false,
+            ime_composing: false,
+            updates: update::Checker::default(),
+            update_auto_started: false,
         }
     }
 
@@ -279,7 +308,7 @@ impl App {
         egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
             ui.heading("尚未儲存");
             ui.add_space(6.0);
-            ui.label("設定改過了但還沒儲存，關掉的話這些調整會消失。");
+            ui.label("設定尚未儲存，關閉後這些變更將會遺失。");
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 if ui.button("儲存並關閉").clicked() {
@@ -304,8 +333,98 @@ impl App {
     }
 }
 
+/// 掃這一幀的 IME 事件，回報 `(還在組字嗎, 要不要擋鍵)`。
+///
+/// 抽成純函式是為了測得到——判準本身很容易寫錯（見 `shield_ime_keys`
+/// 的長註解），而建一個真的 `App` 會去讀使用者的設定檔。
+fn scan_ime(was_composing: bool, events: &[egui::Event]) -> (bool, bool) {
+    let mut composing = was_composing;
+    // **送出候選的那一幀也要擋**：Enter 跟 Commit 同一幀來，那個 Enter
+    // 是輸入法吃掉的。`Disabled` 不算——它是「IME 關掉了」，那時使用者
+    // 早就不在組字，擋了只會吃掉正常的按鍵。
+    let mut committed = false;
+    for e in events {
+        match e {
+            egui::Event::Ime(egui::ImeEvent::Preedit(s)) => composing = !s.is_empty(),
+            egui::Event::Ime(egui::ImeEvent::Commit(_)) => {
+                composing = false;
+                committed = true;
+            }
+            // IME 被開啟／關閉：**這不是組字**，不能拿來當擋鍵的理由
+            egui::Event::Ime(egui::ImeEvent::Disabled) => composing = false,
+            egui::Event::Ime(egui::ImeEvent::Enabled) => {}
+            _ => {}
+        }
+    }
+    (composing, was_composing || committed)
+}
+
+impl App {
+    /// 把輸入法的鍵從這一幀的事件裡拿掉：**Tab 一律拿掉，Enter／Esc
+    /// 只在組字中拿掉**。
+    ///
+    /// # 為什麼要有這一道
+    ///
+    /// 輸入法在組字時會**吃掉**這幾個鍵（Enter 選候選、Esc 退出選字、
+    /// Tab 開段選單），Windows 只給宿主一個 `VK_PROCESSKEY`。但
+    /// egui-winit 對這種鍵會**退回實體鍵位**（`logical_key.or(physical_key)`），
+    /// 於是文字框仍然收到一個 Enter——單行框收到 Enter 就結束編輯、
+    /// 失去焦點，接著 egui 通知 winit「關掉 IME」，IMM32 相容層一收到
+    /// 就把還沒送出的組字**整個中止**，殘留的字全丟（實測：用方向鍵
+    /// 選過字再按 Enter，文字框留下 `su3`、輸入法送出空字串）。
+    ///
+    /// 記事本沒這個問題：它是真正的 TSF 宿主，被吃掉的鍵根本不會到它
+    /// 手上。直接按 Enter 也沒事：輸入法在同一下就先把字送出了，之後
+    /// egui 再關 IME 已經無傷。**只有「輸入法吃了鍵但還在組字」這種
+    /// 情況會炸**——選字、段選單、Esc 都是。
+    ///
+    /// 所以在每一幀的最開頭，只要輸入法**在組字**，就把這三個鍵抽掉，
+    /// 文字框看不到就不會誤動作。
+    /// 放在整個 App 而不是某個欄位：名稱、說明那些一般文字框一樣會踩到。
+    ///
+    /// # 判準只認組字，不認「開關 IME」
+    ///
+    /// `ImeEvent::Enabled`／`Disabled` 是**輸入法被開啟／關閉**的通知，
+    /// 跟「正在組字」是兩回事——egui 在焦點進入文字框時就會送 `Enabled`。
+    /// 早期版本把「這一幀有任何 IME 事件」也算成組字中，於是**沒在組字
+    /// 時按 Enter 也被吃掉**。判準收窄成**只看 `Preedit` 的內容**（那才是
+    /// 「組字區有東西」），外加送出候選那一幀的 `Commit`——Enter 跟
+    /// Commit 同一幀來，那個 Enter 也是輸入法吃掉的，不能放給文字框。
+    ///
+    /// # Tab 的跳欄不在這裡擋（擋不掉）
+    ///
+    /// **刪掉 Tab 事件阻止不了跳欄**——egui 的焦點是在 `begin_pass` 決定的
+    /// （`memory/mod.rs` 把 Tab 轉成 `FocusDirection::Next`），那在
+    /// `update()` **之前**就跑完了，這裡再刪事件焦點早就移走了。
+    /// 實測：把 Tab 從事件裡拿掉，還是會跳欄（使用者回報）。
+    ///
+    /// 正確的做法是 `EventFilter { tab: true }`——**那是 egui 給 widget
+    /// 宣告「這個鍵我自己要」的正式管道**，`begin_pass` 的焦點處理會先
+    /// 問它。設在文字框上，見 `pack_editor::ime_filter`。
+    fn shield_ime_keys(&mut self, ctx: &egui::Context) {
+        let (composing, shield) = ctx.input(|i| scan_ime(self.ime_composing, &i.events));
+        self.ime_composing = composing;
+        if !shield {
+            return;
+        }
+        ctx.input_mut(|i| {
+            i.events.retain(|e| {
+                !matches!(
+                    e,
+                    egui::Event::Key {
+                        key: egui::Key::Enter | egui::Key::Escape | egui::Key::Tab,
+                        ..
+                    }
+                )
+            });
+        });
+    }
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.shield_ime_keys(ctx);
+
         // **改過還沒存就攔下關閉**——設定頁改半天關掉才發現沒存，
         // 那些調整全白做了
         if ctx.input(|i| i.viewport().close_requested()) && self.dirty() {
@@ -321,6 +440,11 @@ impl eframe::App for App {
         if self.loaded_font != self.cfg.font.family {
             self.loaded_font = self.cfg.font.family.clone();
             install_cjk_font(ctx, &self.loaded_font);
+        }
+        // 開設定頁時查一次有沒有新版（設定裡可以關）。背景跑，失敗不出聲。
+        if self.cfg.check_updates && !self.update_auto_started {
+            self.update_auto_started = true;
+            self.updates.start(ctx);
         }
         // 設定檔關掉 debug 之後，別停在一個看不見的分頁上
         if self.tab == Tab::Debug && !self.cfg.debug {
@@ -338,6 +462,17 @@ impl eframe::App for App {
                 // 平常使用者不需要看到引擎的內部狀態。
                 if self.cfg.debug {
                     ui.selectable_value(&mut self.tab, Tab::Debug, "  除錯  ");
+                }
+                // **有新版時分頁列右邊掛一個提示**——停在「行為」分頁的使用者
+                // 不會自己去點「關於」。點了就跳過去看細節。
+                if let Some(update::Status::Available(rel)) = self.updates.status() {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let text = egui::RichText::new(format!("有新版 {}", rel.tag))
+                            .color(egui::Color32::from_rgb(0x2E, 0x7D, 0x32));
+                        if ui.link(text).clicked() {
+                            self.tab = Tab::About;
+                        }
+                    });
                 }
             });
             ui.add_space(4.0);
@@ -384,8 +519,20 @@ impl eframe::App for App {
                         Tab::Behavior => behavior_page(ui, &mut self.cfg),
                         Tab::Select => select_page(ui, &mut self.cfg, &mut self.learn_stats),
                         Tab::Appearance => appearance_page(ui, &mut self.cfg),
-                        Tab::Packs => packs_page(ui, &mut self.cfg, &mut self.packs),
-                        Tab::About => about_page(ui, &mut self.uninstall_confirming),
+                        // **清單與編輯器合在同一頁**：上面選一個包，
+                        // 下面就是它的內容
+                        Tab::Packs => pack_editor::page(
+                            ui,
+                            &mut self.pack_edit,
+                            &mut self.cfg,
+                            &mut self.packs,
+                        ),
+                        Tab::About => about_page(
+                            ui,
+                            &mut self.uninstall_confirming,
+                            &mut self.cfg,
+                            &self.updates,
+                        ),
                         Tab::Debug => unreachable!(),
                     });
                 }
@@ -394,19 +541,33 @@ impl eframe::App for App {
     }
 }
 
+/// 章節之間的分隔：**留白、線、留白、標題**。
+///
+/// 抽成一支是因為好幾個地方都要**一模一樣**——間距差個兩像素，
+/// 整頁看起來就像沒對齊。數值跟「關於」分頁一致。
+fn section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(14.0);
+    ui.separator();
+    ui.add_space(10.0);
+    ui.heading(title);
+    ui.add_space(4.0);
+}
+
+/// 說明文字。**一律灰色小字**，跟控制項本身分開。
+fn hint(ui: &mut egui::Ui, text: &str) {
+    // **不要用 Markdown 語法**——egui 的 RichText 不解析，`**` 會原樣
+    // 印出來。同理，字串裡換行的話原始碼縮排也會變成內容的一部分，
+    // 要寫成一行讓 egui 自己折行。
+    ui.label(egui::RichText::new(text).weak());
+}
+
 fn behavior_page(ui: &mut egui::Ui, cfg: &mut Config) {
     ui.add_space(8.0);
     ui.heading("啟用的語言");
-    ui.add_space(6.0);
-    ui.label(
-        // **不要用 Markdown 語法**——egui 的 RichText 不解析，`**` 會原樣
-        // 印出來。同理，字串裡換行的話原始碼縮排也會變成內容的一部分，
-        // 要寫成一行讓 egui 自己折行。
-        egui::RichText::new(
-            "關掉的語言連自動辨識都會跳過——不打日文的話關掉它，sushi 就穩定判成英文，不會忽然變成「すし」。",
-        )
-
-            .weak(),
+    ui.add_space(4.0);
+    hint(
+        ui,
+        "關掉的語言連自動辨識都跳過——不打日文就關掉它，sushi 才不會忽然變成「すし」。",
     );
     ui.add_space(6.0);
     ui.checkbox(&mut cfg.behavior.engines.bopomofo, "中文注音");
@@ -421,18 +582,39 @@ fn behavior_page(ui: &mut egui::Ui, cfg: &mut Config) {
         ui.add_space(4.0);
         ui.colored_label(
             egui::Color32::from_rgb(0xC6, 0x28, 0x28),
-            "兩個都關掉的話就只剩英文，跟一般鍵盤沒有差別。",
+            "兩個都關就只剩英文，跟一般鍵盤一樣。",
         );
     }
 
-    ui.add_space(18.0);
-    ui.heading("標點");
+    section(ui, "模糊音");
+    hint(
+        ui,
+        "「今天」的ㄣ打成ㄥ也照樣出「今天」——用詞庫當證據反推打錯了哪個音。\
+         修的四組是ㄣ/ㄥ、ㄓ/ㄗ、ㄔ/ㄘ、ㄕ/ㄙ。",
+    );
     ui.add_space(6.0);
+    ui.checkbox(&mut cfg.behavior.fuzzy_tone, "模糊音自動修正");
+    ui.add_space(4.0);
+    // **講清楚退路**：這是會「自己改掉使用者打的東西」的功能，
+    // 不告訴他怎麼退回去的話，撞到誤判時會不知所措。
+    hint(
+        ui,
+        "打對的字不受影響（原本就查得到詞就完全不動它）。\
+         真的想要原本那個音時按選字鍵，候選裡就是你實際打的那串鍵的字；\
+         選過的那格之後就不再自動修正。",
+    );
+
+    section(ui, "標點");
     // **切換鍵兩個平台不一樣**，不能寫死（macOS 收不到 Ctrl）。
-    ui.label(format!(
-        "全形／半形（打字時按 {} 可隨時切換，這裡設的是開機預設）：",
-        crate::platform::WIDTH_TOGGLE_KEY
-    ));
+    hint(
+        ui,
+        &format!(
+            "這裡設的是開機預設，打字時按 {} 隨時切換。",
+            crate::platform::WIDTH_TOGGLE_KEY
+        ),
+    );
+    ui.add_space(6.0);
+    ui.label("全形／半形：");
     ui.radio_value(
         &mut cfg.behavior.width,
         ime_core::width::Width::Auto,
@@ -451,7 +633,7 @@ fn behavior_page(ui: &mut egui::Ui, cfg: &mut Config) {
 }
 
 /// 把這一格撐到剩下的寬度，讓 `Grid` 的隔行底色塗滿整列。
-fn fill(ui: &mut egui::Ui) {
+pub(crate) fn fill(ui: &mut egui::Ui) {
     ui.allocate_space(egui::vec2(ui.available_width(), 0.0));
 }
 
@@ -468,7 +650,7 @@ fn fill(ui: &mut egui::Ui) {
 /// `RPC_E_CHANGED_MODE`（模式不同）。兩種都不影響接下來的呼叫，
 /// 硬要當成錯誤反而讓按鈕永遠沒反應。
 #[cfg(windows)]
-fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
+pub(crate) fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
     use windows::Win32::System::Com::{
@@ -515,13 +697,13 @@ fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
 /// 現在回 `None`（等同使用者按取消），路徑欄位維持原值。
 /// macOS：系統的「選資料夾」面板。
 #[cfg(target_os = "macos")]
-fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
+pub(crate) fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
     mac_panel::pick(mac_panel::Want::Folder, start)
 }
 
 /// 其他平台還沒接系統對話框，一律回 `None`（路徑仍然可以手動輸入）。
 #[cfg(not(any(windows, target_os = "macos")))]
-fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
+pub(crate) fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
     let _ = start;
     None
 }
@@ -529,7 +711,7 @@ fn pick_folder(start: Option<&std::path::Path>) -> Option<String> {
 /// 滑鼠停在包名上時顯示的完整基本資料。
 ///
 /// 檔名一定列出來——設定檔存的是它，出問題時要對得回去。
-fn details(info: &ime_core::pack::Info) -> String {
+pub(crate) fn details(info: &ime_core::pack::Info) -> String {
     let mut lines: Vec<String> = Vec::new();
     if let Some(d) = &info.meta.description {
         lines.push(d.clone());
@@ -564,8 +746,17 @@ fn details(info: &ime_core::pack::Info) -> String {
 /// 檔頭是手寫的，會跟內容不一致——寫「符號包」卻裝滿詞的話該信哪個？
 /// 而且舊包沒有那一行，一樣得從內容推。內容本來就數得出來，
 /// **推導出來的事實不會說謊**，多一個可以矛盾的欄位只是多一個 bug 的來源。
-fn kind_tag(info: &ime_core::pack::Info) -> &'static str {
+pub(crate) fn kind_tag(info: &ime_core::pack::Info) -> &'static str {
     let 有詞 = info.en + info.ja + info.zh > 0;
+    // **台語先判**：它是獨立的一層（`Packs::tw`），跟詞不是同一回事
+    // ——查「沙發」拿到「膨椅」是「多一個選擇」，不是「加一個詞」
+    if info.tw > 0 {
+        return if 有詞 || info.sym > 0 {
+            "混合"
+        } else {
+            "台語"
+        };
+    }
     match (有詞, info.sym > 0) {
         (true, true) => "詞＋符號",
         (true, false) => "詞",
@@ -582,7 +773,7 @@ fn kind_tag(info: &ime_core::pack::Info) -> &'static str {
 /// 候選，跟一條詞不是同一種東西，不標的話會被當成「只收了 5 個符號」。
 /// 數的是名字不是組——同一組符號常常中日英各有一個名字（包裡寫成
 /// `星,ほし,star`），數組的話跟使用者「能叫出幾個」對不上。
-fn breakdown(info: &ime_core::pack::Info) -> String {
+pub(crate) fn breakdown(info: &ime_core::pack::Info) -> String {
     let mut parts: Vec<String> = Vec::new();
     if info.en > 0 {
         parts.push(format!("英 {}", info.en));
@@ -611,16 +802,22 @@ fn breakdown(info: &ime_core::pack::Info) -> String {
 /// 2. **解除安裝**（只有 macOS 需要，見 `platform::uninstall_script`）。
 ///    原本放在「行為」分頁底部，但那頁講的是打字行為，混在一起不對；
 ///    fcitx5-macos 也是放在「關於」
-fn about_page(ui: &mut egui::Ui, confirming: &mut bool) {
+fn about_page(
+    ui: &mut egui::Ui,
+    confirming: &mut bool,
+    cfg: &mut Config,
+    updates: &update::Checker,
+) {
     ui.add_space(8.0);
     ui.heading("通譯輸入法");
     ui.label(
         egui::RichText::new(format!(
-            "版本 {}　·　通 · つなぎ · Tsunagi",
+            "版本 {}　·　通譯 · つなぎ · Tsunagi",
             env!("CARGO_PKG_VERSION")
         ))
         .weak(),
     );
+    update_section(ui, cfg, updates);
     ui.add_space(10.0);
     ui.label("一套輸入法同時處理中文注音、日文羅馬字與英文，依輸入內容自動判斷，不必手動切換。");
 
@@ -694,6 +891,60 @@ fn about_page(ui: &mut egui::Ui, confirming: &mut bool) {
     });
 }
 
+/// 「關於」分頁的更新檢查那一塊：狀態、手動檢查、下載頁、自動檢查的開關。
+///
+/// **失敗只寫一行灰字**，不跳視窗——沒網路、限流都是常態，不是錯誤。
+fn update_section(ui: &mut egui::Ui, cfg: &mut Config, updates: &update::Checker) {
+    use update::Status;
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        let status = updates.status();
+        match &status {
+            None => {}
+            Some(Status::Checking) => {
+                ui.spinner();
+                ui.label(egui::RichText::new("檢查更新中…").weak());
+            }
+            Some(Status::UpToDate) => {
+                ui.label(egui::RichText::new("已是最新版").weak());
+            }
+            Some(Status::Available(rel)) => {
+                ui.colored_label(
+                    egui::Color32::from_rgb(0x2E, 0x7D, 0x32),
+                    format!("有新版 {}", rel.tag),
+                );
+                if ui.button("開啟下載頁").clicked() {
+                    open_url(&rel.url);
+                }
+            }
+            Some(Status::Failed) => {
+                ui.label(
+                    egui::RichText::new("無法檢查更新（沒有網路，或 GitHub 暫時拒絕）").weak(),
+                );
+            }
+        }
+        if status != Some(Status::Checking) && ui.button("檢查更新").clicked() {
+            updates.start(ui.ctx());
+        }
+    });
+    ui.checkbox(&mut cfg.check_updates, "開啟設定頁時自動檢查更新");
+    hint(
+        ui,
+        "只查 GitHub 上的版本號、提示有沒有新版，不會自動下載或安裝。查詢會讓 GitHub 知道有人在用這個輸入法，不想要就關掉。",
+    );
+}
+
+/// 用瀏覽器開網址。
+fn open_url(url: &str) {
+    #[cfg(windows)]
+    let cmd = "explorer";
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let cmd = "xdg-open";
+    let _ = std::process::Command::new(cmd).arg(url).spawn();
+}
+
 /// 打開跟設定頁放在一起的檔案（`CREDITS.md`／`LICENSE`）。
 ///
 /// **用鄰居找，不寫死路徑**——理由同 `platform::uninstall_script`。
@@ -725,94 +976,145 @@ fn select_page(
 ) {
     ui.add_space(8.0);
     ui.heading("選字");
+    ui.add_space(4.0);
+    hint(ui, "框停在哪個字上，往下選它換成哪一個。");
     ui.add_space(6.0);
 
-    ui.label("選字時按 Enter：");
+    ui.label("按 Enter：");
     ui.radio_value(
         &mut cfg.behavior.enter_in_select,
         EnterInSelect::Next,
-        "選中反白的字，然後移到下一個字",
+        "選中反白的字，移到下一個",
     );
     ui.radio_value(
         &mut cfg.behavior.enter_in_select,
         EnterInSelect::Exit,
-        "選中反白的字，然後離開選字",
+        "選中反白的字，離開選字",
     );
 
-    ui.add_space(12.0);
+    ui.add_space(10.0);
     let last_enabled = cfg.behavior.enter_in_select == EnterInSelect::Next;
     ui.add_enabled_ui(last_enabled, |ui| {
         ui.checkbox(
             &mut cfg.behavior.commit_on_last,
-            "最後一個字選完直接送出（不然只離開選字，要再按一次 Enter）",
+            "最後一個字選完直接送出（不然要再按一次 Enter）",
         );
     });
     if !last_enabled {
-        ui.label(egui::RichText::new("（上面選「離開選字」時這項無效）").weak());
+        hint(ui, "（選「離開選字」時這項無效）");
     }
 
-    ui.add_space(18.0);
-    ui.heading("段選單（TAB）");
-    ui.add_space(2.0);
-    ui.label(
-        egui::RichText::new(
-            "TAB 反白一段、往下選它是什麼。跟上面的選字是兩層——選字挑的是「哪個字」，段選單挑的是「這一段是什麼」，所以兩邊可以各自設定。",
-        )
-        .weak(),
+    ui.add_space(10.0);
+    ui.label("倒退鍵刪掉反白這一個字：");
+    hint(
+        ui,
+        "框停在中間時，倒退鍵刪掉整個字，而不是最後一個注音符號。這顆鍵原本是刪一個鍵，要選誰佔。",
+    );
+    ui.add_space(4.0);
+    ui.radio_value(
+        &mut cfg.behavior.delete_marked_cell,
+        DeleteUnitKey::Off,
+        "不啟用（維持刪一個鍵）",
+    );
+    ui.radio_value(
+        &mut cfg.behavior.delete_marked_cell,
+        DeleteUnitKey::Backspace,
+        "倒退鍵（選字時就不能刪一個鍵）",
+    );
+    ui.radio_value(
+        &mut cfg.behavior.delete_marked_cell,
+        DeleteUnitKey::ShiftBackspace,
+        "Shift+倒退鍵（兩者並存）",
+    );
+    ui.add_space(4.0);
+    hint(
+        ui,
+        "預設不啟用：自動模式一格未必是一個字（日文一格可能是整句），而且刪完會重新斷句。",
+    );
+
+    section(ui, "段選單（TAB）");
+    hint(
+        ui,
+        "TAB 反白一段、往下選它是什麼。跟選字是兩層——選字挑「哪個字」，段選單挑「這一段是什麼」，所以各自設定。",
     );
     ui.add_space(6.0);
 
-    ui.label("段選單裡按 Enter：");
+    ui.label("按 Enter：");
     ui.radio_value(
         &mut cfg.behavior.enter_in_segmenu,
         EnterInSelect::Next,
-        "選中這一段，然後移到下一段",
+        "選中這一段，移到下一段",
     );
     ui.radio_value(
         &mut cfg.behavior.enter_in_segmenu,
         EnterInSelect::Exit,
-        "選中這一段，然後關掉選單",
+        "選中這一段，關掉選單",
     );
 
-    ui.add_space(12.0);
+    ui.add_space(10.0);
     let seg_last_enabled = cfg.behavior.enter_in_segmenu == EnterInSelect::Next;
     ui.add_enabled_ui(seg_last_enabled, |ui| {
         ui.checkbox(
             &mut cfg.behavior.commit_on_last_seg,
-            "最後一段選完直接送出（不然只關掉選單，要再按一次 Enter）",
+            "最後一段選完直接送出（不然要再按一次 Enter）",
         );
     });
     if !seg_last_enabled {
-        ui.label(egui::RichText::new("（上面選「關掉選單」時這項無效）").weak());
+        hint(ui, "（選「關掉選單」時這項無效）");
     }
 
-    ui.add_space(18.0);
-    // 下面幾項都只在鎖定語言時有意義，先講怎麼鎖。切換鍵走 `platform`
-    // 那份常數，不寫死在文案裡（早期寫死成「單按 Ctrl」，鍵位換掉之後
-    // 這裡就開始騙人）。
-    ui.label(format!(
-        "以下只在鎖定語言時生效（打字時按 {} 依序切換自動／注音／日文／英文）：",
-        crate::platform::LOCK_TOGGLE_KEY
-    ));
+    ui.add_space(10.0);
+    ui.label("倒退鍵刪掉反白這一段：");
+    hint(
+        ui,
+        "刪掉之後前面的字不變，後面才重算。這顆鍵在選單裡原本是刪一個鍵，要選誰佔。",
+    );
+    ui.add_space(4.0);
+    // **三個選項的順序跟選字那組一致**（關／倒退鍵／Shift）——兩組並排
+    // 在同一頁，順序不同的話使用者要重新找一次
+    ui.radio_value(
+        &mut cfg.behavior.delete_marked_seg,
+        DeleteUnitKey::Off,
+        "不啟用（維持刪一個鍵）",
+    );
+    ui.radio_value(
+        &mut cfg.behavior.delete_marked_seg,
+        DeleteUnitKey::Backspace,
+        "倒退鍵（選單裡就不能刪一個鍵，要先按 TAB 關掉）",
+    );
+    ui.radio_value(
+        &mut cfg.behavior.delete_marked_seg,
+        DeleteUnitKey::ShiftBackspace,
+        "Shift+倒退鍵（兩者並存）",
+    );
+
+    // 這一段原本只有一行「以下只在鎖定語言時生效」當招牌，跟上面那組
+    // 貼在一起看不出是新的一段。**給它跟別人一樣的標題**。切換鍵走
+    // `platform` 那份常數，不寫死在文案裡（早期寫死成「單按 Ctrl」，
+    // 鍵位換掉之後這裡就開始騙人）。
+    section(ui, "鎖定語言");
+    hint(
+        ui,
+        &format!(
+            "打字時按 {} 依序切換自動／注音／日文／英文。以下兩項只在鎖定時生效。",
+            crate::platform::LOCK_TOGGLE_KEY
+        ),
+    );
     ui.add_space(6.0);
     ui.checkbox(
         &mut cfg.behavior.backspace_whole_cell,
-        "鎖定語言時，倒退鍵刪掉整個反白的字",
+        "倒退鍵刪掉整個反白的字",
     );
-    ui.label(
-        egui::RichText::new(
-            "關掉的話回到原本的行為（刪掉尾端的一個音節）。自動模式不受影響——那時的一格未必對應一個字。",
-        )
-        .weak(),
+    hint(
+        ui,
+        "不勾的話刪掉尾端一個音節。這項不套用到自動模式——那裡一格未必是一個字，要整段刪請用段選單那一項。",
     );
 
-    ui.add_space(12.0);
-    ui.label("鎖定注音時，這五個鍵（, . ; / -）：");
-    ui.label(
-        egui::RichText::new(
-            "它們在注音鍵盤上是 ㄝㄡㄤㄥㄦ，一鍵兩用。判斷規則跟自動模式同一條：接了聲調就是注音，否則構不成字，那就是標點。",
-        )
-        .weak(),
+    ui.add_space(10.0);
+    ui.label("鎖定注音時，, . ; / - 這五個鍵：");
+    hint(
+        ui,
+        "它們在注音鍵盤上是 ㄝㄡㄤㄥㄦ，一鍵兩用。規則跟自動模式同一條：接了聲調就是注音，否則是標點。",
     );
     ui.add_space(4.0);
     ui.radio_value(
@@ -834,30 +1136,25 @@ fn select_page(
             &mut cfg.behavior.ctrl_punct,
             "用 Ctrl + 那個鍵可以明講「我要標點」",
         );
-        ui.label(
-            egui::RichText::new(
-                "代價是那些組合在鎖定注音時到不了程式本身——Ctrl+- （瀏覽器縮小）和 Ctrl+/ （編輯器註解）會失效。會用到的話就關掉它。",
-            )
-            .weak(),
+        hint(
+            ui,
+            "代價是那些組合在鎖定注音時到不了程式本身——Ctrl+-（瀏覽器縮小）和 Ctrl+/（編輯器註解）會失效。",
         );
     }
 
-    ui.add_space(18.0);
-    ui.heading("智慧學習");
-    ui.add_space(6.0);
-    let (learned, watching) = learn_stats(stats);
-    ui.label(
-        egui::RichText::new(
-            "同一個讀音選過兩次的字會自動記住，之後就直接給你那個字。記錄存在 learned.txt，跟設定檔同一個資料夾。",
-        )
-        .weak(),
+    section(ui, "智慧學習");
+    hint(
+        ui,
+        "同一個讀音選過兩次就自動記住，之後直接給你那個字。記錄在 learned.txt，跟設定檔同一個資料夾。",
     );
-    ui.add_space(6.0);
-    ui.label(format!(
-        "目前記住 {learned} 條，另有 {watching} 條還在觀察（選過一次，還沒生效）。"
-    ));
-    ui.add_space(6.0);
+    ui.add_space(8.0);
+    let (learned, watching) = learn_stats(stats);
+    // **數字跟按鈕排同一列**：它們講的是同一件事（學了什麼、去哪看），
+    // 拆成上下兩段中間還夾留白，反而看不出關係
     ui.horizontal(|ui| {
+        ui.label(format!(
+            "記住 {learned} 條，另有 {watching} 條還在觀察（選過一次）。"
+        ));
         if ui.button("開啟資料夾").clicked() {
             // 資料夾可能還不存在——先建再開，不然總管會說找不到。
             // 做法跟「開啟主題資料夾」一致。
@@ -869,11 +1166,9 @@ fn select_page(
         }
     });
     ui.add_space(6.0);
-    ui.label(
-        egui::RichText::new(
-            "學錯了就把 learned.txt 裡那一行刪掉——不必重開程式，打下一個字就重讀了。三欄依序是：按鍵、文字、選過幾次。",
-        )
-        .weak(),
+    hint(
+        ui,
+        "學錯了就刪掉 learned.txt 裡那一行，不必重開程式。三欄依序是：按鍵、文字、選過幾次。",
     );
 }
 
@@ -895,292 +1190,6 @@ fn learn_stats(
             v
         }
     }
-}
-
-/// 擴充包分頁。
-///
-/// # 為什麼順序不能調
-///
-/// 清單依檔名排序，衝突時誰贏就照這個順序。使用者定的（2026-09-01）：
-/// 先不做上下移動，包不多的時候夠用，真的撞到衝突再說。
-fn packs_page(ui: &mut egui::Ui, cfg: &mut Config, cache: &mut Option<Vec<ime_core::pack::Info>>) {
-    ui.add_space(8.0);
-    ui.heading("擴充包");
-    ui.add_space(6.0);
-    ui.label(
-        egui::RichText::new(
-            r"擴充包是你自己加的詞表——遊戲名、專有名詞、常打的英文詞。加進來之後不只選字會有，連「這串按鍵是不是英文」的判斷都會跟著改。也可以加符號：打「\名字\」就叫得出你自己那一排。",
-        )
-        .weak(),
-    );
-
-    ui.add_space(12.0);
-
-    // ── 資料夾 ──
-    //
-    // 路徑做成可編輯的欄位：留空是預設位置，填了就用填的。
-    // **不再有隱形的後備位置**——畫面上寫什麼就是什麼。
-    let target = ime_core::pack::resolved_dir(&cfg.behavior.packs_dir);
-    let exists = target.as_ref().is_some_and(|p| p.is_dir());
-    let 預設 = ime_core::pack::resolved_dir("")
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-
-    ui.horizontal(|ui| {
-        ui.label("資料夾：");
-        let w = ui.available_width() - 200.0;
-        let r = ui.add_sized(
-            [w.max(160.0), 22.0],
-            egui::TextEdit::singleline(&mut cfg.behavior.packs_dir).hint_text(&預設),
-        );
-        if r.changed() {
-            // 路徑變了，清單要重掃
-            *cache = None;
-        }
-        if ui.button("瀏覽…").clicked() {
-            if let Some(p) = pick_folder(target.as_deref()) {
-                cfg.behavior.packs_dir = p;
-                *cache = None;
-            }
-        }
-    });
-
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        match &target {
-            // 路徑已經在上面的欄位裡了，這一行只講狀態，不再印一次
-            Some(p) if exists => {
-                if ui.button("開啟資料夾").clicked() {
-                    reveal_folder(p);
-                }
-            }
-            Some(p) => {
-                ui.colored_label(
-                    egui::Color32::from_rgb(0xC6, 0x28, 0x28),
-                    "這個資料夾還不存在",
-                );
-                let p = p.clone();
-                if ui.button("建立").clicked() && std::fs::create_dir_all(&p).is_ok() {
-                    *cache = None;
-                }
-            }
-            None => {
-                ui.colored_label(
-                    egui::Color32::from_rgb(0xC6, 0x28, 0x28),
-                    // 訊息不要只講 Windows：macOS 的對應物是
-                    // ~/Library/Application Support
-                    "找不到可用的位置（使用者資料夾讀不到？）",
-                );
-            }
-        }
-        if !cfg.behavior.packs_dir.trim().is_empty() && ui.button("用預設位置").clicked() {
-            cfg.behavior.packs_dir.clear();
-            *cache = None;
-        }
-        if ui.button("重新整理").clicked() {
-            *cache = None;
-        }
-    });
-
-    ui.add_space(12.0);
-
-    // 掃一次存起來——egui 每一幀都重畫，不快取等於每秒讀幾十次磁碟
-    let list = cache.get_or_insert_with(|| {
-        let mut v: Vec<ime_core::pack::Info> = ime_core::pack::available(&cfg.behavior.packs_dir)
-            .into_iter()
-            .map(|f| ime_core::pack::info(&cfg.behavior.packs_dir, &f))
-            .collect();
-        // **依顯示名排序，不是檔名**——使用者看到的是包名，照檔名排
-        // 會看起來像沒排序（`devterms.txt` 顯示成「程式術語」）。
-        v.sort_by(|a, b| a.title().cmp(b.title()));
-        v
-    });
-
-    // 設定裡啟用了、但檔案不見的包。也排進清單裡（標紅），
-    // 不然使用者會困惑「明明開了卻沒作用」
-    let missing: Vec<String> = cfg
-        .behavior
-        .packs
-        .iter()
-        .filter(|n| !list.iter().any(|i| &i.file == *n))
-        .cloned()
-        .collect();
-
-    if list.is_empty() && missing.is_empty() {
-        ui.label("這個資料夾裡還沒有任何包。");
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new("放一個 .txt 進去，按上面的「重新整理」就會出現在這裡。").weak(),
-        );
-    } else {
-        // **用 Grid 而不是一行一個 horizontal**：欄位要對齊，
-        // 名字長短不一的時候「詞彙數」那欄才不會參差不齊。
-        // `striped` 讓相鄰的列有淡淡的底色，行數多也掃得下去。
-        egui::Grid::new("pack_list")
-            .num_columns(5)
-            .striped(true)
-            .spacing([16.0, 8.0])
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("啟用").weak());
-                ui.label(egui::RichText::new("名稱").weak());
-                ui.label(egui::RichText::new("詞彙數").weak());
-                ui.label(egui::RichText::new("內容").weak());
-                // 補一格空的撐滿寬度——隔行底色只塗到最後一格為止，
-                // 不撐滿的話色帶會斷在半路，看起來不像一整列
-                fill(ui);
-                ui.end_row();
-
-                let mut toggled = false;
-                for info in list.iter() {
-                    let mut on = cfg.behavior.packs.iter().any(|p| p == &info.file);
-                    let total = info.total();
-                    // 空包不給勾——勾了也沒有任何作用，讓它可勾只會讓人
-                    // 以為壞掉。停在這裡比讓使用者去猜好。
-                    ui.add_enabled_ui(total > 0, |ui| {
-                        if ui.checkbox(&mut on, "").changed() {
-                            if on {
-                                cfg.behavior.packs.push(info.file.clone());
-                            } else {
-                                cfg.behavior.packs.retain(|p| p != &info.file);
-                            }
-                            toggled = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        // **型別標在名字前面**，因為「內容」那一欄有寫
-                        // 描述的話會被描述佔走——只放符號的包在清單上
-                        // 就看不出它是符號包了。兩件事分開放，不互相擠掉。
-                        let kind = kind_tag(info);
-                        if !kind.is_empty() {
-                            ui.label(egui::RichText::new(format!("〔{kind}〕")).weak().small());
-                        }
-                        // 顯示名來自檔頭的 `# name:`，沒寫就是檔名
-                        ui.label(info.title()).on_hover_text(details(info));
-                        if let Some(v) = &info.meta.version {
-                            ui.label(egui::RichText::new(format!("v{v}")).weak().small());
-                        }
-                    });
-                    if total > 0 {
-                        ui.label(format!("{total}"));
-                        // 有寫說明就顯示說明——那比語言分佈更有用；
-                        // 分佈滑到名字上就看得到
-                        let text = info
-                            .meta
-                            .description
-                            .clone()
-                            .unwrap_or_else(|| breakdown(info));
-                        ui.label(egui::RichText::new(text).weak())
-                            .on_hover_text(details(info));
-                    } else if info.error == Some(ime_core::pack::PackReadError::NotUtf8) {
-                        // **編碼不對跟「沒有詞」是兩回事**（§2.49.3）。
-                        //
-                        // Big5（記事本的「ANSI」）存的包格式完全正確，
-                        // 使用者照「格式不對」那句話去檢查格式**永遠查
-                        // 不出來**。要直接講編碼，還要講怎麼修。
-                        ui.label(egui::RichText::new("—").weak());
-                        ui.label(
-                            egui::RichText::new("編碼不是 UTF-8（用記事本另存為 UTF-8）")
-                                .color(egui::Color32::from_rgb(200, 80, 60))
-                                .italics(),
-                        );
-                    } else {
-                        ui.label(egui::RichText::new("0").weak());
-                        ui.label(
-                            egui::RichText::new("還沒有詞（沒填，或格式不對）")
-                                .weak()
-                                .italics(),
-                        );
-                    }
-                    fill(ui);
-                    ui.end_row();
-                }
-
-                // **設定裡的順序就是衝突時的優先序**，所以要跟畫面上
-                // 看到的順序一致。不排的話順序等於「勾選的先後」，
-                // 那是使用者完全看不見的東西。
-                if toggled {
-                    let order: std::collections::HashMap<&str, usize> = list
-                        .iter()
-                        .enumerate()
-                        .map(|(i, x)| (x.file.as_str(), i))
-                        .collect();
-                    cfg.behavior
-                        .packs
-                        .sort_by_key(|p| order.get(p.as_str()).copied().unwrap_or(usize::MAX));
-                }
-
-                for name in &missing {
-                    ui.label("");
-                    ui.label(egui::RichText::new(name).strikethrough().weak());
-                    ui.label(egui::RichText::new("—").weak());
-                    ui.horizontal(|ui| {
-                        ui.colored_label(egui::Color32::from_rgb(0xC6, 0x28, 0x28), "找不到檔案");
-                        if ui.small_button("從清單移除").clicked() {
-                            cfg.behavior.packs.retain(|n| n != name);
-                        }
-                    });
-                    fill(ui);
-                    ui.end_row();
-                }
-            });
-
-        ui.add_space(8.0);
-        let on = cfg.behavior.packs.len() - missing.len();
-        let words: usize = list
-            .iter()
-            .filter(|i| cfg.behavior.packs.iter().any(|p| p == &i.file))
-            .map(|i| i.total())
-            .sum();
-        ui.label(egui::RichText::new(format!("已啟用 {on} 個包，共 {words} 個詞")).weak());
-    }
-
-    ui.add_space(18.0);
-    ui.collapsing("檔案格式", |ui| {
-        ui.label("檔案開頭可以寫這個包的基本資料（都可以省略，沒寫就用檔名當名稱）：");
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(
-                "# name: Hololive 詞庫
-# version: 1.2
-# author: 你的名字
-# description: VTuber 名字與常見的梗
-# license: CC0
-# updated: 2026-09-01",
-            )
-            .monospace(),
-        );
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new("只認開頭那一段連續註解，遇到第一行詞就停。啟用狀態記的是檔名，所以改名稱不會讓已啟用的包失效。")
-                .weak(),
-        );
-
-        ui.add_space(12.0);
-        ui.label("接下來是詞，每行三欄用 Tab 分隔：語言、輸入、輸出。");
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(
-                "en	hololive
-ja	ほろらいぶ	ホロライブ
-zh	ㄏㄨˊㄊㄠˊ	胡桃",
-            )
-            .monospace(),
-        );
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new(
-                "英文是原樣送出，第三欄可以省略。中文那欄寫注音符號不是按鍵，手動維護時看得懂。# 開頭的是註解。",
-            )
-            .weak(),
-        );
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(
-                "同一個包裡三種語言可以混著寫——「hololive」「ほろらいぶ」「ㄏㄨˊㄊㄠˊ」是三種不同的輸入方式，各自要登記。",
-            )
-            .weak(),
-        );
-    });
 }
 
 fn appearance_page(ui: &mut egui::Ui, cfg: &mut Config) {
@@ -1383,7 +1392,7 @@ fn chrono_stamp() -> String {
 
 fn colors_section(ui: &mut egui::Ui, c: &mut Colors) {
     ui.heading("顏色");
-    ui.label(egui::RichText::new("列的是「用途」不是顏色").weak());
+    ui.label(egui::RichText::new("列出的是用途，不是顏色名稱").weak());
     ui.add_space(4.0);
     // **三欄不是兩欄**：中間那欄專門放漸層的開關。
     //
@@ -1487,7 +1496,7 @@ fn font_picker(ui: &mut egui::Ui, f: &mut Font) {
 ///
 /// 三處都走這裡（學習檔、擴充包、主題）。原本各自寫死 `explorer`，
 /// 那在 macOS 上是**按了完全沒反應**——跟字型對話框同一類的洞。
-fn reveal_folder(dir: &std::path::Path) {
+pub(crate) fn reveal_folder(dir: &std::path::Path) {
     let _ = std::fs::create_dir_all(dir);
     #[cfg(windows)]
     let cmd = "explorer";
@@ -1646,6 +1655,93 @@ fn shipped_dir(name: &str) -> Option<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    /// **擋鍵的判準**（`shield_ime_keys`）：只認「正在組字」。
+    ///
+    /// 組字中 Enter／Esc／Tab 都是輸入法的，一起擋。**跳欄是另一回事**
+    /// ——那擋不掉（焦點在 `begin_pass` 就決定了），走
+    /// `pack_editor::lock_tab_while_composing` 的 `EventFilter`。
+    mod 擋鍵的判準 {
+        use super::super::scan_ime;
+        use egui::{Event, ImeEvent};
+
+        fn ime(e: ImeEvent) -> Event {
+            Event::Ime(e)
+        }
+
+        /// **沒在組字就不擋**——平常 Enter／Esc／Tab 都是正常的介面操作。
+        #[test]
+        fn 沒在組字不擋() {
+            assert_eq!(scan_ime(false, &[]), (false, false), "什麼都沒發生");
+        }
+
+        /// `Enabled`／`Disabled` 是 IME 開關，**不是組字**。
+        ///
+        /// 焦點進入文字框時 egui 就會送 `Enabled`，把它當成組字的話
+        /// 那一幀的 Enter 會被平白吃掉。
+        #[test]
+        fn 開關ime不算組字() {
+            assert_eq!(
+                scan_ime(false, &[ime(ImeEvent::Enabled)]),
+                (false, false),
+                "IME 被開啟不是組字"
+            );
+            assert_eq!(
+                scan_ime(false, &[ime(ImeEvent::Disabled)]),
+                (false, false),
+                "IME 被關閉更不是組字"
+            );
+        }
+
+        /// 組字中要擋——這是這道防護原本要修的事，不能修壞。
+        #[test]
+        fn 組字中要擋() {
+            // 這一幀開始組字：狀態變成組字中，但擋鍵看的是「這一幀之前」
+            let (composing, shield) = scan_ime(false, &[ime(ImeEvent::Preedit("ㄅ".into()))]);
+            assert!(composing, "Preedit 有內容就是組字中");
+            assert!(!shield, "剛開始組字的那一幀還沒有要擋的鍵");
+            // 下一幀還在組字：這時 Enter／Esc／Tab 都是輸入法的
+            assert_eq!(scan_ime(true, &[]), (true, true), "組字中要擋");
+        }
+
+        /// **送出候選的那一幀也要擋**：Enter 跟 Commit 同一幀來。
+        #[test]
+        fn 送出那幀要擋() {
+            let (composing, shield) = scan_ime(true, &[ime(ImeEvent::Commit("你好".into()))]);
+            assert!(!composing, "送出之後就不是組字中了");
+            assert!(shield, "那一幀的 Enter 是輸入法吃掉的，不能放給文字框");
+        }
+
+        /// **移動焦點的鍵跟著組字狀態走**：組字中鎖住、沒組字就放行。
+        ///
+        /// 這是 `pack_editor::lock_ime_keys_while_composing` 餵給
+        /// `EventFilter` 的那個值（Tab ＋ 四個方向鍵一起）——焦點移動
+        /// 擋不掉（在 `begin_pass` 就決定了），只能用這個管道宣告
+        /// 「這幾個鍵我自己要」。
+        #[test]
+        fn 移動焦點的鍵跟著組字狀態() {
+            // 沒在組字：filter 不鎖，Tab 跳欄、方向鍵移焦點都正常
+            let (composing, _) = scan_ime(false, &[]);
+            assert!(!composing, "沒在組字時該是一般的介面操作");
+            // 組字中：filter 鎖住，那幾下留給段選單（Tab 開、方向鍵選）
+            let (composing, _) = scan_ime(false, &[ime(ImeEvent::Preedit("ㄅ".into()))]);
+            assert!(composing, "組字中要留給輸入法");
+        }
+
+        /// 組字結束之後**下一幀 Enter 就要恢復放行**。
+        ///
+        /// 這條鎖住「不會自我維持」：擋過一幀之後狀態要真的歸零，
+        /// 不然 Enter 會永遠按不動。
+        #[test]
+        fn 組字結束就恢復放行() {
+            // 送出（擋）→ 下一幀什麼都沒有（放行）
+            let (composing, _) = scan_ime(true, &[ime(ImeEvent::Commit("你好".into()))]);
+            assert_eq!(scan_ime(composing, &[]), (false, false), "下一幀要放行");
+            // 空的 Preedit 也是結束（被取消）
+            let (composing, _) = scan_ime(true, &[ime(ImeEvent::Preedit(String::new()))]);
+            assert_eq!(scan_ime(composing, &[]), (false, false), "取消組字後放行");
+        }
+    }
+
     /// **這一組是為了「換字型就閃退」那個 bug 寫的。**
     ///
     /// 光驗字型資料的結構還不夠——真正會炸的是 egui 拿去排版的那一刻。

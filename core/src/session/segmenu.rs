@@ -90,6 +90,43 @@ pub struct SegCand {
     ///   實測見開發文件 §2.64.13。
     /// - 選單上可以標示這是另一種語言的說法。
     pub taigi: bool,
+    /// **這是「注音符號直出」**：選了就把這一段的按鍵原樣換成注音符號
+    /// （`su3cl3` → `ㄋㄧˇㄏㄠˇ`），不經過選詞層。
+    ///
+    /// 用途是把注音符號當文字打出來（維護 `priority.txt`、寫擴充包、
+    /// 寫文件）。原本是整句選單尾巴那一列，2026-09-15 整句選單刪掉後
+    /// 搬進段選單，**固定排第 9 個**（使用者定）——第一頁的最後一格，
+    /// 位置固定比忽隱忽現好按。
+    ///
+    /// 跟 `taigi` 一樣要獨立一欄：`keys` 與 `lang` 跟現況那筆一模一樣，
+    /// 光靠它們分不出來。定案時記進 `Session::seg_symbol`。
+    pub symbol: bool,
+}
+
+/// 「注音符號直出」排在段選單的第幾個（0 起算）。候選不夠多就接在尾巴。
+const SYMBOL_AT: usize = 8;
+
+/// 這串按鍵換成注音符號。有任何一個鍵不在注音配置上就回 `None`。
+///
+/// # 判準是「每個鍵都是注音鍵」，不是「切得出合法音節」
+///
+/// 要求合法音節的話**單獨的符號打不出來**——`ㄅ` 不能自成音節，而這個
+/// 功能的用途正是把 `ㄅㄆㄇㄈ` 與聲調符號 `ˊˇˋ˙` 當文字打。
+///
+/// 代價是它幾乎永遠都在（大千配置把 26 個字母全用掉了，`sushi` 也給得出
+/// `ㄋㄨㄕㄏㄛ`）。使用者裁決（2026-09-01）接受——位置固定反而好按。
+///
+/// 音節之間**不加空格**，跟 `priority.txt`、擴充包的寫法一致。
+fn bopomofo_symbols(keys: &str) -> Option<String> {
+    let mut out = String::new();
+    for c in keys.chars() {
+        // 一聲是空白鍵，沒有對應的符號。注音的一聲本來就不標
+        if c == ' ' {
+            continue;
+        }
+        out.push(crate::bopomofo::keymap::symbol_of(c)?);
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 impl Session {
@@ -106,8 +143,8 @@ impl Session {
     /// 實測正確率從 71 句掉到 38 句，**兩個主人就是那個 bug 的根**。
     pub fn seg_segments(&self) -> Vec<Segment> {
         let mut out = if let Some(c) = self
-            .cut_at(self.cutting_idx)
-            .and_then(|i| self.cuttings.get(i))
+            .cuttings
+            .get(self.cutting_idx)
             .or_else(|| self.cuttings.first())
         {
             c.clone()
@@ -168,11 +205,11 @@ impl Session {
         let mut out = Vec::new();
         let mut i = 0;
         while i < chars.len() {
-            // **一格裝著一整個詞**——定案成台語之後 `apply_taigi` 是整段
+            // **一格裝著一整個詞**——定案成台語之後 `apply_seg_override` 是整段
             // 換掉的（「沙發」兩格併成「膨椅」一格，台語詞跟華語詞 35.5%
             // 字數不同，逐格填不進去）。那一格本身就是一個詞，直接查。
             if chars[i].is_none() {
-                // **後面被清空的格也算進來**：`apply_taigi` 只改文字，
+                // **後面被清空的格也算進來**：`apply_seg_override` 只改文字，
                 // 按鍵留在原本的格子裡（「沙發」兩格的按鍵沒有合併）。
                 // 不涵蓋它們的話定案時只拿到半截按鍵，換不回去。
                 let mut len = 1;
@@ -180,14 +217,12 @@ impl Session {
                     len += 1;
                 }
                 let word = &slots[i].text;
-                if let Some(group) = idx.tw.get(word) {
-                    if group.len() >= 2 {
-                        out.push(TwWord {
-                            at: i,
-                            len,
-                            says: group.clone(),
-                        });
-                    }
+                if idx.tw_len(word) >= 2 {
+                    out.push(TwWord {
+                        at: i,
+                        len,
+                        says: idx.tw_says(word),
+                    });
                 }
                 i += len;
                 continue;
@@ -203,17 +238,16 @@ impl Session {
                 // **詞表是雙向的**（`pack::build_index`），所以畫面上
                 // 顯示華語或台語都查得到同一組——定案成「膨椅」之後
                 // 這裡照樣切得出來，不必另外記「原本是什麼」
-                let Some(group) = idx.tw.get(&word) else {
-                    continue;
-                };
-                // 只有一個說法＝沒有別的講法可選，不算一個詞
-                if group.len() < 2 {
+                // 只有一個說法＝沒有別的講法可選，不算一個詞。
+                // 先問長度再拿內容——斷詞從長到短一路試，多數會落空，
+                // 落空的那些不必配置 Vec
+                if idx.tw_len(&word) < 2 {
                     continue;
                 }
                 out.push(TwWord {
                     at: i,
                     len,
-                    says: group.clone(),
+                    says: idx.tw_says(&word),
                 });
                 i += len;
                 matched = true;
@@ -261,8 +295,7 @@ impl Session {
             .iter()
             .map(|s| s.text.as_str())
             .collect();
-        let idx = crate::pack::index();
-        idx.tw.get(&word).cloned().unwrap_or_default()
+        crate::pack::index().tw_says(&word)
     }
 
     /// 反白那個範圍對應的按鍵——定案時要用它換掉那一截。
@@ -533,6 +566,7 @@ impl Session {
                         // 華語那筆不算台語——它不進 `seg_taigi`，
                         // 定案時走一般的重算（見 `seg_confirm_with`）
                         taigi: w != zh,
+                        symbol: false,
                         keys: keys.clone(),
                         lang: Language::Bopomofo,
                         text: w,
@@ -546,6 +580,7 @@ impl Session {
                     lang: cur.lang,
                     text: self.seg_preview(&cur.keys, cur.lang),
                     taigi: false,
+                    symbol: false,
                 });
             }
             // 使用者推邊界推出來的也算（`Shift+←→`）
@@ -586,6 +621,7 @@ impl Session {
                     lang,
                     text,
                     taigi: false,
+                    symbol: false,
                 });
                 // **同一個長度的不同語言都要列**——那正是「這一段要
                 // 當成什麼」這個問題的核心。`ul4` 可以是注音的「要」
@@ -609,6 +645,7 @@ impl Session {
                     lang: cur.lang,
                     text: self.seg_preview(&cur.keys, cur.lang),
                     taigi: false,
+                    symbol: false,
                 },
             );
         }
@@ -635,6 +672,25 @@ impl Session {
                 std::cmp::Reverse(len),
             )
         });
+        // **注音符號直出固定排第 9 個**（`SYMBOL_AT`）。排序之後才插，
+        // 位置才不會被上面的排序規則推走。
+        //
+        // 跟現況長得一樣就不給（純注音符號本身沒得換）。
+        if let Some(sym) = bopomofo_symbols(&cur.keys) {
+            if !out.iter().any(|c| c.text == sym) {
+                let at = SYMBOL_AT.min(out.len());
+                out.insert(
+                    at,
+                    SegCand {
+                        keys: cur.keys.clone(),
+                        lang: cur.lang,
+                        text: sym,
+                        taigi: false,
+                        symbol: true,
+                    },
+                );
+            }
+        }
         out
     }
 
@@ -698,6 +754,7 @@ impl Session {
         let next = cands
             .iter()
             .enumerate()
+            .filter(|(_, c)| !c.symbol)
             .filter(|(_, c)| {
                 let l = c.keys.chars().count();
                 if longer {
@@ -771,12 +828,13 @@ impl Session {
             lang,
             text,
             taigi: false,
+            symbol: false,
         });
         // 重算之後它會出現在清單裡，把反白移過去
         let target = self
             .seg_cands()
             .iter()
-            .position(|c| c.keys.chars().count() == want && c.lang == lang);
+            .position(|c| !c.symbol && c.keys.chars().count() == want && c.lang == lang);
         if let Some(i) = target {
             self.set_seg_cand(i);
         }
@@ -824,6 +882,11 @@ impl Session {
         if pick.taigi {
             self.seg_taigi.push((pick.keys.clone(), pick.text.clone()));
         }
+        // 符號直出同一個道理：`compose` 只認 `(keys, lang)`，符號得事後套回去
+        self.seg_symbol.retain(|(k, _)| *k != pick.keys);
+        if pick.symbol {
+            self.seg_symbol.push((pick.keys.clone(), pick.text.clone()));
+        }
         prefix.push(Segment {
             keys: pick.keys.clone(),
             is_mark: pick.keys.trim().is_empty(),
@@ -849,7 +912,7 @@ impl Session {
             let was = span.map(|(a, l)| a + l);
             let pick_len = span.map(|(_, l)| l);
             // 只有一段，反白哪裡都不必動；`rebuild_slots` 會把
-            // `seg_taigi` 套回去（見 `apply_taigi`）
+            // `seg_taigi` 套回去（見 `apply_seg_override`）
             self.rebuild_slots();
             // 台語模式：`advance` 決定定案完往哪走，跟選字共用同一個
             // 設定（使用者裁定）。
@@ -981,6 +1044,151 @@ impl Session {
             .map(|x| x.keys.chars().count())
             .sum();
         Some((start, start + s.keys.chars().count()))
+    }
+
+    /// **刪掉反白這一段**。刪不了回 `false`（呼叫端要退回一般的退格）。
+    ///
+    /// # 為什麼這件事在自動模式是安全的
+    ///
+    /// 開發文件 §2.21 當初否決「反白刪除用在自動模式」，唯一的理由是
+    /// **從中間挖掉一塊會讓整串重切、前面沒動到的字跟著變**：
+    ///
+    /// ```text
+    /// check 一下   刪掉「一」→ ちぇ喝下   ← check 整段被判成日文
+    /// ```
+    ///
+    /// 段選單這條路不會——**它本來就在做「前面定案、後面重算」**。
+    /// 刪除前先把反白**以前**的段交給凍結區（`freeze_user_prefix`，
+    /// 跟 `seg_confirm_with` 走同一支），引擎就只准動後面。前區的字
+    /// 是使用者已經看在眼裡的，結構上不會被翻案。
+    ///
+    /// # 凍「格」不凍「位置」
+    ///
+    /// 這裡刻意**不設「離尾端幾格」的窗口**。§2.74.11 實測過位置式的
+    /// 凍結本身就是病因（`RECUT_WINDOW` 因此被拿掉）——比對的基準會
+    /// 不是畫面上的東西。這裡凍的是**段**，邊界由引擎切出來、帶語言
+    /// 標記，是結構性的界線。
+    ///
+    /// # 刪完反白往前挪一段
+    ///
+    /// 跟 `delete_marked_slot`（鎖定模式那條）一致，像文字游標那樣。
+    /// 停在原地的話連按會一路吃掉後面的段。
+    pub fn delete_marked_seg(&mut self) -> bool {
+        // **台語模式不做**：那時反白單位是「詞」而不是「段」，而台語
+        // 詞是「換一種說法」（沙發↔膨椅），刪掉整個詞不是使用者按
+        // 倒退鍵的意思。
+        if self.tw_mode() {
+            return false;
+        }
+        let segs = self.seg_segments();
+        let Some(seg) = segs.get(self.seg_idx) else {
+            return false;
+        };
+        // **空白段照刪**。原本這裡擋掉它（怕「把兩邊的段黏起來」等於
+        // 改變斷詞），**實測證明那個推論是錯的**：段的邊界是引擎依音節
+        // 切的，不靠空白撐著——`注:su3 | 英:␣ | 注:cl3` 刪掉空白之後
+        // 仍然是 `注:su3 | 注:cl3` 兩段，沒有黏成一段。
+        //
+        // 而使用者打了空格又想拿掉，本來就是最自然的需求。
+        let len = seg.keys.chars().count();
+        if len == 0 {
+            return false;
+        }
+        // 段的按鍵接起來就是整串，位移用長度累加就行（同
+        // `delete_marked_slot`）
+        let start: usize = segs[..self.seg_idx]
+            .iter()
+            .map(|x| x.keys.chars().count())
+            .sum();
+        let all: Vec<char> = self.seg_all_keys().chars().collect();
+        if start + len > all.len() {
+            // 對不起來就別亂刪——代表 `seg_segments()` 跟輸入層的按鍵串
+            // 不一致，硬刪會砍到別人身上
+            return false;
+        }
+        // **反白以前的段要定案**，這是「前面不准變」的實作。只把按鍵
+        // 剪掉就交給引擎，正是 §2.21.2 崩掉的原因。
+        let prefix: Vec<Segment> = segs[..self.seg_idx].to_vec();
+        let right: String = all[start + len..].iter().collect();
+
+        if prefix.is_empty() {
+            // 刪的是第一段，前面沒有東西要凍
+            self.input = crate::input::Input::from_keys_with(&right, self.lock, self.engines);
+        } else {
+            // **只把後區交給新引擎，前區用 `adopt_frozen` 補回去。**
+            //
+            // 走 `freeze_user_prefix` 那條快路在這裡沒有意義：它的前提是
+            // 「按鍵串沒變、只是重新宣告前綴怎麼切」，而刪除**改變了按鍵
+            // 串本身**，後區的分支全部要重算。所以直接走慢路（§2.21.6
+            // 記的那條，`seg_confirm_with` 的 fallback）。
+            let mut input = crate::input::Input::from_keys_with(&right, self.lock, self.engines);
+            input.adopt_frozen(prefix.clone());
+            self.input = input;
+        }
+        // 被刪那一段上的使用者修正一併作廢，**後面的往前平移**。
+        //
+        // 按鍵字串比對在這裡不夠（同一串注音出現兩次會誤刪別段的），
+        // 理由同 `Pick` 的說明。
+        let gone = seg.keys.clone();
+        self.picks.retain(|p| p.at < start || p.at >= start + len);
+        for p in &mut self.picks {
+            if p.at >= start + len {
+                p.at -= len;
+            }
+        }
+        // `jp_bounds` 整個 session 只有一份，認的是「哪一段日文」——
+        // 剛好是被刪的那一段就清掉，別段的調整留著
+        if self.jp_bounds.as_ref().is_some_and(|b| b.keys == gone) {
+            self.jp_bounds = None;
+        }
+        self.seg_taigi.retain(|(k, _)| *k != gone);
+        self.seg_symbol.retain(|(k, _)| *k != gone);
+        // 切法提示整個作廢：它記的是切點**位置**，中間挖掉一塊之後全部
+        // 位移，拿舊位置去比一定對不上（§2.21.5）
+        self.chosen_cut = None;
+        // **`seg_locked` 只往上加，不因刪除而「補到」前區長度。**
+        //
+        // 它背了兩個職責：擋反白往左走進定案區，以及讓 `seg_done()`
+        // 判斷「每一段都選過了」。刪除只需要前者，但設下去會誤觸後者
+        // ——實測回報「選到 hello 段刪除反白不會跳到你好」，病因就是
+        // 這裡：反白其實跳對了，但 `seg_locked >= seg_count()` 讓
+        // `seg_done()` 回 true，TSF 層看到就把選單整個關掉，使用者
+        // 看到的是選單消失。
+        //
+        // 刪除**不是定案**：使用者說的是「不要這一段」，沒有說「前面
+        // 那些我都確認過了」。所以只在真的變多時才往上追——凍結區
+        // 該擋的位置由 `adopt_frozen` 自己記著，不靠這個數字。
+        self.seg_locked = self.seg_locked.min(prefix.len());
+        self.refresh();
+
+        // # 反白刪完該停哪裡
+        //
+        // **後面還有段就留在原地**（遞補上來的那一段就在原位），
+        // **刪掉的是最後一段就往前跳**（使用者要求 2026-09-10）——
+        // 夾回範圍內是不夠的，實測會停在**空白段**上：
+        //
+        // ```text
+        // 你好 hello   刪掉 hello → 反白落在 英:␣ 那一段
+        // ```
+        //
+        // 空白段沒什麼可選，反白停在它上面看起來就是卡住。所以往前
+        // 跳的時候要**跳過空白段**，停在第一個真的有東西可挑的段上。
+        let n = self.seg_count();
+        if n == 0 {
+            // 整串刪光了，沒有選單可留
+            self.seg_idx = 0;
+            self.seg_done_flag = true;
+        } else if self.seg_idx >= n {
+            // 刪的是最後一段——往前找第一個非空白的段
+            let segs = self.seg_segments();
+            self.seg_idx = (0..n)
+                .rev()
+                .find(|&i| segs.get(i).is_some_and(|x| !x.keys.trim().is_empty()))
+                // 整句只剩空白段的話就停在最後一段，總得指著什麼
+                .unwrap_or(n - 1);
+        }
+        self.set_seg_cand(0);
+        true
     }
 
     /// 取消段選單，回到引擎自己算的分段。
@@ -1149,7 +1357,7 @@ mod tests {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        crate::dict::bopomofo_loaded()
+        crate::dict::all_loaded()
     }
 
     fn sess(keys: &str) -> Session {
@@ -1158,6 +1366,153 @@ mod tests {
             s.push(c);
         }
         s
+    }
+
+    #[test]
+    fn 刪掉反白這一段_按鍵真的少一段() {
+        if !load() {
+            return;
+        }
+        // 三段：注音、注音、英文
+        let mut s = sess("su3cl3hello");
+        let before = s.keys().to_string();
+        let segs = s.seg_segments();
+        assert!(segs.len() >= 2, "要有兩段以上才測得出來：{segs:?}");
+        let gone = segs[0].keys.clone();
+        assert!(s.delete_marked_seg(), "第一段該刪得掉");
+        let after = s.keys().to_string();
+        assert_eq!(
+            after.chars().count(),
+            before.chars().count() - gone.chars().count(),
+            "按鍵該剛好少掉那一段：{before} → {after}（刪的是 {gone}）"
+        );
+        assert!(!after.starts_with(&gone), "被刪那一段的按鍵還在：{after}");
+    }
+
+    /// **這是段刪除的核心承諾**：刪掉中間某一段之後，**前面的字不准變**。
+    ///
+    /// 開發文件 §2.21 當初否決「反白刪除用在自動模式」就是因為做不到
+    /// 這件事——從中間挖掉一塊會讓整串重切（`check 一下` 刪掉「一」
+    /// 之後 `check` 被判成日文）。段選單靠「前面定案、後面重算」解掉。
+    #[test]
+    fn 刪掉中間那一段_前面的字不准變() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3hello");
+        let segs = s.seg_segments();
+        if segs.len() < 3 {
+            // 分段數不夠就測不到「中間」，換一句更長的
+            return;
+        }
+        // 反白移到第二段（中間），記下第一段現在顯示什麼
+        s.seg_right();
+        assert_eq!(s.seg_index(), 1, "反白該在第二段");
+        let first_before: String = s.slots()[..1].iter().map(|x| x.text.clone()).collect();
+        assert!(s.delete_marked_seg(), "中間那一段該刪得掉");
+        let first_after: String = s.slots()[..1].iter().map(|x| x.text.clone()).collect();
+        assert_eq!(
+            first_before, first_after,
+            "前面的字被翻案了——前區凍結沒生效"
+        );
+    }
+
+    /// **空白段照刪，而且不會把兩邊黏成一段。**
+    ///
+    /// 原本擋掉空白段（怕「改變斷詞」），實測證明那個推論錯了——
+    /// 段的邊界是引擎依音節切的，不靠空白撐著。
+    #[test]
+    fn 刪掉空白段_兩邊不會黏成一段() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3 cl3");
+        let segs = s.seg_segments();
+        let Some(at) = segs.iter().position(|x| x.keys.trim().is_empty()) else {
+            return; // 這句沒切出空白段就沒什麼可測
+        };
+        let before = s.seg_count();
+        while s.seg_index() < at {
+            s.seg_right();
+        }
+        assert_eq!(s.seg_index(), at, "反白該停在空白那一段");
+        assert!(s.delete_marked_seg(), "空白段該刪得掉");
+        assert_eq!(
+            s.seg_count(),
+            before - 1,
+            "該剛好少一段——黏起來的話會少兩段：{:?}",
+            s.seg_segments()
+        );
+        assert!(!s.text().contains(' '), "空白還在：{:?}", s.text());
+    }
+
+    /// **刪掉最後一段時反白要往前跳，而且要跳過空白段**
+    /// （使用者要求 2026-09-10）。
+    ///
+    /// 只「夾回範圍內」不夠：`你好 hello` 刪掉 `hello` 之後反白會落在
+    /// 空白那一段上，那一段沒什麼可選，看起來就是卡住。
+    #[test]
+    fn 刪掉最後一段_反白往前跳且跳過空白段() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3 hello");
+        let n = s.seg_count();
+        if n < 3 {
+            return; // 要有「注音｜空白｜英文」三段才測得到
+        }
+        for _ in 0..n {
+            s.seg_right();
+        }
+        assert!(s.delete_marked_seg(), "最後一段該刪得掉");
+        // **選單要留著**——不然反白跳到哪都看不到（實測回報
+        // 「選到 hello 段刪除反白不會跳到你好」，病因是 `seg_locked`
+        // 被設成前區長度，讓 `seg_done()` 誤判「每一段都選過了」，
+        // TSF 層就把選單關掉了）。
+        //
+        // **這一條是那次實測漏掉的斷言**：原本只驗 `seg_index()`，
+        // 反白其實跳對了，壞的是選單早就不在了。
+        assert!(!s.seg_done(), "選單被關掉了——反白跳到哪都看不到");
+        let at = s.seg_index();
+        let segs = s.seg_segments();
+        assert!(at < segs.len(), "反白指到段數之外了：{at} / {}", segs.len());
+        assert!(
+            !segs[at].keys.trim().is_empty(),
+            "反白停在空白段上了：第 {at} 段 = {:?}",
+            segs
+        );
+    }
+
+    /// 刪掉**中間**那一段之後選單也要留著（同上，不同路徑）。
+    #[test]
+    fn 刪掉中間那一段_選單要留著() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3 hello");
+        if s.seg_count() < 3 {
+            return;
+        }
+        s.seg_right(); // 反白移到中間
+        assert!(s.delete_marked_seg());
+        assert!(!s.seg_done(), "選單被關掉了");
+    }
+
+    /// 刪到只剩一段、再刪光——**不可以 panic，也不可以留著空選單**。
+    #[test]
+    fn 一路刪到空() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3");
+        let mut guard = 0;
+        while s.seg_count() > 0 && guard < 20 {
+            if !s.delete_marked_seg() {
+                break;
+            }
+            guard += 1;
+        }
+        assert!(guard < 20, "刪不完，可能有無窮迴圈");
     }
 
     #[test]
@@ -1392,7 +1747,7 @@ mod widen_tests {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        crate::dict::bopomofo_loaded()
+        crate::dict::all_loaded()
     }
 
     fn sess(keys: &str) -> Session {
@@ -1449,7 +1804,7 @@ mod scroll_tests {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        crate::dict::bopomofo_loaded()
+        crate::dict::all_loaded()
     }
 
     fn sess(keys: &str) -> Session {
@@ -1543,7 +1898,7 @@ mod extend_tests {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        crate::dict::bopomofo_loaded()
+        crate::dict::all_loaded()
     }
 
     fn sess(keys: &str) -> Session {
@@ -1607,7 +1962,7 @@ mod done_tests {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        crate::dict::bopomofo_loaded()
+        crate::dict::all_loaded()
     }
 
     fn sess(keys: &str) -> Session {
@@ -1667,7 +2022,7 @@ mod learn_tests {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        crate::dict::bopomofo_loaded()
+        crate::dict::all_loaded()
     }
 
     fn sess(keys: &str) -> Session {
@@ -1760,7 +2115,7 @@ mod revisit_tests {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        crate::dict::bopomofo_loaded()
+        crate::dict::all_loaded()
     }
 
     fn sess(keys: &str) -> Session {
@@ -1831,7 +2186,7 @@ mod advance_tests {
             .unwrap()
             .join("data");
         crate::preload(&data, crate::config::Engines::default());
-        crate::dict::bopomofo_loaded()
+        crate::dict::all_loaded()
     }
 
     fn sess(keys: &str) -> Session {
@@ -1946,7 +2301,7 @@ mod taigi_tests {
                 .unwrap()
                 .join("data");
             crate::preload(&data, crate::config::Engines::default());
-            if !crate::dict::bopomofo_loaded() {
+            if !crate::dict::all_loaded() {
                 return false;
             }
             write_test_pack()
@@ -2450,5 +2805,288 @@ mod taigi_tests {
             "選回中文之後一樣要跳到「謝謝」"
         );
         assert!(!s.seg_done(), "還有「謝謝」可選，不該誤判成走完整句");
+    }
+}
+
+/// 注音符號直出：段選單的第 9 個候選（2026-09-15 從整句選單搬過來）。
+///
+/// 它**不是一種解釋**（不經過選詞層、沒有候選），所以要確認的不只是
+/// 「有沒有出現、排第幾」，還有定案之後的狀態對不對。
+#[cfg(test)]
+mod symbol_tests {
+    use super::*;
+
+    fn load() -> bool {
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("data");
+        crate::preload(&data, crate::config::Engines::default());
+        crate::dict::all_loaded()
+    }
+
+    fn sess(keys: &str) -> Session {
+        let mut s = Session::new();
+        for c in keys.chars() {
+            s.push(c);
+        }
+        s.seg_open();
+        s
+    }
+
+    /// 反白那一段的符號候選：`(第幾個, 文字)`。
+    fn 符號(s: &Session) -> Option<(usize, String)> {
+        s.seg_cands()
+            .into_iter()
+            .enumerate()
+            .find(|(_, c)| c.symbol)
+            .map(|(i, c)| (i, c.text))
+    }
+
+    #[test]
+    fn 音節連寫不加空格() {
+        if !load() {
+            return;
+        }
+        let (_, text) = 符號(&sess("su3cl3")).expect("該有符號直出");
+        assert_eq!(text, "ㄋㄧˇㄏㄠˇ");
+    }
+
+    /// **固定第 9 個**（使用者定）；候選不到 8 個時接在尾巴。
+    #[test]
+    fn 排第9個_不夠就排最後() {
+        if !load() {
+            return;
+        }
+        // `datadaijyoubu` 第一段有二十個候選，夠多
+        let s = sess("datadaijyoubu");
+        let (i, _) = 符號(&s).expect("該有符號直出");
+        assert_eq!(i, SYMBOL_AT, "候選夠多時固定第 9 個");
+
+        let s = sess("su3");
+        let n = s.seg_cands().len();
+        let (i, _) = 符號(&s).expect("該有符號直出");
+        if n <= SYMBOL_AT + 1 {
+            assert_eq!(i, n - 1, "候選不夠多時接在最後");
+        }
+    }
+
+    /// **單獨的聲母與聲調都要打得出來**——這正是這個功能的用途。
+    #[test]
+    fn 單獨的聲母與聲調都打得出來() {
+        if !load() {
+            return;
+        }
+        let (_, text) = 符號(&sess("1qaz")).expect("聲母序列");
+        assert_eq!(text, "ㄅㄆㄇㄈ");
+        let (_, text) = 符號(&sess("3")).expect("聲調符號");
+        assert_eq!(text, "ˇ");
+    }
+
+    /// 一聲是空白鍵、沒有對應符號——跳過才是正確的注音寫法。
+    #[test]
+    fn 一聲不標符號() {
+        if !load() {
+            return;
+        }
+        let (_, text) = 符號(&sess("y ")).expect("ㄗ 一聲");
+        assert_eq!(text, "ㄗ");
+    }
+
+    /// 定案之後：送出的是符號，而且那一格**不能選字**。
+    #[test]
+    fn 定案之後送出符號且不給選字() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3");
+        let (i, _) = 符號(&s).unwrap();
+        s.seg_set_cand(i);
+        s.seg_confirm();
+        assert_eq!(s.text(), "ㄋㄧˇㄏㄠˇ");
+        let first = &s.slots()[0];
+        assert!(!first.selectable, "符號沒有候選可選");
+    }
+
+    /// **定案之後再打字要留著**——每打一鍵都會重算，沒套回去就會變回中文。
+    #[test]
+    fn 定案之後再打字仍是符號() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3");
+        let (i, _) = 符號(&s).unwrap();
+        s.seg_set_cand(i);
+        s.seg_confirm();
+        for c in "cl3".chars() {
+            s.push(c);
+        }
+        assert!(
+            s.text().starts_with("ㄋㄧˇ"),
+            "定案的那段要留著符號：{}",
+            s.text()
+        );
+    }
+
+    /// 打了不在注音配置上的鍵（`=`）就沒有這一項。
+    #[test]
+    fn 配置外的鍵就沒有() {
+        if !load() {
+            return;
+        }
+        let mut s = Session::new();
+        for c in "su3=".chars() {
+            s.push(c);
+        }
+        s.seg_open();
+        // 反白走到含 `=` 的那一段
+        while !s.seg_segments()[s.seg_index()].keys.contains('=')
+            && s.seg_index() + 1 < s.seg_count()
+        {
+            s.seg_right();
+        }
+        if s.seg_segments()[s.seg_index()].keys.contains('=') {
+            assert!(符號(&s).is_none(), "含配置外的鍵就不該有");
+        }
+    }
+
+    /// **挑過符號就不學切詞**——那一段仍標著原本的語言，記下去是錯的知識。
+    #[test]
+    fn 挑過符號不學切詞() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3");
+        let (i, _) = 符號(&s).unwrap();
+        s.seg_set_cand(i);
+        s.seg_confirm();
+        assert_eq!(s.learn_seg_choice(), 0);
+    }
+}
+
+/// **倒退鍵不能丟掉段選單定案過的段**（實測回報 2026-09-15：選過切法之後
+/// 按倒退鍵，整句跳回英文、TAB 選單失效）。
+#[cfg(test)]
+mod backspace_keeps_choice_tests {
+    use super::*;
+
+    fn load() -> bool {
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("data");
+        crate::preload(&data, crate::config::Engines::default());
+        crate::dict::all_loaded()
+    }
+
+    fn sess(keys: &str) -> Session {
+        let mut s = Session::new();
+        for c in keys.chars() {
+            s.push(c);
+        }
+        s
+    }
+
+    /// 挑第 `i` 段的某個候選並定案。
+    fn 定案(s: &mut Session, want: impl Fn(&SegCand) -> bool) {
+        s.seg_open();
+        let i = s.seg_cands().iter().position(want).expect("候選裡要有");
+        s.seg_set_cand(i);
+        s.seg_confirm();
+    }
+
+    #[test]
+    fn 刪後區的鍵_前面定案的留著() {
+        if !load() {
+            return;
+        }
+        // `su3cl3` 定案成英文，後面接著打日文再倒退
+        let mut s = sess("su3cl3gohann");
+        定案(&mut s, |c| {
+            c.lang == Language::English && c.keys == "su3cl3"
+        });
+        assert!(s.text().starts_with("su3cl3"), "前提：{}", s.text());
+        s.backspace();
+        assert!(
+            s.text().starts_with("su3cl3"),
+            "倒退之後定案的英文段不該被重算成中文：{}",
+            s.text()
+        );
+        assert_eq!(s.keys(), "su3cl3gohan");
+    }
+
+    #[test]
+    fn 全部定案之後倒退_只解除最後一段() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3gohann");
+        定案(&mut s, |c| {
+            c.lang == Language::English && c.keys == "su3cl3"
+        });
+        定案(&mut s, |c| {
+            c.lang == Language::English && c.keys == "gohann"
+        });
+        assert_eq!(s.text(), "su3cl3gohann", "前提");
+        assert!(s.seg_done());
+
+        s.backspace();
+        assert_eq!(s.keys(), "su3cl3gohan");
+        assert!(
+            s.text().starts_with("su3cl3"),
+            "第一段仍是定案的英文：{}",
+            s.text()
+        );
+        assert!(!s.seg_done(), "最後一段解除定案了，選單不該被判定成走完");
+    }
+
+    /// **TAB 重開要還能用**——`seg_locked` 沒跟著調的話一開就被判定走完。
+    #[test]
+    fn 倒退之後重開選單還選得到() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("gohannwotabemasu");
+        定案(&mut s, |c| {
+            c.keys == "gohannwotabemasu" && c.lang == Language::Romaji
+        });
+        s.backspace();
+        s.backspace();
+        s.seg_open();
+        assert!(!s.seg_done(), "重開不該立刻走完");
+        assert!(!s.seg_cands().is_empty(), "要有候選可選");
+    }
+
+    #[test]
+    fn 連按倒退到空不會崩() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3gohann");
+        定案(&mut s, |c| {
+            c.lang == Language::English && c.keys == "su3cl3"
+        });
+        for _ in 0..20 {
+            s.backspace();
+        }
+        assert!(s.is_empty());
+        assert_eq!(s.text(), "");
+    }
+
+    /// 刪進符號直出那一段 → 那段解除定案，不能留著半截符號。
+    #[test]
+    fn 刪進符號直出那段_解除符號() {
+        if !load() {
+            return;
+        }
+        let mut s = sess("su3cl3");
+        定案(&mut s, |c| c.symbol);
+        assert_eq!(s.text(), "ㄋㄧˇㄏㄠˇ");
+        s.backspace();
+        assert!(
+            !s.text().contains('ㄏ'),
+            "符號直出應該解除，交回引擎：{}",
+            s.text()
+        );
     }
 }

@@ -93,7 +93,7 @@ pub fn is_word(word: &str) -> bool {
     // 領域包是**另一層**，不是併進詞典裡的。先問它——使用者自己加的詞
     // 應該贏過統計，而且這樣改設定就能換掉，不必重建詞典。
     // 沒啟用包的話 `is_empty()` 直接短路，一次查詢都不多做。
-    if crate::pack::any() && crate::pack::index().en.contains(lower.as_ref()) {
+    if crate::pack::any() && crate::pack::index().en_has(lower.as_ref()) {
         return true;
     }
     // 學到的切詞也算「是個英文詞」。
@@ -132,7 +132,7 @@ pub fn is_word(word: &str) -> bool {
 pub fn is_common_word(word: &str) -> bool {
     // 包裡的詞一律算常用——使用者特地列進來就是要它被認得，
     // 不該再拿短詞的頻率門檻去擋（那道門檻是為了濾詞典裡的雜訊）。
-    if crate::pack::any() && crate::pack::index().en.contains(key(word).as_ref()) {
+    if crate::pack::any() && crate::pack::index().en_has(key(word).as_ref()) {
         return true;
     }
     if !is_word(word) {
@@ -168,7 +168,7 @@ pub fn rank(word: &str) -> Option<u32> {
     // 包裡的詞排最前面——領域詞是使用者明講要的，不該輸給語料裡
     // 剛好比較常見的雜訊。`is_top_word` 也靠這條，所以包裡的英文詞
     // 不會在跟日文段相鄰時被搶走。
-    if crate::pack::any() && crate::pack::index().en.contains(lower.as_ref()) {
+    if crate::pack::any() && crate::pack::index().en_has(lower.as_ref()) {
         return Some(0);
     }
     // 學到的切詞排在包前面——包是整批引進的通用詞，這是這個人自己

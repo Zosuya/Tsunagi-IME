@@ -137,10 +137,13 @@ fn apply_config(state: &mut State) {
         width,
         engines,
         backspace_whole_cell,
+        delete_marked_seg,
+        delete_marked_cell,
         packs,
         packs_dir,
         lock_punct,
         ctrl_punct,
+        fuzzy_tone,
     } = &state.config.behavior;
     let (width, engines) = (*width, *engines);
     let (backspace_whole_cell, lock_punct) = (*backspace_whole_cell, *lock_punct);
@@ -155,6 +158,10 @@ fn apply_config(state: &mut State) {
     state.session.set_backspace_whole_cell(backspace_whole_cell);
     // 鎖定注音時 , . ; / - 這五個一鍵兩用的鍵怎麼處理
     state.session.set_lock_punct(lock_punct);
+    // 注音打錯音的自動修正（ㄣ/ㄥ 那類）。**是全域旗標不是 session 狀態**
+    // ——`compose` 是純函式、四個入口都不收設定，而這個開關一個行程一份，
+    // 語意跟 `learn::any()` 一樣。見 `compose::set_fuzzy_tone`。
+    ime_core::compose::set_fuzzy_tone(*fuzzy_tone);
 
     // ── 以下不在這裡套用，但**必須交代** ──
     //
@@ -167,6 +174,12 @@ fn apply_config(state: &mut State) {
     let _ = (packs, packs_dir);
     // Ctrl+標點鍵：在 `mod.rs` 的按鍵入口現查（`ctrl_punct(vk)`）。
     let _ = ctrl_punct;
+    // 段選單刪整段／選字刪整格綁哪顆鍵：都在按鍵當下現查（`mod.rs` 的
+    // `DeleteSeg`／`DeleteCell`）。**不能在這裡 `set_`**——它們是三態，
+    // 而且要看當下 Shift 有沒有按著，那是按鍵入口才知道的事。
+    //
+    // **兩組各自一個設定**（格與段是兩種粒度，理由同 `enter_in_segmenu`）。
+    let _ = (delete_marked_seg, delete_marked_cell);
     // 外觀立刻套用到候選視窗
     let theme = crate::theme::Theme::from_config(&state.config);
     // **兩個視窗各有一份主題**（預覽列與候選清單是分開的視窗），

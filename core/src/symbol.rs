@@ -76,11 +76,7 @@ pub fn lookup(name: &str) -> Vec<String> {
     }
     // 已經是拆好的清單——「怎麼拆」在 `pack::parse` 就決定了。
     // 這裡原本是 `s.chars()`，2026-09-07 改的：emoji 拆不了字元。
-    crate::pack::index()
-        .sym
-        .get(name)
-        .cloned()
-        .unwrap_or_default()
+    crate::pack::index().sym_get(name)
 }
 
 #[cfg(test)]

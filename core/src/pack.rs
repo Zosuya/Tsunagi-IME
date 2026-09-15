@@ -39,7 +39,7 @@
 //! 這裡的靜態**，詞庫載入時自己來拿——沒載過就是空的，行為跟以前
 //! 完全一樣。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -176,9 +176,13 @@ fn dirs(custom: &str) -> Vec<PathBuf> {
     v
 }
 
-/// 有哪些包可以啟用？回傳檔名（不含 `.txt`），依名稱排序。
+/// 有哪些包可以啟用？回傳檔名（不含副檔名），依名稱排序。
 ///
 /// 給設定頁列清單用。**只看檔案存不存在，不解析內容**——列清單要快。
+///
+/// **`.txt` 與 `.bin` 都算**：官方包是二進位的（§2.83），只認 `.txt`
+/// 的話它們在設定頁完全看不到，使用者無從勾選。同名的兩種只列一次
+/// ——`find_pack` 決定實際載哪一個。
 pub fn available(custom: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for d in dirs(custom) {
@@ -187,7 +191,11 @@ pub fn available(custom: &str) -> Vec<String> {
         };
         for name in entries
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().is_some_and(|x| x == "txt"))
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|x| x == "txt" || x == "bin")
+            })
             .filter_map(|e| e.path().file_stem()?.to_str().map(str::to_string))
         {
             // 同名只列一次——`dirs()` 排好優先序了，使用者的那份贏
@@ -281,6 +289,202 @@ fn parse(content: &str, into: &mut Packs) {
     }
 }
 
+/// 指進 `Pool` 的一段字。**`Index` 內部用，不對外**。
+///
+/// 為什麼不存 `String`：見 `Pool` 的說明。`u32` 夠用——單一包的
+/// 文字總量遠小於 4GB（台語 9 萬筆才 695KB）。
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct Str {
+    off: u32,
+    len: u32,
+}
+
+/// 指進 `Index::tw_flat` 的一段。理由同 `Str`——避免每組各配一個 `Vec`。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Span {
+    at: u32,
+    len: u32,
+}
+
+/// 所有字串黏成一塊的池子。
+///
+/// # 為什麼要有它
+///
+/// 2026-09-15 量到台語包 **1.65MB 的檔案在記憶體裡變成 30.8MB**
+/// （45 倍）。原因不是資料量——那 82373 個詞的純文字只有 695KB——
+/// 而是每個 `String` 的固定成本：header 24 bytes，而平均詞長只有
+/// 8.4 bytes，**內容佔不到兩成**。再加上雙向索引讓同一個詞被獨立
+/// 配置好幾次（每個詞平均存 3.7 次）。
+///
+/// 池子把所有詞黏成一塊連續記憶體，索引只存 `(off, len)`：
+/// **配置次數從 18 萬降到個位數**。
+///
+/// # 為什麼用 `(off, len)` 不用 `&'static str`
+///
+/// `&'static str`（`Box::leak` 一次）查詢端完全不用改，但官方包之後
+/// 要走 mmap 二進位，那時檔案裡存的本來就是 `(off, len)`——用整數對
+/// 是**一步到位**，池子換成映射的位元組時查詢端不必再動一次。
+///
+/// 見 [[擴充包吃掉 30MB：字串池與官方包二進位化]]。
+#[derive(Default, Debug)]
+struct Pool {
+    buf: String,
+    /// 去重用：同一個詞只進池子一次。建完索引就丟掉（查詢不需要）。
+    seen: HashMap<String, Str>,
+}
+
+impl Pool {
+    /// 把一個詞放進池子，回傳指標。**同樣的詞回同一個指標**。
+    fn put(&mut self, s: &str) -> Str {
+        if let Some(&at) = self.seen.get(s) {
+            return at;
+        }
+        let at = Str {
+            off: self.buf.len() as u32,
+            len: s.len() as u32,
+        };
+        self.buf.push_str(s);
+        self.seen.insert(s.to_string(), at);
+        at
+    }
+
+    /// 切出那段字。
+    #[inline]
+    fn get(&self, at: Str) -> &str {
+        let a = at.off as usize;
+        &self.buf[a..a + at.len as usize]
+    }
+
+    /// 建完索引之後丟掉去重表——它跟池子一樣大，留著等於白付一份。
+    fn shrink(&mut self) {
+        self.seen = HashMap::new();
+        self.buf.shrink_to_fit();
+    }
+}
+
+/// 一層「鍵 → 值」的排序表。**六層共用同一個形狀**。
+///
+/// # 為什麼六層都改成這個
+///
+/// 原本只有 `tw` 是排序表（它最大，先被逼著改），其他五層還是
+/// `HashMap<String, …>`。但官方包要 mmap 二進位化，而 `HashMap` **沒
+/// 辦法在映射的位元組上直接查**——載入時得重建一份到堆上，那正是
+/// mmap 想避免的事（共用的頁沒人碰，私有的那份照樣每個宿主一份）。
+///
+/// 排序表沒有這個問題：一塊排序好的 `(鍵指標, 值範圍)` 加一塊池子，
+/// 二分搜尋只讀不寫。實測 spike 五個行程私有 27.7MB → 3.5MB。
+///
+/// # 值為什麼是範圍而不是單一指標
+///
+/// 六層的值形狀不同：`en` 沒有值、`ja`／`zh`／`zh_long` 是一個字串、
+/// `sym`／`tw` 是一組。**用「範圍」一種形狀通吃**——單值就是長度 1 的
+/// 範圍，多了一次間接但省掉六套程式碼與六套二進位版面。
+///
+/// 範圍指進 `Index::flat`（全部層共用一條），避免每組各配一個 `Vec`：
+/// 台語 82373 個 `Vec` 光 header 就 8MB（實測）。
+#[derive(Default, Debug)]
+struct Table {
+    /// 依鍵的**字面**排序（不是指標順序），查詢走二分搜尋。
+    rows: Vec<(Str, Span)>,
+}
+
+impl Table {
+    /// 二分搜尋那個鍵，回傳值的範圍。
+    ///
+    /// **比的是字面不是指標**——指標的順序是進池子的順序，跟字典序無關。
+    #[inline]
+    fn find(&self, pool: &Pool, key: &str) -> Option<Span> {
+        self.rows
+            .binary_search_by(|(k, _)| pool.get(*k).cmp(key))
+            .ok()
+            .map(|i| self.rows[i].1)
+    }
+
+    /// 有這個鍵嗎？**不取值**——`en` 那層只需要這個。
+    #[inline]
+    fn has(&self, pool: &Pool, key: &str) -> bool {
+        self.rows
+            .binary_search_by(|(k, _)| pool.get(*k).cmp(key))
+            .is_ok()
+    }
+
+    fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+}
+
+/// 建表用的暫存：先收集再排序。**只在 `build_index` 活著**。
+///
+/// 收集階段需要「同一個鍵出現第二次要找得到」，那是雜湊的工作；
+/// 但查詢階段不需要雜湊。兩個階段用兩種結構，建完就丟。
+#[derive(Default)]
+struct Builder {
+    /// 鍵 → 值清單。**保留插入順序**——`sym` 要「同名接起來」而且
+    /// 順序就是包的啟用順序。
+    rows: HashMap<Str, Vec<Str>>,
+    /// 插入順序，`rows` 的 `HashMap` 不保序，但排序前要先有穩定的來源
+    order: Vec<Str>,
+}
+
+impl Builder {
+    /// 收一筆。**同一個鍵重複收就接在後面**（去重）。
+    fn push(&mut self, key: Str, val: Str) {
+        let slot = match self.rows.entry(key) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                self.order.push(key);
+                e.insert(Vec::new())
+            }
+        };
+        if !slot.contains(&val) {
+            slot.push(val);
+        }
+    }
+
+    /// 收一筆「只有鍵沒有值」（`en` 那層）。
+    fn push_key(&mut self, key: Str) {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.rows.entry(key) {
+            self.order.push(key);
+            e.insert(Vec::new());
+        }
+    }
+
+    /// 收一筆「第一個贏」的（`ja`／`zh`／`zh_long`：同鍵時前面的包優先）。
+    fn push_first(&mut self, key: Str, val: Str) {
+        if let std::collections::hash_map::Entry::Vacant(e) = self.rows.entry(key) {
+            e.insert(vec![val]);
+            self.order.push(key);
+        }
+    }
+
+    /// 排序、攤平進 `flat`，產出可查詢的表。
+    fn finish(self, pool: &Pool, flat: &mut Vec<Str>) -> Table {
+        let mut rows: Vec<(Str, Vec<Str>)> = self
+            .order
+            .into_iter()
+            .filter_map(|k| self.rows.get(&k).map(|v| (k, v.clone())))
+            .collect();
+        rows.sort_by(|(a, _), (b, _)| pool.get(*a).cmp(pool.get(*b)));
+        let mut out = Table {
+            rows: Vec::with_capacity(rows.len()),
+        };
+        flat.reserve(rows.iter().map(|(_, v)| v.len()).sum::<usize>());
+        for (k, vals) in rows {
+            let span = Span {
+                at: flat.len() as u32,
+                len: vals.len() as u32,
+            };
+            flat.extend_from_slice(&vals);
+            out.rows.push((k, span));
+        }
+        out
+    }
+}
+
 /// 查詢用的索引。
 ///
 /// `Packs` 是「照設定順序載進來的原始清單」，保留順序是為了衝突時
@@ -291,11 +495,22 @@ fn parse(content: &str, into: &mut Packs) {
 /// 做一次，查詢時不做。
 #[derive(Default, Debug)]
 pub struct Index {
-    pub en: HashSet<String>,
+    /// 英文詞（已轉小寫）。**只有鍵沒有值**——問的是「認不認得這個詞」。
+    en: Table,
     /// 假名 → 表記
-    pub ja: HashMap<String, String>,
+    ja: Table,
     /// 按鍵 → 詞
-    pub zh: HashMap<String, String>,
+    zh: Table,
+    /// **按鍵 → 長輸出**（字數跟音節數對不上的那些）。
+    ///
+    /// 為什麼要獨立一層：`zh` 那層的詞是**逐格填字**的
+    /// （`compose::apply_word_context` 一格填一個字），字數對不上根本
+    /// 填不回去。這一層走另一條路——`compose::merge_pack_long` 把那幾格
+    /// **併成一格**，跟 `merge_symbols` 同一個模式。
+    ///
+    /// 兩層分開而不是合併成一個的理由：詞層要挑「跟使用者選過的字相容」
+    /// 的那一個，長輸出沒有逐字對應關係，那套邏輯整個不適用。
+    zh_long: Table,
     /// **國字 → 同一個意思的所有說法**（華語＋台語）。只給段選單用。
     ///
     /// 跟這裡其他層有兩點不一樣，理由都見 `build_index`：
@@ -305,15 +520,46 @@ pub struct Index {
     ///   ——它們是同一個東西的不同說法，地位相等
     ///
     /// 第一個元素固定是華語詞。
-    pub tw: HashMap<String, Vec<String>>,
+    tw: Table,
     /// 符號名 → 一組符號
-    pub sym: HashMap<String, Vec<String>>,
+    sym: Table,
+    /// **六層的值全部攤平成一條**，各層的 `Span` 指進來。
+    ///
+    /// 為什麼共用一條而不是各層一條：`Vec` 本身有成本（24 bytes header
+    /// ＋ 一次堆配置），台語 82373 組各自一個 `Vec` 光 header 就 8MB
+    /// （實測）。攤平之後整個 `Index` 只剩「池子 ＋ 六張表 ＋ 這條」。
+    ///
+    /// **這正是二進位檔的版面**——dump 出去就是檔案，見 §2.83。
+    flat: Vec<Str>,
+    /// 六層共用的字串池。
+    pool: Pool,
+    /// **官方包**：mmap 進來的 `.bin`，每一份都是借用的位元組。
+    ///
+    /// # 為什麼另外掛一層，不併進上面那六張表
+    ///
+    /// 併進去就得把映射的內容抄一份到池子裡——那正是 mmap 要避免的事
+    /// （抄完之後每個宿主行程各一份，共用的頁沒人碰）。分開放，查詢時
+    /// 兩邊各問一次，官方包的位元組從頭到尾沒被複製過。
+    ///
+    /// **順序**：使用者的包（上面六層）先問，官方包後問。理由跟同名
+    /// 檔案「使用者的優先」一致——使用者自己寫的東西不該被官方包蓋掉。
+    bins: Vec<&'static crate::pack_bin::PackBin>,
+}
+
+/// 六層在 `.bin` 裡的編號。**寫檔與讀檔共用**，見 `pack_bin::LAYERS`。
+mod layer {
+    pub const EN: usize = 0;
+    pub const JA: usize = 1;
+    pub const ZH: usize = 2;
+    pub const ZH_LONG: usize = 3;
+    pub const TW: usize = 4;
+    pub const SYM: usize = 5;
 }
 
 impl Index {
     /// 一條都沒有？
     pub fn is_empty(&self) -> bool {
-        !self.has_words() && self.sym.is_empty()
+        !self.has_words() && self.sym.is_empty() && self.bins.is_empty()
     }
 
     /// 有沒有**詞**？**熱路徑靠這個短路**——沒啟用詞包的人一次查詢都不多做。
@@ -325,7 +571,205 @@ impl Index {
     /// 之後**每個人都會啟用一個純符號的包**，把 `sym` 算進來的話這道閘門
     /// 就永遠是開的，等於所有人開始付查詞的成本。
     pub fn has_words(&self) -> bool {
-        !(self.en.is_empty() && self.ja.is_empty() && self.zh.is_empty())
+        !(self.en.is_empty() && self.ja.is_empty() && self.zh.is_empty() && self.zh_long.is_empty())
+            || self.bins.iter().any(|b| {
+                [layer::EN, layer::JA, layer::ZH, layer::ZH_LONG]
+                    .iter()
+                    .any(|&l| !b.is_empty(l))
+            })
+    }
+
+    /// 切出一個範圍裡的字串。**六層的取值都走這裡**。
+    #[inline]
+    fn vals(&self, s: Span) -> impl Iterator<Item = &str> {
+        self.flat[s.at as usize..(s.at + s.len) as usize]
+            .iter()
+            .map(|&p| self.pool.get(p))
+    }
+
+    /// 範圍裡的第一個。`ja`／`zh`／`zh_long` 是單值層，值永遠只有一個。
+    #[inline]
+    fn first(&self, s: Span) -> Option<&str> {
+        (s.len > 0).then(|| self.pool.get(self.flat[s.at as usize]))
+    }
+
+    /// 把一層倒成 `(鍵, 值清單)`。**只給 `layers_for_bin` 產 `.bin` 用**。
+    ///
+    /// 這是唯一一處把池子裡的東西複製回 `String` 的地方——產檔是一次性
+    /// 的離線工作，不在任何熱路徑上，為它多開一套零複製的門不划算。
+    ///
+    /// 順序照 `rows` 原樣搬，也就是**已經依鍵的字面排序好**的順序。
+    fn dump(&self, t: &Table) -> Vec<(String, Vec<String>)> {
+        t.rows
+            .iter()
+            .map(|&(k, span)| {
+                (
+                    self.pool.get(k).to_string(),
+                    self.vals(span).map(str::to_string).collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// 問一遍官方包，第一個答得出來的贏。**使用者的包已經先問過了**。
+    #[inline]
+    fn ask_bins<T>(&self, f: impl Fn(&'static crate::pack_bin::PackBin) -> Option<T>) -> Option<T> {
+        self.bins.iter().find_map(|b| f(b))
+    }
+
+    // ── en：認不認得這個英文詞 ──
+
+    /// 認得這個英文詞嗎？**鍵要先轉小寫**（建表時就是小寫）。
+    pub fn en_has(&self, word: &str) -> bool {
+        self.en.has(&self.pool, word) || self.bins.iter().any(|b| b.has(layer::EN, word))
+    }
+
+    pub fn en_len(&self) -> usize {
+        self.en.len() + self.bins.iter().map(|b| b.len(layer::EN)).sum::<usize>()
+    }
+
+    // ── ja／zh／zh_long：單值層 ──
+
+    /// 這個假名的表記。
+    pub fn ja_get(&self, kana: &str) -> Option<&str> {
+        self.ja
+            .find(&self.pool, kana)
+            .and_then(|s| self.first(s))
+            .or_else(|| self.ask_bins(|b| b.first(layer::JA, kana)))
+    }
+
+    pub fn ja_len(&self) -> usize {
+        self.ja.len() + self.bins.iter().map(|b| b.len(layer::JA)).sum::<usize>()
+    }
+
+    /// 這串按鍵的詞。
+    pub fn zh_get(&self, keys: &str) -> Option<&str> {
+        self.zh
+            .find(&self.pool, keys)
+            .and_then(|s| self.first(s))
+            .or_else(|| self.ask_bins(|b| b.first(layer::ZH, keys)))
+    }
+
+    /// 有這串按鍵嗎？**不取值**——切點只問「包收了這個詞沒有」。
+    pub fn zh_has(&self, keys: &str) -> bool {
+        self.zh.has(&self.pool, keys) || self.bins.iter().any(|b| b.has(layer::ZH, keys))
+    }
+
+    pub fn zh_len(&self) -> usize {
+        self.zh.len() + self.bins.iter().map(|b| b.len(layer::ZH)).sum::<usize>()
+    }
+
+    /// 這串按鍵的長輸出（字數跟音節數對不上的那些）。
+    pub fn zh_long_get(&self, keys: &str) -> Option<&str> {
+        self.zh_long
+            .find(&self.pool, keys)
+            .and_then(|s| self.first(s))
+            .or_else(|| self.ask_bins(|b| b.first(layer::ZH_LONG, keys)))
+    }
+
+    pub fn zh_long_len(&self) -> usize {
+        self.zh_long.len()
+            + self
+                .bins
+                .iter()
+                .map(|b| b.len(layer::ZH_LONG))
+                .sum::<usize>()
+    }
+
+    // ── sym：一個名字一組符號 ──
+
+    /// 這個名字叫得出哪些符號？**沒有就回空的**。
+    ///
+    /// **同名時接起來**，跟文字包之間的合併同一個規則（2026-09-07
+    /// 裁定）：使用者的排前面，官方包的接在後面，組內去重。
+    pub fn sym_get(&self, name: &str) -> Vec<String> {
+        let mut out: Vec<String> = match self.sym.find(&self.pool, name) {
+            Some(s) => self.vals(s).map(str::to_string).collect(),
+            None => Vec::new(),
+        };
+        for b in &self.bins {
+            for s in b.all(layer::SYM, name) {
+                if !out.iter().any(|x| x == s) {
+                    out.push(s.to_string());
+                }
+            }
+        }
+        out
+    }
+
+    /// 符號名字有幾個。
+    ///
+    /// **兩邊都有的名字會被數兩次**——這個數字是給設定頁與稽核工具
+    /// 顯示規模用的，不是精確的去重計數。要精確的話得把兩邊的鍵合併
+    /// 走一遍，那是 O(n) 的事，不值得為了一行顯示付。
+    pub fn sym_len(&self) -> usize {
+        self.sym.len() + self.bins.iter().map(|b| b.len(layer::SYM)).sum::<usize>()
+    }
+
+    /// 符號一個都沒有？
+    pub fn sym_is_empty(&self) -> bool {
+        self.sym.is_empty() && self.bins.iter().all(|b| b.is_empty(layer::SYM))
+    }
+
+    /// 走訪所有符號名與它們的符號。**給稽核工具用**，不是熱路徑。
+    ///
+    /// **兩邊各走一遍，不合併**——同名的會出現兩次。稽核工具要看的
+    /// 就是「每一份表各收了什麼」，合併反而蓋掉問題。
+    pub fn sym_iter(&self) -> impl Iterator<Item = (&str, Vec<&str>)> {
+        let user = self
+            .sym
+            .rows
+            .iter()
+            .map(|(k, s)| (self.pool.get(*k), self.vals(*s).collect::<Vec<_>>()));
+        // `&'static str` 降級成跟使用者那邊同樣的期限，`chain` 才接得起來
+        let official = self
+            .bins
+            .iter()
+            .flat_map(|b| b.iter(layer::SYM))
+            .map(|(k, v)| (k as &str, v.into_iter().map(|s| s as &str).collect()));
+        user.chain(official)
+    }
+
+    // ── tw：台語雙向詞表 ──
+
+    /// 這個國字詞有幾種說法？**沒有就回 0**。
+    ///
+    /// 段選單靠它判斷「這是不是一個值得選的詞」（只有一種說法＝沒有
+    /// 別的講法可選）。獨立一支是為了**不必為了數數就配置一個 Vec**
+    /// ——斷詞會從長到短一路試，多數會落空。
+    pub fn tw_len(&self, word: &str) -> usize {
+        match self.tw.find(&self.pool, word) {
+            Some(s) => s.len as usize,
+            // **不累加**：台語是「同一個意思的所有說法」，兩份表各有
+            // 一組的話語意是衝突不是互補，先找到的那組贏（跟 `tw_says`
+            // 一致，不然數量跟內容會對不起來）
+            None => self
+                .ask_bins(|b| {
+                    let n = b.count(layer::TW, word);
+                    (n > 0).then_some(n)
+                })
+                .unwrap_or(0),
+        }
+    }
+
+    /// 這個國字詞的所有說法（含它自己）。**沒有就回空的**。
+    ///
+    /// 第一個元素固定是華語詞，見 `build_index`。
+    pub fn tw_says(&self, word: &str) -> Vec<String> {
+        match self.tw.find(&self.pool, word) {
+            Some(s) => self.vals(s).map(str::to_string).collect(),
+            None => self
+                .ask_bins(|b| {
+                    let v = b.all(layer::TW, word);
+                    (!v.is_empty()).then(|| v.into_iter().map(str::to_string).collect())
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    /// 台語詞表是空的嗎？
+    pub fn tw_is_empty(&self) -> bool {
+        self.tw.is_empty() && self.bins.iter().all(|b| b.is_empty(layer::TW))
     }
 }
 
@@ -415,9 +859,17 @@ pub fn index() -> Arc<Index> {
 
 /// 換掉整張表。設定改了就呼叫這個。
 pub fn set_index(new: Index) {
+    // **一律走查詢方法，不要直接摸欄位**——`new.sym`／`new.tw` 只是
+    // 使用者文字包那幾張表，官方包（`.bin`）在 `bins` 裡，直接摸欄位
+    // 看不到它們。
+    //
+    // 這個坑實際踩過：台語包改成 `.bin` 之後 `tw_says` 查得到資料
+    // （它會問 `bins`），但 `HAS_TW` 是 false，而平台層靠這個旗標決定
+    // 要不要開段選單——**按 TAB 完全沒反應**。查表、分派全對，錯在
+    // 狀態沒設對，讀程式碼很難看出來（log 一看就知道）。
     let has = new.has_words();
-    let has_sym = !new.sym.is_empty();
-    let has_tw = !new.tw.is_empty();
+    let has_sym = !new.sym_is_empty();
+    let has_tw = !new.tw_is_empty();
     write_or_recover(slot(), |g| *g = Arc::new(new));
     HAS.store(has, Ordering::Relaxed);
     HAS_SYM.store(has_sym, Ordering::Relaxed);
@@ -445,7 +897,12 @@ pub fn set_index(new: Index) {
 ///
 /// 之所以能這樣分，是因為**多字元符號在舊格式裡本來就寫不出來**
 /// ——舊的拆法會把它拆碎。所以「沒有空白」必然是舊格式，不會誤判。
-fn split_symbols(o: &str) -> Vec<String> {
+///
+/// **設定頁的擴充包編輯器也叫它**（`pack_editor`）：使用者在符號那欄
+/// 打了一串東西，畫面要當場說「這會拆成幾個」——拆法的規則（空白分隔
+/// 還是舊格式逐字元、`+` 展開成 ZWJ）只有這裡知道，複製一份到 UI 去
+/// 的話兩邊一定會漂掉。
+pub fn split_symbols(o: &str) -> Vec<String> {
     if o.split_whitespace().count() > 1 {
         // 新格式：作者用空白標出了邊界
         return o
@@ -523,27 +980,47 @@ fn expand_zwj(s: &str) -> String {
 
 fn build_index(packs: &Packs) -> Index {
     let mut out = Index::default();
+    // 六層各自收集，最後一起排序攤平。**池子是共用的**——同一個字串
+    // 在不同層出現（「早安」既是 `zh` 的值也可能是 `tw` 的鍵）只存一份。
+    let mut b_en = Builder::default();
+    let mut b_ja = Builder::default();
+    let mut b_zh = Builder::default();
+    let mut b_long = Builder::default();
+    let mut b_tw = Builder::default();
+    let mut b_sym = Builder::default();
+
     for w in &packs.en {
-        out.en.insert(w.clone());
+        let k = out.pool.put(w);
+        b_en.push_key(k);
     }
     for (k, v) in &packs.ja {
-        out.ja.entry(k.clone()).or_insert_with(|| v.clone());
+        let (k, v) = (out.pool.put(k), out.pool.put(v));
+        b_ja.push_first(k, v);
     }
     let rev = crate::dict::reverse_keymap();
     for (symbols, word) in &packs.zh {
         let Some(keys) = crate::dict::symbols_to_keys(symbols, &rev) else {
             continue;
         };
-        // **字數要跟音節數對得上**——選詞層是一格填一個字的
-        // （見 `compose::apply_word_context`），對不上的填不進去，
-        // 而且多半代表包裡打錯了。
+        // **字數跟音節數對得上的走詞層，對不上的走長輸出層。**
+        //
+        // 詞層是**逐格填字**（`compose::apply_word_context` 一格填一個
+        // 字），字數對不上填不回去。以前這種條目整條丟掉，但那讓
+        // 「打兩個注音出一長串」這個明確的需求做不到——使用者的期待是
+        // 「打了設定的字串，出來的就是輸入的東西」。
+        //
+        // 改成分流之後它們走 `compose::merge_pack_long`：**幾格併成一格**，
+        // 跟 `merge_symbols` 同一個模式。台語層早就不套這條限制了
+        // （「他們→𪜶」兩字換一字），理由一樣是「整個換掉、不逐格填」。
         let Some(syllables) = crate::bopomofo::split_syllables(&keys) else {
             continue;
         };
-        if word.chars().count() != syllables.len() {
-            continue;
+        let (k, v) = (out.pool.put(&keys), out.pool.put(word));
+        if word.chars().count() == syllables.len() {
+            b_zh.push_first(k, v);
+        } else {
+            b_long.push_first(k, v);
         }
-        out.zh.entry(keys).or_insert_with(|| word.clone());
     }
     // 台語：**鍵是華語國字，不是按鍵**——跟其他層都不一樣。
     //
@@ -577,13 +1054,15 @@ fn build_index(packs: &Packs) -> Index {
             v.push(tw_word.clone());
         }
     }
+    // **每個詞只進池子一次**，key 與 value 都存指標——這是台語包從
+    // 30.8MB 降下來的關鍵，見 `Pool` 與 `Table`。
     for (zh_word, group) in groups {
+        let ptrs: Vec<Str> = group.iter().map(|w| out.pool.put(w)).collect();
+        // key 是「華語詞」與「每個台語說法」——雙向，見上面的長註解
         for key in std::iter::once(&zh_word).chain(group.iter().skip(1)) {
-            let v = out.tw.entry(key.clone()).or_default();
-            for w in &group {
-                if !v.contains(w) {
-                    v.push(w.clone());
-                }
+            let k = out.pool.put(key);
+            for &p in &ptrs {
+                b_tw.push(k, p);
             }
         }
     }
@@ -602,14 +1081,113 @@ fn build_index(packs: &Packs) -> Index {
     // 順序就是包的啟用順序（前面的排前面），組內去重——兩份表都收了
     // ☀ 的話只留第一個，不然候選裡會有看起來一模一樣的兩格。
     for (name, syms) in &packs.sym {
-        let slot = out.sym.entry(name.clone()).or_default();
+        let k = out.pool.put(name);
         for s in syms {
-            if !slot.contains(s) {
-                slot.push(s.clone());
-            }
+            let v = out.pool.put(s);
+            // `Builder::push` 自己去重——兩份表都收了 ☀ 的話只留第一個
+            b_sym.push(k, v);
         }
     }
+
+    // 六層一起排序攤平。**順序固定**，之後 dump 成二進位檔時照這個順序。
+    //
+    // `finish` 要讀池子比字面，所以池子必須先填完——上面每一層都只是
+    // `put` 進池子，沒有任何排序。
+    out.en = b_en.finish(&out.pool, &mut out.flat);
+    out.ja = b_ja.finish(&out.pool, &mut out.flat);
+    out.zh = b_zh.finish(&out.pool, &mut out.flat);
+    out.zh_long = b_long.finish(&out.pool, &mut out.flat);
+    out.tw = b_tw.finish(&out.pool, &mut out.flat);
+    out.sym = b_sym.finish(&out.pool, &mut out.flat);
+    // 去重表跟池子一樣大，建完就丟
+    out.pool.shrink();
+    out.flat.shrink_to_fit();
     out
+}
+
+/// 六層的 `(鍵, 值清單)`，也就是 `pack_bin::write` 收的形狀。
+pub type BinLayers = [Vec<(String, Vec<String>)>; crate::pack_bin::LAYERS];
+
+/// `pack_bin::write` 要的兩份東西：檔頭的 `(名稱, 值)` 與六層。
+pub type BinInput = (Vec<(String, String)>, BinLayers);
+
+/// 把 `Meta` 攤成 `(名稱, 值)` 的清單，名稱用 `parse_meta` 認得的小寫鍵。
+///
+/// **沒填的欄位不寫**——`meta()` 查不到與查到空字串是兩回事，前者才是
+/// 「這個包沒填」。`readonly` 是布林，只有 `true` 時才寫一筆，讀回來
+/// 對得上 `parse_meta` 的「寫了 true 才算」。
+fn meta_pairs(m: &Meta) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut put = |k: &str, v: &Option<String>| {
+        if let Some(v) = v {
+            out.push((k.to_string(), v.clone()));
+        }
+    };
+    put("name", &m.name);
+    put("version", &m.version);
+    put("author", &m.author);
+    put("description", &m.description);
+    put("license", &m.license);
+    put("updated", &m.updated);
+    put("homepage", &m.homepage);
+    if m.readonly {
+        out.push(("readonly".to_string(), "true".to_string()));
+    }
+    out
+}
+
+/// 把幾份**文字包**建成索引，再把六層倒成 `pack_bin::write` 要的形狀。
+///
+/// # 為什麼要開這道門
+///
+/// `gen_pack_bin` 要產的東西**就是 `Index` 的內容**——注音符號轉按鍵、
+/// 字數與音節數的分流、台語的雙向索引、符號的同名合併，這些邏輯全在
+/// `build_index` 裡。在工具端重寫一份一定會跟這裡漂掉，而漂掉的症狀是
+/// 「`.bin` 跟 `.txt` 查出不一樣的東西」，不會有任何編譯或測試錯誤。
+/// 所以走原路：`read_pack` ＋ `parse` ＋ `build_index`，只在最後多倒一次。
+///
+/// # 為什麼收的是路徑不是包名
+///
+/// `find_pack` 的規則是「`.bin` 優先於同名的 `.txt`」——那是查詢端要的，
+/// 但產檔端拿包名去找會**找到上一次自己產的 `.bin`**，變成拿產物當原料。
+/// 收路徑就沒有這個歧義。
+///
+/// 回傳的六層**已經依鍵的字面排序好**（`Builder::finish` 就是排序攤平），
+/// 正好是 `pack_bin::write` 的前提，倒出來不必再排一次。
+///
+/// # 檔頭取**第一份**包的
+///
+/// 檔頭是授權的一部分（台語包載明 CC BY-SA 4.0 要求的姓名標示），
+/// 不能不帶。多份合併時把每份的檔頭疊起來沒有意義——`name`／`license`
+/// 只能有一個值，疊起來反而會讓「這份 `.bin` 是什麼授權」變得沒有答案。
+/// 合併本來就是「產一份新的包」，檔頭該由發布者決定，所以取第一份的。
+pub fn layers_for_bin(paths: &[PathBuf]) -> Result<BinInput, (PathBuf, PackReadError)> {
+    let mut packs = Packs::default();
+    let mut meta = Vec::new();
+    for (i, p) in paths.iter().enumerate() {
+        match read_pack(p) {
+            Ok(content) => {
+                if i == 0 {
+                    meta = meta_pairs(&parse_meta(&content));
+                }
+                parse(&content, &mut packs);
+            }
+            Err(e) => return Err((p.clone(), e)),
+        }
+    }
+    let idx = build_index(&packs);
+    // 順序跟 `build_index` 結尾的攤平順序、跟 `layer::*` 的編號一致
+    Ok((
+        meta,
+        [
+            idx.dump(&idx.en),
+            idx.dump(&idx.ja),
+            idx.dump(&idx.zh),
+            idx.dump(&idx.zh_long),
+            idx.dump(&idx.tw),
+            idx.dump(&idx.sym),
+        ],
+    ))
 }
 
 /// 依 `enabled` 的順序載入這些包，回傳總條數。
@@ -617,32 +1195,171 @@ fn build_index(packs: &Packs) -> Index {
 /// **可以重複呼叫**——包是獨立的一層，換掉索引就換掉了，不必重建
 /// 詞庫（詞庫是 `OnceLock`，本來就重建不了）。設定改了就再叫一次。
 pub fn load(custom: &str, enabled: &[String]) -> usize {
-    let packs = read(custom, enabled);
-    let index = build_index(&packs);
-    let n = index.en.len() + index.ja.len() + index.zh.len();
+    // **內容沒變就整個跳過**。
+    //
+    // # 為什麼需要這道閘門
+    //
+    // `load` 是整批重建（讀全部檔案 → 建索引 → 換掉），台語包那種
+    // 9 萬筆的要 ~90ms，而且舊索引的配置還給配置器之後**不會還給
+    // OS**。實測用相同清單重載五次多吃 8.6MB（字串池做完之後仍有
+    // 1.9MB），數字忽大忽小是碎片的典型特徵。
+    //
+    // 而使用者在設定頁**每勾一次／取消一次包就觸發一次**——勾來勾去
+    // 試幾次，記憶體就一路往上，還每次卡 90ms。
+    //
+    // 跳過是安全的：不換表就沒有「換的瞬間別人查到半套」的問題
+    // （見 `session::segmenu` 測試裡那段關於原子性的說明）。
+    let fp = fingerprint(custom, enabled);
+    if let Some(n) = unchanged(&fp) {
+        return n;
+    }
+
+    let (packs, bins) = read(custom, enabled);
+    let mut index = build_index(&packs);
+    index.bins = bins;
+    let n = index.en_len() + index.ja_len() + index.zh_len();
     // 索引跟著換——查詢層只看索引，不看原始清單
     set_index(index);
+    remember(fp, n);
     n
 }
 
-/// 讀出這些包的原始內容（不建索引）。
-fn read(custom: &str, enabled: &[String]) -> Packs {
-    let mut out = Packs::default();
-    let ds = dirs(custom);
-    for name in enabled {
-        // **擋掉路徑穿越**：包名來自設定檔，不該能指到別的資料夾
-        if name.contains(['/', '\\', ':']) || name.contains("..") {
-            continue;
-        }
-        // 找到第一個就停——同名時使用者的那份蓋過預載的
-        for d in &ds {
-            if let Ok(content) = read_pack(&d.join(format!("{name}.txt"))) {
-                parse(&content, &mut out);
-                break;
-            }
+/// 上一次載入的指紋與結果。
+static LAST: std::sync::Mutex<Option<(Vec<FileStamp>, usize)>> = std::sync::Mutex::new(None);
+
+/// 一個包檔案的身分：路徑、大小、修改時間。
+///
+/// **不讀內容算雜湊**——台語包 1.65MB，每次勾選都重讀重算是白費；
+/// 而且真正要防的是「使用者改了包卻沒生效」，`(大小, mtime)` 對
+/// 這件事已經夠靈敏：編輯器存檔一定會動到 mtime。
+///
+/// 極端情況（同一秒內改成同樣大小）會漏判，代價是「改了沒生效，
+/// 重開設定頁才會看到」——比起每次都重建 90ms＋漏記憶體，這個
+/// 取捨划算。
+type FileStamp = (PathBuf, u64, Option<std::time::SystemTime>);
+
+/// 一個包在磁碟上的位置，以及它是哪一種。
+enum Found {
+    /// 官方包，`.bin`，走 mmap。
+    Bin(PathBuf),
+    /// 文字包，`.txt`。
+    Txt(PathBuf),
+}
+
+impl Found {
+    fn path(&self) -> &std::path::Path {
+        match self {
+            Found::Bin(p) | Found::Txt(p) => p,
         }
     }
+}
+
+/// 找一個包的檔案。**這是唯一的找檔規則**，`read` 與 `fingerprint`
+/// 都用它——兩邊的規則一漂掉，指紋就會對不上實際載入的檔案，症狀是
+/// 「改了包沒生效」而且完全沒有跡象。
+///
+/// 兩條規則疊在一起：
+///
+/// - **`.bin` 優先於同名的 `.txt`**：官方包走 mmap，跨行程共用
+/// - **目錄的順序決定誰贏**（`dirs` 的第一個是使用者的）：同名時
+///   使用者的那份蓋過預載的
+///
+/// 順序是「先在同一個目錄裡挑 `.bin` 還是 `.txt`，再換下一個目錄」
+/// ——不是「先掃完所有目錄的 `.bin`」。這樣使用者放一份 `.txt` 就能
+/// 蓋掉預載的 `.bin`，符合「使用者的優先」。
+fn find_pack(dirs: &[PathBuf], name: &str) -> Option<Found> {
+    // **擋掉路徑穿越**：包名來自設定檔，不該能指到別的資料夾
+    if name.contains(['/', '\\', ':']) || name.contains("..") {
+        return None;
+    }
+    for d in dirs {
+        let bin = d.join(format!("{name}.bin"));
+        if bin.is_file() {
+            return Some(Found::Bin(bin));
+        }
+        let txt = d.join(format!("{name}.txt"));
+        if txt.is_file() {
+            return Some(Found::Txt(txt));
+        }
+    }
+    None
+}
+
+/// 算出這次要載的東西的指紋。
+///
+/// **包含沒找到的檔案**（以 0 大小記）——不然使用者把包放進資料夾時
+/// 會被誤判成「沒變」。
+fn fingerprint(custom: &str, enabled: &[String]) -> Vec<FileStamp> {
+    let ds = dirs(custom);
+    let mut out = Vec::with_capacity(enabled.len());
+    for name in enabled {
+        let found = find_pack(&ds, name).and_then(|f| {
+            let p = f.path().to_path_buf();
+            std::fs::metadata(&p)
+                .ok()
+                .map(|m| (p, m.len(), m.modified().ok()))
+        });
+        out.push(found.unwrap_or_else(|| (PathBuf::from(name), 0, None)));
+    }
     out
+}
+
+/// 跟上次一樣嗎？一樣就回上次的結果。
+fn unchanged(fp: &[FileStamp]) -> Option<usize> {
+    let g = LAST.lock().ok()?;
+    let (last, n) = g.as_ref()?;
+    (last.as_slice() == fp).then_some(*n)
+}
+
+/// 記下這次的指紋。
+fn remember(fp: Vec<FileStamp>, n: usize) {
+    if let Ok(mut g) = LAST.lock() {
+        *g = Some((fp, n));
+    }
+}
+
+/// 讀出這些包的原始內容（不建索引）。
+///
+/// 回傳兩份：文字包解析出來的原始清單，與**官方包映射進來的位元組**。
+/// 後者不解析、不複製——那正是二進位化的意義（§2.83）。
+fn read(custom: &str, enabled: &[String]) -> (Packs, Vec<&'static crate::pack_bin::PackBin>) {
+    let mut out = Packs::default();
+    let mut bins = Vec::new();
+    let ds = dirs(custom);
+    for name in enabled {
+        match find_pack(&ds, name) {
+            Some(Found::Bin(p)) => {
+                if let Some(b) = map_pack_bin(&p) {
+                    bins.push(b);
+                }
+            }
+            Some(Found::Txt(p)) => {
+                if let Ok(content) = read_pack(&p) {
+                    parse(&content, &mut out);
+                }
+            }
+            None => {}
+        }
+    }
+    (out, bins)
+}
+
+/// 映射一份官方包。**認不得就當成沒有這個包**。
+///
+/// # 為什麼 leak
+///
+/// 映射要活著，切出去的 `&str` 才有效。這裡跟詞庫同一個道理——
+/// 但**包是可以被換掉的**（使用者在設定頁取消勾選），所以 leak 的
+/// 量不是固定的：每載入一個沒載過的官方包就多一份映射。
+///
+/// 實務上這不成問題：官方包的數量是個位數，而且映射的頁是唯讀的
+/// 檔案頁，記憶體壓力下可以直接丟棄——留著的只是位址空間，不是
+/// 實體記憶體。**反過來如果不 leak，就得在換表時追蹤誰還在用那些
+/// 位元組，那是引用計數的工作，而換表的整個設計就是為了避開它。**
+fn map_pack_bin(path: &std::path::Path) -> Option<&'static crate::pack_bin::PackBin> {
+    let bytes = crate::dict::map_file_pub(path)?;
+    let p = crate::pack_bin::PackBin::new(bytes)?;
+    Some(Box::leak(Box::new(p)))
 }
 
 /// 讀一個包的檔案內容，**吃掉 BOM**。
@@ -680,6 +1397,11 @@ pub enum PackReadError {
     Missing,
     /// 檔案在，但不是 UTF-8（多半是用記事本存成「ANSI」＝Big5）
     NotUtf8,
+    /// `.bin` 認不得：版面版本不合，或檔案損毀（下載中斷、磁碟滿）。
+    ///
+    /// **獨立一種**，理由跟 `NotUtf8` 一樣——講真正的原因。使用者看到
+    /// 「沒有詞」會去檢查內容，但官方包的內容他根本改不了，也看不懂。
+    BadBin,
 }
 
 /// 這些包的最後修改時間（取最大值）。用來判斷「包被改過了要重載」。
@@ -691,13 +1413,9 @@ pub fn stamp(custom: &str, enabled: &[String]) -> Option<std::time::SystemTime> 
     enabled
         .iter()
         .filter_map(|n| {
-            // 跟 `read` 同一條規則：找到第一個就是那一份
-            ds.iter().find_map(|d| {
-                std::fs::metadata(d.join(format!("{n}.txt")))
-                    .ok()?
-                    .modified()
-                    .ok()
-            })
+            // 跟 `read` 同一條規則（`.bin` 優先），找到第一個就是那一份
+            let f = find_pack(&ds, n)?;
+            std::fs::metadata(f.path()).ok()?.modified().ok()
         })
         .max()
 }
@@ -728,6 +1446,20 @@ pub struct Meta {
     pub license: Option<String>,
     pub updated: Option<String>,
     pub homepage: Option<String>,
+    /// **這個包不給編**（設定頁的編輯器整包唯讀）。
+    ///
+    /// 檔頭寫 `# readonly: true`。內建包與官方語言包（台語那類）走
+    /// 這條——它們是隨程式一起發布的，使用者改了下次更新就被覆蓋，
+    /// 而批量刪除更是一按就整包沒了（實測回報）。
+    ///
+    /// # 為什麼放在檔案裡而不是靠檔名或位置判斷
+    ///
+    /// 靠位置（「在 bundled 資料夾就唯讀」）的話，使用者把它複製到
+    /// 自己的資料夾就繞過去了，而**那正是他該做的事**（想改就另存
+    /// 一份）。靠檔名清單則要在程式裡維護一份名單，多一個官方包就
+    /// 要改程式。**寫在檔案裡的話，包自己說了算**——第三方要做唯讀
+    /// 的包也用同一條路。
+    pub readonly: bool,
 }
 
 /// 讀檔頭的基本資料。認不得的鍵**忽略**——之後加欄位，舊版讀到不會壞。
@@ -747,6 +1479,14 @@ fn parse_meta(content: &str) -> Meta {
         };
         let v = v.trim();
         if v.is_empty() {
+            continue;
+        }
+        // 唯讀旗標：**只要寫了 `true` 就是唯讀**，其餘值當成沒寫。
+        // 它不是字串欄位，先攔下來
+        if k.trim().eq_ignore_ascii_case("readonly") {
+            if v.eq_ignore_ascii_case("true") || v == "1" {
+                m.readonly = true;
+            }
             continue;
         }
         let slot = match k.trim().to_ascii_lowercase().as_str() {
@@ -808,40 +1548,494 @@ impl Info {
 /// 給設定頁顯示用——`available()` 刻意不解析內容（列清單要快），
 /// 要看內容的是這一支，一次只讀一個檔。
 pub fn info(custom: &str, file: &str) -> Info {
-    let mut packs = Packs::default();
-    let mut error = None;
+    let ds = dirs(custom);
     // **兩個目錄都要找**——`dirs()` 排好優先序（使用者的贏），只看
-    // `dir()` 的話預載包（內建符號／emoji）永遠讀不到檔頭
-    let meta = dirs(custom)
-        .iter()
-        .find_map(|d| {
-            let p = d.join(format!("{file}.txt"));
-            if !p.exists() {
-                return None;
-            }
-            match read_pack(&p) {
+    // `dir()` 的話預載包（內建符號／emoji）永遠讀不到檔頭。
+    // 找法跟 `read` 共用 `find_pack`：`.bin` 優先，兩邊一漂掉，設定頁
+    // 顯示的就不是實際載入的那一份
+    match find_pack(&ds, file) {
+        // 官方包：檔頭與條數都從二進位檔問，不必解析文字
+        Some(Found::Bin(p)) => match map_pack_bin(&p) {
+            Some(b) => Info {
+                file: file.to_string(),
+                meta: meta_from_bin(b),
+                en: b.len(layer::EN),
+                ja: b.len(layer::JA),
+                // 長輸出也算進 zh——設定頁顯示的是「中文有幾條」，
+                // 使用者不必知道內部分兩層
+                zh: b.len(layer::ZH) + b.len(layer::ZH_LONG),
+                sym: b.len(layer::SYM),
+                tw: b.len(layer::TW),
+                error: None,
+            },
+            // **認不得的 `.bin`**：版本不合或檔案損毀。跟 Big5 那個洞
+            // 同一條原則——講真正的原因，不要跟「沒有詞」共用一句話
+            None => Info {
+                file: file.to_string(),
+                meta: Meta::default(),
+                en: 0,
+                ja: 0,
+                zh: 0,
+                sym: 0,
+                tw: 0,
+                error: Some(PackReadError::BadBin),
+            },
+        },
+        Some(Found::Txt(p)) => {
+            let mut packs = Packs::default();
+            let mut error = None;
+            let meta = match read_pack(&p) {
                 Ok(content) => {
                     parse(&content, &mut packs);
-                    Some(parse_meta(&content))
+                    parse_meta(&content)
                 }
                 Err(e) => {
                     // **讀不起來的原因要留著**，不能跟「沒有詞」共用
                     // 一句話（§2.49.3）
                     error = Some(e);
-                    Some(Meta::default())
+                    Meta::default()
                 }
+            };
+            Info {
+                file: file.to_string(),
+                meta,
+                en: packs.en.len(),
+                ja: packs.ja.len(),
+                zh: packs.zh.len(),
+                sym: packs.sym.len(),
+                tw: packs.tw.len(),
+                error,
             }
+        }
+        None => Info {
+            file: file.to_string(),
+            meta: Meta::default(),
+            en: 0,
+            ja: 0,
+            zh: 0,
+            sym: 0,
+            tw: 0,
+            error: None,
+        },
+    }
+}
+
+/// 把二進位檔的檔頭轉成 `Meta`。
+///
+/// 欄位名跟文字檔頭的 `# name:` 那些**完全一致**——`gen_pack_bin`
+/// 是從同一份 `parse_meta` 的結果寫出去的。
+fn meta_from_bin(b: &'static crate::pack_bin::PackBin) -> Meta {
+    Meta {
+        name: b.meta("name").map(str::to_string),
+        version: b.meta("version").map(str::to_string),
+        author: b.meta("author").map(str::to_string),
+        description: b.meta("description").map(str::to_string),
+        license: b.meta("license").map(str::to_string),
+        updated: b.meta("updated").map(str::to_string),
+        homepage: b.meta("homepage").map(str::to_string),
+        // **官方包一律唯讀**——編輯器改不了二進位檔，而且它是隨版本
+        // 發布的，改了下次更新就被蓋掉。不看檔頭裡寫什麼
+        readonly: true,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// 設定頁的編輯器要用的那幾支。見開發文件 §2.75。
+//
+// **檔案格式完全不動**——這裡只是「把同一份 .txt 讀成看得懂的形狀，
+// 改完再照原樣寫回去」。`parse` 一行都沒改，既有的包不必轉檔。
+// ─────────────────────────────────────────────────────────────
+
+/// 一條詞在編輯器裡長什麼樣。
+///
+/// 跟 `Packs` 的差別：`Packs` 是**合併好的查詢用資料**（依語言分成
+/// 幾個清單），這裡是**一個檔案的逐行內容**，順序跟檔案一致，
+/// 而且原樣保留語言代號——編輯器不認得的種類（`sym`／`tw`）也照樣
+/// 讀出來，存回去時原封不動送回去。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
+    /// 第一欄的語言代號：`en`／`ja`／`zh`／`tw`／`sym`
+    pub lang: String,
+    /// 第二欄：按鍵、注音符號、假名讀音，或符號的名字
+    pub input: String,
+    /// 第三欄。`en` 可以省略（省略就等於輸入本身）
+    pub output: String,
+}
+
+/// 一個包讀出來的完整內容：檔頭 ＋ 逐條的詞。
+#[derive(Debug, Clone, Default)]
+pub struct Editable {
+    pub meta: Meta,
+    pub entries: Vec<Entry>,
+}
+
+/// 把一個包讀成可編輯的形式。
+///
+/// **兩個目錄都找**（使用者的優先），跟 `info` 同一條規則。
+pub fn read_editable(custom: &str, file: &str) -> Result<Editable, PackReadError> {
+    let mut last = PackReadError::Missing;
+    for d in dirs(custom) {
+        let p = d.join(format!("{file}.txt"));
+        if !p.exists() {
+            continue;
+        }
+        match read_pack(&p) {
+            Ok(content) => {
+                return Ok(Editable {
+                    meta: parse_meta(&content),
+                    entries: parse_entries(&content),
+                })
+            }
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+/// 逐行拆成 `Entry`。**跟 `parse` 同一套規則**，但不分流到語言清單，
+/// 也不做安全性過濾——那是載入時的事，編輯器要看到檔案裡真正有什麼。
+fn parse_entries(content: &str) -> Vec<Entry> {
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let line = line.trim_end_matches(['\u{d}', '\u{a}']);
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        let mut f = line.split('\u{9}');
+        let (Some(lang), Some(input)) = (f.next(), f.next()) else {
+            continue;
+        };
+        let input = input.trim();
+        if input.is_empty() {
+            continue;
+        }
+        out.push(Entry {
+            lang: lang.trim().to_string(),
+            input: input.to_string(),
+            output: f.next().map(str::trim).unwrap_or("").to_string(),
+        });
+    }
+    out
+}
+
+/// 把編輯好的內容寫回 `.txt`。
+///
+/// # 寫到哪
+///
+/// **一律寫使用者自己的資料夾**（`resolved_dir`），不寫隨程式一起裝
+/// 的那份——後者更新程式時會被覆蓋，使用者的修改就默默消失了。
+/// 所以改一個內建包等於「在自己的資料夾裡放一份同名的」，而
+/// `dirs()` 的優先序讓那一份贏。
+///
+/// # 覆寫前先備份
+///
+/// 舊的存成 `.txt.bak`。程式寫壞的話至少救得回來——這是**覆寫既有
+/// 檔案**，不是新增。
+pub fn write_editable(custom: &str, file: &str, data: &Editable) -> std::io::Result<PathBuf> {
+    let dir = resolved_dir(custom).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "找不到可以寫入的資料夾")
+    })?;
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{file}.txt"));
+
+    // 覆寫前先備份
+    if path.exists() {
+        let bak = dir.join(format!("{file}.txt.bak"));
+        let _ = std::fs::copy(&path, &bak);
+    }
+
+    std::fs::write(&path, render(data))?;
+    Ok(path)
+}
+
+/// 組出檔案的內容。**格式跟手寫的完全一樣**，別人拿記事本開也看得懂。
+fn render(data: &Editable) -> String {
+    let mut s = String::new();
+    for (key, value) in [
+        ("name", &data.meta.name),
+        ("version", &data.meta.version),
+        ("author", &data.meta.author),
+        ("description", &data.meta.description),
+        ("license", &data.meta.license),
+        ("updated", &data.meta.updated),
+        ("homepage", &data.meta.homepage),
+    ] {
+        if let Some(v) = value {
+            let v = v.trim();
+            if !v.is_empty() {
+                s.push_str(&format!("# {key}: {v}\n"));
+            }
+        }
+    }
+    // **唯讀旗標要寫回去**，不然「另存一份」之後那份就不唯讀了
+    if data.meta.readonly {
+        s.push_str("# readonly: true\n");
+    }
+    if !s.is_empty() {
+        s.push('\n');
+    }
+    for e in &data.entries {
+        // **只有英文省得掉第三欄**：英文的輸出等於輸入時第三欄沒有意義，
+        // 寫出來只是雜訊（手寫的包也不會寫）。
+        //
+        // **其餘語言一律寫三欄**，就算輸出跟讀音長得一樣也要寫。`parse`
+        // 對 `ja`／`zh`／`tw`／`sym` 都要求第三欄，少一欄那條**靜靜消失**
+        // ——純假名的日文詞（`すごい` 的讀音與表記相同）正是這樣掉的，
+        // 設定頁顯示得好好的、打字時卻沒作用（§2.75.13 第二件）。
+        let 省得掉 = e.output.is_empty() || (e.lang == "en" && e.output == e.input);
+        if 省得掉 {
+            s.push_str(&format!("{}\t{}\n", e.lang, e.input));
+        } else {
+            s.push_str(&format!("{}\t{}\t{}\n", e.lang, e.input, e.output));
+        }
+    }
+    s
+}
+
+/// 這串按鍵在擴充包裡對應的中文詞（沒有就是 `None`）。
+///
+/// # 為什麼選詞層需要知道這件事
+///
+/// 擴充包是**使用者的明確表態**——「這串按鍵我就是要這個詞」。
+/// 而選詞的詞層會拿語言模型（bigram）在同讀音的候選之間挑，生造的
+/// 專有名詞在 bigram 眼裡分數極低，於是**包裡的詞被統計推翻**：
+/// 包裡寫 `ㄊㄧㄢㄑㄧˋ → 屇鼜`，打出來還是「天氣」（實測回報）。
+///
+/// 跟 `Slot::picked`（手動選過的字不可覆蓋）是同一條原則，
+/// 只是表態的方式不同：一個是當場選、一個是事先寫進包裡。
+pub fn zh_word(keys: &str) -> Option<String> {
+    if !any() {
+        return None;
+    }
+    index().zh_get(keys).map(str::to_string)
+}
+
+/// 包裡的**長輸出**（字數跟音節數對不上的那些）。
+///
+/// 給 `compose::merge_pack_long` 用——它把那幾格併成一格。查詞層的
+/// `zh_word` 不會回傳這些，兩層是分開的，理由見 `Index::zh_long`。
+pub fn zh_long(keys: &str) -> Option<String> {
+    if !any() {
+        return None;
+    }
+    index().zh_long_get(keys).map(str::to_string)
+}
+
+/// 有沒有任何長輸出條目？**熱路徑靠這個短路**——沒設定長輸出的人
+/// 不必在每次組字時多掃一遍組字區。
+pub fn any_zh_long() -> bool {
+    any() && index().zh_long_len() > 0
+}
+
+/// 注音符號 → 按鍵，**一聲自動補空白**。給設定頁的編輯器用。
+///
+/// 檔案裡的注音是連寫的、而且**一聲不標符號**（「今天」寫成
+/// `ㄐㄧㄣㄊㄧㄢ`），逐字元轉的話每個一聲的空白都會掉，引擎就切不
+/// 出正確的語言（實測回報：`rup wu0` 少了結尾的空白，後半被當成
+/// 英文）。音節邊界的判斷交給 `dict::symbols_to_keys`。
+pub fn bopomofo_to_keys(symbols: &str) -> Option<String> {
+    crate::dict::symbols_to_keys(symbols, &crate::dict::reverse_keymap())
+}
+
+/// 按鍵 → 注音符號。**一聲的空白不寫出來**，跟檔案的慣例一致。
+pub fn keys_to_bopomofo(keys: &str) -> String {
+    keys.chars()
+        .filter(|c| *c != ' ')
+        .map(|c| {
+            crate::bopomofo::keymap::symbol_of(c)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| c.to_string())
         })
-        .unwrap_or_default();
-    Info {
-        file: file.to_string(),
-        meta,
-        en: packs.en.len(),
-        ja: packs.ja.len(),
-        zh: packs.zh.len(),
-        sym: packs.sym.len(),
-        tw: packs.tw.len(),
-        error,
+        .collect()
+}
+
+/// 這個包是不是「隨程式一起裝的」？
+///
+/// 內建包**不能就地改**——更新程式時會被覆蓋。編輯器要據此提醒
+/// 使用者「存下去等於在你自己的資料夾另存一份」。
+pub fn is_bundled_only(custom: &str, file: &str) -> bool {
+    let name = format!("{file}.txt");
+    let in_user = resolved_dir(custom).is_some_and(|d| d.join(&name).exists());
+    let in_bundled = bundled_dir().is_some_and(|d| d.join(&name).exists());
+    in_bundled && !in_user
+}
+
+#[cfg(test)]
+mod 編輯 {
+    use super::*;
+
+    fn sample() -> &'static str {
+        "# name: 測試包\n# version: 2\n\nen\thololive\nzh\tㄏㄨˊㄊㄠˊ\t胡桃\nsym\t星\t★ ☆\n"
+    }
+
+    #[test]
+    fn 讀得出檔頭與每一條() {
+        let e = Editable {
+            meta: parse_meta(sample()),
+            entries: parse_entries(sample()),
+        };
+        assert_eq!(e.meta.name.as_deref(), Some("測試包"));
+        assert_eq!(e.meta.version.as_deref(), Some("2"));
+        assert_eq!(e.entries.len(), 3);
+        assert_eq!(e.entries[1].lang, "zh");
+        assert_eq!(e.entries[1].input, "ㄏㄨˊㄊㄠˊ");
+        assert_eq!(e.entries[1].output, "胡桃");
+    }
+
+    #[test]
+    fn 讀出來再寫回去內容不變() {
+        // **這是編輯器最重要的保證**：使用者只改一個詞，其餘的
+        // 每一條都要原封不動——包括編輯器還不認得的 `sym`
+        let before = Editable {
+            meta: parse_meta(sample()),
+            entries: parse_entries(sample()),
+        };
+        let text = render(&before);
+        let after = Editable {
+            meta: parse_meta(&text),
+            entries: parse_entries(&text),
+        };
+        assert_eq!(before.entries, after.entries);
+        assert_eq!(before.meta.name, after.meta.name);
+        assert_eq!(before.meta.version, after.meta.version);
+    }
+
+    #[test]
+    fn 寫出來的東西載入層讀得懂() {
+        // 寫回去的檔案要能被 `parse`（產品碼那條路）讀出同樣的東西
+        let e = Editable {
+            meta: parse_meta(sample()),
+            entries: parse_entries(sample()),
+        };
+        let mut packs = Packs::default();
+        parse(&render(&e), &mut packs);
+        assert_eq!(packs.en, vec!["hololive"]);
+        assert_eq!(packs.zh.len(), 1);
+        assert_eq!(packs.zh[0].1, "胡桃");
+        assert_eq!(packs.sym.len(), 1);
+    }
+
+    #[test]
+    fn 英文省略第三欄() {
+        let e = Editable {
+            meta: Meta::default(),
+            entries: vec![Entry {
+                lang: "en".into(),
+                input: "hololive".into(),
+                output: "hololive".into(),
+            }],
+        };
+        assert_eq!(render(&e), "en\thololive\n");
+    }
+
+    #[test]
+    fn 沒有檔頭就不寫空行() {
+        let e = Editable {
+            meta: Meta::default(),
+            entries: vec![Entry {
+                lang: "en".into(),
+                input: "a".into(),
+                output: String::new(),
+            }],
+        };
+        assert!(!render(&e).starts_with('\n'));
+    }
+
+    #[test]
+    fn 注音轉按鍵一聲要補空白() {
+        // **檔案裡的一聲不標符號**，但打字要按空白。逐字元轉的話
+        // 每個一聲的空白都會掉，引擎就切不出正確的語言
+        assert_eq!(
+            bopomofo_to_keys("ㄐㄧㄣㄊㄧㄢ").as_deref(),
+            Some("rup wu0 ")
+        );
+        assert_eq!(bopomofo_to_keys("ㄏㄨˊㄊㄠˊ").as_deref(), Some("cj6wl6"));
+        assert_eq!(bopomofo_to_keys("ㄉㄨㄛㄕㄠˇ").as_deref(), Some("2ji gl3"));
+    }
+
+    #[test]
+    fn 按鍵轉注音不寫一聲() {
+        assert_eq!(keys_to_bopomofo("rup wu0 "), "ㄐㄧㄣㄊㄧㄢ");
+        assert_eq!(keys_to_bopomofo("cj6wl6"), "ㄏㄨˊㄊㄠˊ");
+    }
+
+    #[test]
+    fn 注音與按鍵轉一圈回得來() {
+        for bopo in ["ㄐㄧㄣㄊㄧㄢ", "ㄏㄨˊㄊㄠˊ", "ㄉㄨㄛㄕㄠˇ", "ㄋㄧˇㄏㄠˇ"]
+        {
+            let keys = bopomofo_to_keys(bopo).expect("轉不出按鍵");
+            assert_eq!(keys_to_bopomofo(&keys), bopo, "{bopo} 轉一圈回不來");
+        }
+    }
+
+    /// **日文的鍵是假名，不是羅馬字**。
+    ///
+    /// `build_index` 拿第二欄當鍵去對 `to_kana` 的結果——存成羅馬字的話
+    /// 整條查不到（實測回報：包裡寫 `ja asee game`，打 `asee` 出不來）。
+    /// 設定頁的編輯器存檔時要轉，這個測試釘住那個假設。
+    #[test]
+    fn 日文的鍵是假名() {
+        let text = "ja\tあせえ\tgame\n";
+        let mut packs = Packs::default();
+        parse(text, &mut packs);
+        assert_eq!(packs.ja, vec![("あせえ".to_string(), "game".to_string())]);
+
+        // 建索引之後鍵仍然是假名——查詢那一端就是拿假名去對
+        let idx = build_index(&packs);
+        assert_eq!(idx.ja_get("あせえ"), Some("game"));
+        assert_eq!(idx.ja_get("asee"), None, "羅馬字不該是鍵");
+    }
+
+    /// **日文表記跟讀音一樣時，第三欄不能省**。
+    ///
+    /// `render` 原本一律「輸出等於輸入就寫兩欄」，那條只對英文成立
+    /// ——`ja` 少了第三欄，`parse` 直接丟掉整條。純假名的詞
+    /// （`すごい`、`ありがとう`）就是這樣存進去卻沒作用的
+    /// （§2.75.13 第二件）。
+    #[test]
+    fn 日文表記跟讀音一樣時第三欄不能省() {
+        let e = Editable {
+            meta: Meta::default(),
+            entries: vec![Entry {
+                lang: "ja".into(),
+                input: "すごい".into(),
+                output: "すごい".into(),
+            }],
+        };
+        let text = render(&e);
+        assert_eq!(text, "ja\tすごい\tすごい\n");
+
+        // 真正要守的是這一句：寫出來的檔案，載入層讀得到這一條
+        let mut packs = Packs::default();
+        parse(&text, &mut packs);
+        assert_eq!(
+            packs.ja,
+            vec![("すごい".to_string(), "すごい".to_string())],
+            "第三欄省掉的話這一條會在載入層靜靜消失"
+        );
+    }
+
+    #[test]
+    fn 唯讀旗標讀得出來也寫得回去() {
+        let text = "# name: 內建符號\n# readonly: true\n\nsym\t星\t★\n";
+        let m = parse_meta(text);
+        assert!(m.readonly, "檔頭寫了 readonly 就該是唯讀");
+
+        // **寫回去不能掉**——不然「另存一份」之後那份就不唯讀了
+        let e = Editable {
+            meta: m,
+            entries: parse_entries(text),
+        };
+        assert!(render(&e).contains("# readonly: true"));
+        assert!(parse_meta(&render(&e)).readonly);
+    }
+
+    #[test]
+    fn 沒寫唯讀就不是唯讀() {
+        assert!(!parse_meta("# name: 我的包\n\nen\ta\n").readonly);
+        // 認不得的值當成沒寫——**只有明確寫 true 才唯讀**
+        assert!(!parse_meta("# readonly: false\n").readonly);
+        assert!(!parse_meta("# readonly: 隨便\n").readonly);
     }
 }
 
@@ -1005,10 +2199,51 @@ sym	心，heart	♥ ♡
         parse("sym	音樂,music	🎵 🎶 ♪\n", &mut packs);
         let idx = build_index(&packs);
         assert_eq!(
-            idx.sym.get("音樂").map(Vec::as_slice),
-            Some(["♪", "♫", "🎵", "🎶"].map(String::from).as_slice()),
+            idx.sym_get("音樂"),
+            ["♪", "♫", "🎵", "🎶"].map(String::from).to_vec(),
             "兩邊要接起來、先載的排前面、重複的只留一份"
         );
+    }
+
+    /// **字數對得上走詞層，對不上走長輸出層**——兩層分流，都不丟掉。
+    ///
+    /// 以前對不上的整條丟掉，包裡寫了也沒作用（死資料）。
+    #[test]
+    fn 長輸出分流到獨立的一層() {
+        let mut packs = Packs::default();
+        // 兩個音節兩個字：對得上，走詞層
+        parse("zh\tㄐㄧㄣㄊㄧㄢ\t今天\n", &mut packs);
+        // 兩個音節六個字：對不上，走長輸出層
+        parse("zh\tㄨㄛˇㄑㄧㄥˇ\t我請你喝一杯\n", &mut packs);
+        let idx = build_index(&packs);
+
+        let 今天 = bopomofo_to_keys("ㄐㄧㄣㄊㄧㄢ").unwrap();
+        let 長 = bopomofo_to_keys("ㄨㄛˇㄑㄧㄥˇ").unwrap();
+
+        assert_eq!(idx.zh_get(&今天), Some("今天"));
+        assert!(!idx.zh_has(&長), "長輸出不可以混進詞層——詞層是逐格填字的");
+        assert_eq!(
+            idx.zh_long_get(&長),
+            Some("我請你喝一杯"),
+            "字數對不上的要進長輸出層，不是被丟掉"
+        );
+        assert!(
+            !idx.zh_long_get(&今天).is_some(),
+            "對得上的不該同時出現在長輸出層"
+        );
+    }
+
+    /// 只有長輸出條目的包**不是空包**。
+    ///
+    /// `has_words()` 是熱路徑的短路閘門，漏算 `zh_long` 的話整個查詢
+    /// 路徑被關掉，症狀是「設定頁顯示有條目，但打字完全沒作用」。
+    #[test]
+    fn 只有長輸出的包也算有詞() {
+        let mut packs = Packs::default();
+        parse("zh\tㄨㄛˇㄑㄧㄥˇ\t我請你喝一杯\n", &mut packs);
+        let idx = build_index(&packs);
+        assert!(idx.has_words(), "只有長輸出也要算有詞，不然熱路徑會短路掉");
+        assert!(!idx.is_empty());
     }
 
     /// 空的符號欄位不該產生一筆「沒有符號」的名字。
@@ -1045,11 +2280,8 @@ sym	心，heart	♥ ♡
         let n = load(&d, &["test_pack".to_string()]);
         assert_eq!(n, 3, "英日中各一條");
         assert!(any());
-        assert!(index().en.contains("zzpacktestword"));
-        assert_eq!(
-            index().ja.get("っっぱっく").map(String::as_str),
-            Some("パック試験")
-        );
+        assert!(index().en_has("zzpacktestword"));
+        assert_eq!(index().ja_get("っっぱっく"), Some("パック試験"));
 
         // 停用——索引換成空的，熱路徑的旗標也跟著關
         let n = load(&d, &[]);
@@ -1248,5 +2480,134 @@ mod 從別處來的包 {
         let info = info(&testdata(), "test_pack");
         assert_eq!(info.error, None);
         assert!(info.total() > 0);
+    }
+
+    /// **改了包一定要生效**——這是「內容沒變就不重建」那道閘門最危險
+    /// 的失敗模式：判錯的話使用者改了包卻沒反應，**不會報錯、沒有任何
+    /// 跡象**，只能靠重開設定頁才發現。
+    ///
+    /// 這條守的是 `fingerprint` 對「同一個檔案被改掉」夠不夠靈敏。
+    ///
+    /// **不跟別的測試共用全域索引**：`load` 寫的是全域狀態，所以用
+    /// 獨一無二的包名與資料夾，並在最後把索引還原成空的。
+    #[test]
+    fn 改了包要重新載入() {
+        let dir = std::env::temp_dir().join("tsunagi-pack-fingerprint-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("zz指紋測試.txt");
+        let d = dir.to_str().unwrap_or("");
+        let names = ["zz指紋測試".to_string()];
+
+        std::fs::write(&path, "en\tzzfingerprintone\n").unwrap();
+        load(d, &names);
+        assert!(index().en_has("zzfingerprintone"), "第一次載入該讀得到");
+
+        // **長度也要不一樣**：`fingerprint` 比的是 (大小, mtime)，
+        // 而檔案系統的 mtime 解析度在某些平台只到秒——同一秒內改成
+        // 相同長度是已知會漏判的極端情況（見 `FileStamp` 的說明），
+        // 這條測的是一般情況
+        std::fs::write(&path, "en\tzzfingerprinttwo_longer\n").unwrap();
+        load(d, &names);
+        assert!(
+            index().en_has("zzfingerprinttwo_longer"),
+            "改了內容要重新載入，不能被「沒變」擋掉"
+        );
+        assert!(
+            !index().en_has("zzfingerprintone"),
+            "舊的那條該消失——索引是整個換掉的"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        set_index(Index::default());
+    }
+
+    /// **`.bin` 走完整條路要跟 `.txt` 查出一樣的東西**。
+    ///
+    /// 這是官方包二進位化（§2.83 第三步）的端對端測試：產檔 → 找檔 →
+    /// mmap → 查詢，六層都要對得上。
+    ///
+    /// # 為什麼一定要有這條
+    ///
+    /// 產檔端（`layers_for_bin`）與查詢端（`Index::ask_bins`）**是兩份
+    /// 各自維護的程式碼**，中間隔著一個二進位版面。任何一邊算錯位移都
+    /// 不會有編譯錯誤——症狀是「查出別的詞」或「查不到」，而使用者只會
+    /// 覺得「這個包壞了」。
+    ///
+    /// **不跟別的測試共用全域索引**：用獨一無二的包名與資料夾，最後還原。
+    #[test]
+    fn 二進位包跟文字包查出一樣的東西() {
+        let dir = std::env::temp_dir().join("tsunagi-packbin-e2e-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let d = dir.to_str().unwrap_or("");
+        let txt = dir.join("zz二進位測試.txt");
+        let bin = dir.join("zz二進位測試.bin");
+        let names = ["zz二進位測試".to_string()];
+
+        // 六層都放東西——只測台語那層的話，別層的位移算錯看不出來
+        std::fs::write(
+            &txt,
+            "# name: 二進位端對端\n\
+             # license: CC0\n\
+             en\tzzbinword\n\
+             ja\tっっびん\tビン試験\n\
+             zh\tㄗˋㄗˋㄅㄧㄣ\t資自賓\n\
+             zh\tㄗˋㄅㄧㄣ\t這是一串很長的輸出\n\
+             tw\t沙發\t膨椅\n\
+             sym\tっっびんほし\t★ ☆\n",
+        )
+        .unwrap();
+
+        // ① 先走文字檔，記下答案
+        load(d, &names);
+        let want_en = index().en_has("zzbinword");
+        let want_ja = index().ja_get("っっびん").map(str::to_string);
+        let want_zh = index().zh_get("j4j4e2u6").map(str::to_string);
+        let want_tw = index().tw_says("膨椅");
+        let want_sym = index().sym_get("っっびんほし");
+        assert!(want_en, "文字檔這一關就該過");
+        assert!(!want_tw.is_empty(), "台語雙向查得到");
+
+        // ② 產 `.bin`
+        let (meta, layers) = layers_for_bin(std::slice::from_ref(&txt)).expect("產得出來");
+        let bytes = crate::pack_bin::write(&meta, &layers).expect("編得出版面");
+        crate::dict::write_data_file(&bin, &bytes).expect("寫得出去");
+
+        // ③ 再載一次——`find_pack` 該挑 `.bin`（同名時它優先）
+        //
+        // **指紋會發現檔案換了**：`.bin` 跟 `.txt` 的路徑與大小都不同
+        load(d, &names);
+        assert!(index().en_has("zzbinword"), "en 走 .bin 也要認得");
+        assert_eq!(index().ja_get("っっびん").map(str::to_string), want_ja);
+        assert_eq!(index().zh_get("j4j4e2u6").map(str::to_string), want_zh);
+        assert_eq!(index().tw_says("膨椅"), want_tw, "台語雙向要一樣");
+        assert_eq!(index().sym_get("っっびんほし"), want_sym);
+
+        // ④ 檔頭也要跟著進來——授權是散布的必要條件
+        let got = info(d, "zz二進位測試");
+        assert_eq!(got.meta.name.as_deref(), Some("二進位端對端"));
+        assert_eq!(got.meta.license.as_deref(), Some("CC0"));
+        assert!(got.meta.readonly, "官方包一律唯讀");
+        assert!(got.total() > 0, "條數要數得出來，不然設定頁不給勾");
+
+        // ⑤ 設定頁列得出來——只認 `.txt` 的話官方包會整個看不見
+        assert!(
+            available(d).contains(&"zz二進位測試".to_string()),
+            "`.bin` 也要出現在可啟用的清單裡"
+        );
+
+        // ⑥ **三個熱路徑旗標要跟著亮**。
+        //
+        // 這條守的是實際踩過的一個 bug：`set_index` 原本用
+        // `!new.tw.is_empty()` 判斷，那只看使用者文字包那張表，官方包
+        // 在 `bins` 裡它看不到。結果是 `tw_says` 查得到資料、但旗標是
+        // false，而平台層靠旗標決定要不要開段選單——**按 TAB 完全沒
+        // 反應**，而且查表分派全對，讀程式碼很難看出來。
+        assert!(any(), "有詞就要亮 any()");
+        assert!(any_tw(), "有台語就要亮 any_tw()——段選單靠它");
+        assert!(any_sym(), "有符號就要亮 any_sym()");
+
+        let _ = std::fs::remove_file(&txt);
+        let _ = std::fs::remove_file(&bin);
+        set_index(Index::default());
     }
 }

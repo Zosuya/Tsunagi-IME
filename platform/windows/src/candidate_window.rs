@@ -58,7 +58,7 @@ thread_local! {
 
     /// 反白哪一列（候選清單的索引）。`None` 代表不反白。
     ///
-    /// 切法選單要靠它——使用者按空白鍵時，反白條在清單裡上下跑，
+    /// 選字與段選單都靠它——按方向鍵時反白條在清單裡上下跑，
     /// 而不是每按一次就整個清單重排。
     static SELECTED: std::cell::RefCell<Option<usize>> = const { std::cell::RefCell::new(None) };
 

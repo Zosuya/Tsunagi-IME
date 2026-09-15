@@ -39,9 +39,11 @@ use std::collections::BTreeMap;
 #[path = "common/testdata.rs"]
 mod testdata;
 
-/// 整句選單一次列幾列（`session::CUTTING_PAGE`）。
-const CUTTING_PAGE: usize = 10;
-/// 展開後列幾列（`session::CUTTING_PAGE_ALL`）。
+/// 展開後列幾列。
+///
+/// 原本對應 `session::CUTTING_PAGE_ALL`，但**整句選單 2026-09-15 已經
+/// 刪掉**（段選單取代它），所以這裡只剩這支 spike 自己的假設值。
+/// 同批刪掉的 `CUTTING_PAGE`（一次列 10 列）在這裡已經沒人用。
 const CUTTING_PAGE_ALL: usize = 50;
 /// 段選單裡一段最多試幾次（超過就當使用者放棄）。
 const MAX_ROUNDS: usize = 5;

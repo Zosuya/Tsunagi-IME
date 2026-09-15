@@ -1,13 +1,30 @@
 # 下載 Phase 1 三個語言引擎所需的詞庫原始檔。
 #
-# 這些檔案不進版控（見 .gitignore）：McBopomofo 的映射表約 5MB、
+# 大部分檔案不進版控（見 .gitignore）：McBopomofo 的映射表約 5MB、
 # mozc 的辭典分片共約 60MB，不適合放進 git。每台開發機需要各自
 # 執行一次本腳本。
 #
-# 授權（已於 2026-08-23 逐項查證，見開發文件.md §2.3）：
+# **但有四份已經進版控了**（2026-09-12，共 1.9MB）：
+#   BPMFBase.txt / char_freq.txt / zh_tw_50k.txt / en_50k.txt
+# 理由是「上游會錯、上游會飄」，完整說明在 .gitignore 的那段註解。
+# 其中三份走 `Get-File`，它第一件事就是「已存在就略過」，重跑不會覆寫。
+# **`char_freq.txt` 是例外**：它不是下載的，是 `Convert-MoeCharFreq`
+# 就地轉檔產生的，而 `Set-Content` 會無條件覆寫——所以那支函式加了
+# 一道「已存在就略過」，理由見它自己的註解。
+#
+# 授權（2026-08-23 逐項查證，2026-09-02 發布角度再盤點一次，
+# 見開發文件.md §2.3 與 §2.31）：
 #   - McBopomofo BPMFMappings.txt / BPMFBase.txt : MIT
 #   - mozc dictionary_oss/*.txt                  : BSD-3-Clause
 #   - hermitdave/FrequencyWords（en 與 zh_tw）    : MIT
+#   - 國教院詞頻（naer_wordfreq.xlsx）            : 開放資料，可改作
+#   - **教育部字頻／詞頻總表**                    : **CC BY-ND 3.0 TW**
+#
+# ⚠ 教育部那兩份是 **ND（禁止改作）**。查證結論是**可以散布**，義務是
+#   標示出處；而 Big5 表格轉成「字 頻次」兩欄屬於**格式轉換，不算改作**
+#   （CC 官方明示）。但由此而來的限制是：`char_freq.txt` 進了版控之後
+#   **只能原樣保存，不得修改內容**——將來發現它有錯要另做覆寫表，
+#   不可以直接改那個檔。另外三份是 MIT，可以直接修。
 
 $ErrorActionPreference = "Stop"
 $dataDir = $PSScriptRoot
@@ -31,6 +48,19 @@ function Get-File($url, $dest) {
 # 硬比對整行**——部首欄有些字 Big5 解不開，會把欄位切歪，實測「夏」
 # 就是這樣漏掉的。
 function Convert-MoeCharFreq($ZipPath, $OutPath) {
+    # **已存在就略過**，跟 Get-File 一致。
+    #
+    # 為什麼特別要這一道：`char_freq.txt` 從 2026-09-12 起進版控了，而
+    # 下面的 `Set-Content` 是無條件覆寫——重跑一次就會把版控裡那份蓋掉。
+    # 內容雖然一樣（轉檔邏輯沒變），但 `Set-Content` 產的是 CRLF，
+    # git 會看到整檔 5701 列全變，真正的改動就被蓋掉了。
+    #
+    # 要重新產生的話先手動刪掉檔案。**但注意它是 CC BY-ND**，
+    # 版控裡那份只能原樣保存、不得修改內容（見檔頭的授權說明）。
+    if (Test-Path $OutPath) {
+        Write-Output "已存在，略過: $OutPath"
+        return
+    }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     # .NET Core 之後 Big5(950) 要先註冊 CodePages provider 才拿得到。
     [System.Text.Encoding]::RegisterProvider(
@@ -263,13 +293,13 @@ function Convert-WordFreq($NaerXlsx, $MoeZip, $BpmfBase, $SubtitleTxt, $CharFreq
 # 注音：多字詞映射表 + 單字對照表（後者用來補足前者完全不收單字
 # 條目的缺口，2026-08-23 實測發現「大」「的」「一」這類最常用單字
 # 在 BPMFMappings.txt 裡查無對應詞，見開發文件.md §2.1.1）
-New-Item -ItemType Directory -Force -Path "$dataDir\bopomofo" | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $dataDir "bopomofo") | Out-Null
 Get-File `
     "https://raw.githubusercontent.com/openvanilla/McBopomofo/master/Source/Data/BPMFMappings.txt" `
-    "$dataDir\bopomofo\BPMFMappings.txt"
+    (Join-Path $dataDir "bopomofo/BPMFMappings.txt")
 Get-File `
     "https://raw.githubusercontent.com/openvanilla/McBopomofo/master/Source/Data/BPMFBase.txt" `
-    "$dataDir\bopomofo\BPMFBase.txt"
+    (Join-Path $dataDir "bopomofo/BPMFBase.txt")
 
 # 注音的詞頻來源。McBopomofo 的詞庫只有「注音 → 字詞」的對應關係，
 # 沒有詞頻欄位，同音字只能照檔案出現順序排——實測「市」會排在「是」
@@ -279,26 +309,29 @@ Get-File `
 # 引擎讀的是合併後那份。三份各有缺口，單獨用哪一份都不夠。
 Get-File `
     "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/zh_tw/zh_tw_50k.txt" `
-    "$dataDir\bopomofo\zh_tw_50k.txt"
+    (Join-Path $dataDir "bopomofo/zh_tw_50k.txt")
 # 國教院《通用詞頻表》16.4 萬詞，分書面語/口語/新聞三種語域統計。
 # 授權：國教院開放資料政策（可改作、可再授權，標示出處即可）。
 Get-File `
     "https://coct.naer.edu.tw/file/files/%E9%80%9A%E7%94%A8%E8%A9%9E%E9%A0%BB%E8%A1%A8%20-%20%E5%AE%9A%E7%A8%BF1141208.xlsx" `
-    "$dataDir\bopomofo\naer_wordfreq.xlsx"
+    (Join-Path $dataDir "bopomofo/naer_wordfreq.xlsx")
 # 教育部《詞頻總表》4.6 萬詞，跟上面的字頻總表同源。
 # 授權：CC BY-ND 3.0 TW（「禁止改作」不限制格式轉換，見開發文件 §4.32）。
-$moeWordZip = Join-Path $env:TEMP "shrest2.zip"
+# **不要用 `$env:TEMP`**——那是 Windows 才有的變數，在 macOS／Linux 上是
+# null，`Join-Path` 會直接炸掉（CI 的 macOS runner 上踩到）。
+# `[IO.Path]::GetTempPath()` 三個平台都對。
+$moeWordZip = Join-Path ([IO.Path]::GetTempPath()) "shrest2.zip"
 Get-File `
     "https://language.moe.gov.tw/001/Upload/files/SITE_CONTENT/M0001/PRIMARY/download/shrest2.zip" `
     $moeWordZip
 
 # 日文：mozc 的 10 個辭典分片（讀音 / 左id / 右id / 詞頻 / 表記）
-New-Item -ItemType Directory -Force -Path "$dataDir\japanese" | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $dataDir "japanese") | Out-Null
 0..9 | ForEach-Object {
     $n = "{0:D2}" -f $_
     Get-File `
         "https://raw.githubusercontent.com/google/mozc/master/src/data/dictionary_oss/dictionary$n.txt" `
-        "$dataDir\japanese\dictionary$n.txt"
+        (Join-Path $dataDir "japanese/dictionary$n.txt")
 }
 
 # 日文：動詞/形容詞的活用規則。詞庫只收原形（買う），變化形（買って、買った）
@@ -307,10 +340,10 @@ New-Item -ItemType Directory -Force -Path "$dataDir\japanese" | Out-Null
 #   cforms.def ：活用類別 -> 各活用形的語尾（五段・ワ行促音便 的連用タ接続 = っ）
 Get-File `
     "https://raw.githubusercontent.com/google/mozc/master/src/data/dictionary_oss/id.def" `
-    "$dataDir\japanese\id.def"
+    (Join-Path $dataDir "japanese/id.def")
 Get-File `
     "https://raw.githubusercontent.com/google/mozc/master/src/data/rules/cforms.def" `
-    "$dataDir\japanese\cforms.def"
+    (Join-Path $dataDir "japanese/cforms.def")
 
 # 日文：接續成本矩陣（connection matrix）。
 #
@@ -323,13 +356,13 @@ Get-File `
 # 2026-08-25 加入，先給沙盒（方向 c）用，產品端尚未接。
 Get-File `
     "https://raw.githubusercontent.com/google/mozc/master/src/data/dictionary_oss/connection_single_column.txt" `
-    "$dataDir\japanese\connection_single_column.txt"
+    (Join-Path $dataDir "japanese/connection_single_column.txt")
 
 # 英文：詞頻清單（word<TAB>frequency）
-New-Item -ItemType Directory -Force -Path "$dataDir\english" | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $dataDir "english") | Out-Null
 Get-File `
     "https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/en/en_50k.txt" `
-    "$dataDir\english\en_50k.txt"
+    (Join-Path $dataDir "english/en_50k.txt")
 
 # 中文：教育部字頻總表。**這份要就地轉檔**，不是單純下載。
 #
@@ -344,12 +377,12 @@ Get-File `
 # 為什麼要轉檔：原始檔是 Big5 編碼的 ASCII 表格（用 │ 畫框線），
 # 程式讀不了，要抽成「字 頻次」的純文字。轉換在使用者的機器上做，
 # 我們只提供腳本、不再散布那份資料。
-New-Item -ItemType Directory -Force -Path "$dataDir\bopomofo" | Out-Null
-$moeZip = Join-Path $env:TEMP "BIAU1.zip"
+New-Item -ItemType Directory -Force -Path (Join-Path $dataDir "bopomofo") | Out-Null
+$moeZip = Join-Path ([IO.Path]::GetTempPath()) "BIAU1.zip"
 Get-File `
     "https://language.moe.gov.tw/001/Upload/files/SITE_CONTENT/M0001/BIAU1.zip" `
     $moeZip
-Convert-MoeCharFreq -ZipPath $moeZip -OutPath "$dataDir\bopomofo\char_freq.txt"
+Convert-MoeCharFreq -ZipPath $moeZip -OutPath (Join-Path $dataDir "bopomofo/char_freq.txt")
 
 # 中文選字的**字級 bigram 語言模型**（RIME 八股文，LGPL-3）。
 #
@@ -365,17 +398,17 @@ Convert-MoeCharFreq -ZipPath $moeZip -OutPath "$dataDir\bopomofo\char_freq.txt"
 # 處理，輸出的字不受影響。
 Get-File `
     "https://github.com/lotem/rime-octagram-data/raw/hant/zh-hant-t-essay-bgc.gram" `
-    "$dataDir\bopomofo\zh_bigram.gram"
+    (Join-Path $dataDir "bopomofo/zh_bigram.gram")
 
 # 中文：把三份詞頻資料合併成引擎實際讀的 word_freq.txt。
 # 為什麼要三份、怎麼合，見 Convert-WordFreq 的說明。
 Convert-WordFreq `
-    -NaerXlsx    "$dataDir\bopomofo\naer_wordfreq.xlsx" `
+    -NaerXlsx    (Join-Path $dataDir "bopomofo/naer_wordfreq.xlsx") `
     -MoeZip      $moeWordZip `
-    -BpmfBase    "$dataDir\bopomofo\BPMFBase.txt" `
-    -SubtitleTxt "$dataDir\bopomofo\zh_tw_50k.txt" `
-    -CharFreq    "$dataDir\bopomofo\char_freq.txt" `
-    -OutPath     "$dataDir\bopomofo\word_freq.txt"
+    -BpmfBase    (Join-Path $dataDir "bopomofo/BPMFBase.txt") `
+    -SubtitleTxt (Join-Path $dataDir "bopomofo/zh_tw_50k.txt") `
+    -CharFreq    (Join-Path $dataDir "bopomofo/char_freq.txt") `
+    -OutPath     (Join-Path $dataDir "bopomofo/word_freq.txt")
 
 # 讀音別字頻：字頻表沒有讀音維度，會讓「吃」霸佔 ㄐㄧˊ 的第一名。
 # 這一步把 word_freq 依 BPMFMappings 的逐字對齊分攤成「字念這個音的

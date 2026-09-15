@@ -8,7 +8,9 @@ use windows::core::{implement, ComObjectInterface, Error, Interface, Ref, Result
 use windows::Win32::Foundation::{E_FAIL, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::Variant::VARIANT;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+};
 use windows::Win32::UI::TextServices::{
     CLSID_TF_CategoryMgr, IEnumTfDisplayAttributeInfo, ITfCategoryMgr, ITfComposition,
     ITfCompositionSink, ITfCompositionSink_Impl, ITfContext, ITfContextComposition,
@@ -61,9 +63,7 @@ pub(super) struct State {
     /// 狀態轉換的邏輯在 `ime_core::session`——那些跟平台無關，
     /// 放在 core 才測得到。這一層只負責把按鍵翻譯成呼叫哪個方法。
     session: ime_core::session::Session,
-    /// 切法選單開著嗎？開著的話空白鍵是「往下選」而不是注音的一聲。
-    cutting_menu: bool,
-    /// **段選單**開著嗎？（新的，TAB 進的是這個）
+    /// **段選單**開著嗎？（TAB 進的是這個）
     seg_menu: bool,
     /// 使用者設定（行為與外觀）。
     config: ime_core::config::Config,
@@ -157,7 +157,6 @@ pub(super) fn lock_state(m: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
             // ——使用者頂多是「剛打的那幾個字沒了」，比帶著半殘的狀態
             // 繼續組字安全得多
             g.session.clear();
-            g.cutting_menu = false;
             g.seg_menu = false;
             g.gesture.clear();
             g.close_ime_windows();
@@ -513,9 +512,9 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             }
             // **有綁定就一律接手**。
             //
-            // 原本這裡排除了 EnterSelect 與 OpenCuttingMenu（那是還沒實作
+            // 原本這裡排除了 EnterSelect 與（已刪的）整句選單（那是還沒實作
             // 時的權宜），結果 TSF 認為我們不要 TAB／方向鍵，就不會送
-            // OnKeyDown 過來——切法選單根本打不開。
+            // OnKeyDown 過來——選單根本打不開。
             //
             // 這兩個方法的判斷必須完全一致，那正是抽出 keymap 的理由。
             let handled = keymap::lookup(state.mode(), vk).is_some();
@@ -591,7 +590,6 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     && !state.password
                     && state.session.push_punct(ch)
                 {
-                    state.cutting_menu = false;
                     state.seg_menu = false;
                     state.gesture.clear();
                     update_composition(self, context, &mut state)?;
@@ -705,7 +703,6 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                         return Ok(BOOL(1));
                     }
                     state.session.push(ch);
-                    state.cutting_menu = false;
                     state.seg_menu = false;
                     // 手勢必須是連續四下，打了字就重來
                     state.gesture.clear();
@@ -730,8 +727,69 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 }
                 Action::Backspace => {
                     state.session.backspace();
-                    state.cutting_menu = false;
                     state.seg_menu = false;
+                    if state.session.is_empty() {
+                        end_composition(context, &mut state, EndKind::Cancel)?;
+                    } else {
+                        update_composition(self, context, &mut state)?;
+                        show_candidates(context, &mut state)?;
+                    }
+                }
+                // **刪掉反白這一格**（選字模式）。
+                //
+                // 跟 `DeleteSeg` 幾乎一樣，差別在：
+                //   1. 查的是 `delete_marked_cell` 那組設定（格與段各一組）
+                //   2. 刪完**留在選字模式**（框往前挪一格，見
+                //      `Session::delete_marked_slot`），不必收掉候選視窗
+                Action::DeleteCell => {
+                    use ime_core::config::DeleteUnitKey;
+                    let shifted = crate::keymap::shift_down();
+                    let want = match state.config.behavior.delete_marked_cell {
+                        DeleteUnitKey::Off => false,
+                        DeleteUnitKey::Backspace => true,
+                        DeleteUnitKey::ShiftBackspace => shifted,
+                    };
+                    // 刪不了（設定關掉、鎖定模式、對不上）就退回一般的退格
+                    if !want || !state.session.delete_marked_cell() {
+                        state.session.backspace();
+                        state.seg_menu = false;
+                    }
+                    if state.session.is_empty() {
+                        end_composition(context, &mut state, EndKind::Cancel)?;
+                    } else {
+                        update_composition(self, context, &mut state)?;
+                        show_candidates(context, &mut state)?;
+                    }
+                }
+                // **刪掉反白這一段**，選單留著（見 `Session::delete_marked_seg`）。
+                //
+                // 跟 `Backspace` 分開處理的兩個理由：
+                //
+                // 1. `Backspace` 會關掉段選單（`seg_menu = false`），而刪掉
+                //    一段之後使用者多半要接著改遞補上來的那一段
+                // 2. 三態設定要在這裡判斷——綁定表分不出設定值
+                Action::DeleteSeg => {
+                    use ime_core::config::DeleteUnitKey;
+                    let shifted = crate::keymap::shift_down();
+                    let want = match state.config.behavior.delete_marked_seg {
+                        // 關掉：兩顆鍵都退回刪單鍵
+                        DeleteUnitKey::Off => false,
+                        // 倒退鍵刪整段。**`Shift+`倒退鍵也算**——這個設定
+                        // 下 Shift 沒有別的意思，讓它一起生效比「按了沒反應」
+                        // 好（實測回報那類「這顆鍵是不是壞了」多半是這種）
+                        DeleteUnitKey::Backspace => true,
+                        // 並存：只有按著 Shift 才刪整段
+                        DeleteUnitKey::ShiftBackspace => shifted,
+                    };
+                    // 刪不了（空白段、台語模式、對不上）就退回一般的退格,
+                    // 使用者按下去總得有反應
+                    if !want || !state.session.delete_marked_seg() {
+                        state.session.backspace();
+                        state.seg_menu = false;
+                    } else if state.session.seg_done() {
+                        // 整串刪光了，選單沒有東西可挑
+                        state.seg_menu = false;
+                    }
                     if state.session.is_empty() {
                         end_composition(context, &mut state, EndKind::Cancel)?;
                     } else {
@@ -741,8 +799,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 }
                 Action::Cancel => {
                     // 選字或選單開著時，Esc 先退回打字狀態；再按一次才取消組字
-                    if state.cutting_menu || state.session.select_index().is_some() {
-                        state.cutting_menu = false;
+                    if state.session.select_index().is_some() {
                         state.seg_menu = false;
                         state.session.exit_select();
                         show_candidates(context, &mut state)?;
@@ -767,59 +824,9 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 
                 Action::Commit => {
                     let text = state.session.text();
-                    state.cutting_menu = false;
                     state.seg_menu = false;
                     learn_from(&mut state);
                     end_composition(context, &mut state, EndKind::Commit(&text))?;
-                }
-
-                // ── 切法選單 ──
-                Action::OpenCuttingMenu => {
-                    // **鎖定語言時沒有切法可選**——整串就是一段，
-                    // 開一個只有一項的選單只會擋住畫面。
-                    if state.session.lock().is_some() {
-                        return Ok(BOOL(1));
-                    }
-                    // **展開更多不是靠 TAB 按兩下，是往下走到底**——
-                    // 跟選字模式同一種手勢，見 `Session::next_cutting`。
-                    state.cutting_menu = true;
-                    show_candidates(context, &mut state)?;
-                }
-                // **空白鍵展開更多切法**（使用者指定的）。反白不動——
-                // 展開是「讓我多看幾列」，不是「換一個切法」。
-                Action::ExpandCuttingMenu => {
-                    state.session.expand_cutting();
-                    show_candidates(context, &mut state)?;
-                }
-                // **反白條在清單裡跑**，組字區不動。
-                //
-                // 組字區顯示的一直是原始按鍵（打什麼顯示什麼），所以翻切法
-                // 不必改組字區——只要移動反白、重畫預覽列就好。
-                // 之前每次都呼叫 `update_composition`，那是多餘的重寫。
-                Action::NextCutting => {
-                    state.session.next_cutting();
-                    show_candidates(context, &mut state)?;
-                }
-                Action::PrevCutting => {
-                    state.session.prev_cutting();
-                    show_candidates(context, &mut state)?;
-                }
-
-                // 兩種退出選單的方式，差別在「有沒有選中」：
-                //
-                //   Enter → 就用反白這個切法，關選單、留在組字狀態
-                //   TAB   → 單純關掉選單，切法維持原本選中的那個
-                //
-                // 兩者都**不送出**——送出要在關掉選單之後再按一次 Enter。
-                // 目前反白的切法就是 `session.cutting_index()`，兩條路都已經
-                // 是它了，所以差別只在使用者的意圖，實作上都只是關選單。
-                Action::ConfirmCutting | Action::CloseCuttingMenu => {
-                    state.cutting_menu = false;
-                    state.seg_menu = false;
-                    // 展開狀態跟著收回：下次開選單從十列重新開始，
-                    // 不然一按 TAB 就迎面五十列。
-                    state.session.collapse_cutting();
-                    show_candidates(context, &mut state)?;
                 }
 
                 // ── 段選單 ──
@@ -949,16 +956,9 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     update_composition(self, context, &mut state)?;
                     show_candidates(context, &mut state)?;
                 }
-                // TAB：關掉選單，**已經定案的段留著**
+                // TAB 與 Esc：關掉選單，**已經定案的段留著**
                 Action::CloseSegMenu => {
                     state.seg_menu = false;
-                    show_candidates(context, &mut state)?;
-                }
-                // Esc：全部重來，回到引擎自己算的分段
-                Action::SegReset => {
-                    state.session.seg_reset();
-                    state.seg_menu = false;
-                    update_composition(self, context, &mut state)?;
                     show_candidates(context, &mut state)?;
                 }
 
@@ -966,13 +966,11 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 // **方向鍵一律交給 `arrow_*`**——「進選字」與「移動」對使用者
                 // 來說是同一件事（往右），差別是內部細節，見 `arrow_right`
                 Action::EnterSelect => {
-                    state.cutting_menu = false;
                     state.seg_menu = false;
                     state.session.arrow_right();
                     show_candidates(context, &mut state)?;
                 }
                 Action::EnterSelectLast => {
-                    state.cutting_menu = false;
                     state.seg_menu = false;
                     state.session.arrow_left();
                     show_candidates(context, &mut state)?;
@@ -1186,11 +1184,11 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 /// 三個旗標決定在哪個模式。**抽成純函式是為了測得到**——`State` 帶著
 /// COM 物件建不起來，但模式的規則本身只看這幾個布林。
 ///
-/// **順序就是優先權**：選字蓋過段選單、段選單蓋過切法選單。所以
+/// **順序就是優先權**：選字蓋過段選單。所以
 /// **離開選字時一定要把 `seg_menu` 關掉**，否則模式會掉回 `SegMenu`
 /// 而不是 `Typing`，Enter 就變成「定案這一段」永遠送不出去
 /// （實測回報「選字 enter 按不下去」）。
-fn mode_of(empty: bool, selecting: Option<bool>, seg_menu: bool, cutting_menu: bool) -> Mode {
+fn mode_of(empty: bool, selecting: Option<bool>, seg_menu: bool) -> Mode {
     if empty {
         Mode::Idle
     } else if let Some(expanded) = selecting {
@@ -1201,8 +1199,6 @@ fn mode_of(empty: bool, selecting: Option<bool>, seg_menu: bool, cutting_menu: b
         }
     } else if seg_menu {
         Mode::SegMenu
-    } else if cutting_menu {
-        Mode::CuttingMenu
     } else {
         Mode::Typing
     }
@@ -1228,7 +1224,6 @@ impl State {
                 .select_index()
                 .map(|_| self.session.cand_expanded()),
             self.seg_menu,
-            self.cutting_menu,
         )
     }
 }
@@ -1305,18 +1300,15 @@ mod mode_tests {
 
     #[test]
     fn 空的時候是閒置() {
-        assert_eq!(mode_of(true, None, false, false), Mode::Idle);
+        assert_eq!(mode_of(true, None, false), Mode::Idle);
         // 旗標怎麼開都一樣——沒東西可操作
-        assert_eq!(mode_of(true, Some(false), true, true), Mode::Idle);
+        assert_eq!(mode_of(true, Some(false), true), Mode::Idle);
     }
 
     #[test]
     fn 選字蓋過段選單() {
-        assert_eq!(mode_of(false, Some(false), true, false), Mode::Selecting);
-        assert_eq!(
-            mode_of(false, Some(true), true, false),
-            Mode::SelectingExpanded
-        );
+        assert_eq!(mode_of(false, Some(false), true), Mode::Selecting);
+        assert_eq!(mode_of(false, Some(true), true), Mode::SelectingExpanded);
     }
 
     /// **這條規則是「選字 enter 按不下去」的根因。**
@@ -1329,15 +1321,9 @@ mod mode_tests {
     #[test]
     fn 離開選字沒關段選單會掉回段選單() {
         // 沒清乾淨：模式掉回 SegMenu，Enter 送不出去
-        assert_eq!(mode_of(false, None, true, false), Mode::SegMenu);
+        assert_eq!(mode_of(false, None, true), Mode::SegMenu);
         // 清乾淨了才回得到打字狀態
-        assert_eq!(mode_of(false, None, false, false), Mode::Typing);
-    }
-
-    #[test]
-    fn 段選單蓋過切法選單() {
-        assert_eq!(mode_of(false, None, true, true), Mode::SegMenu);
-        assert_eq!(mode_of(false, None, false, true), Mode::CuttingMenu);
+        assert_eq!(mode_of(false, None, false), Mode::Typing);
     }
 }
 
@@ -1421,13 +1407,35 @@ fn learn_from(state: &mut State) {
 /// 改成先問 keymap：綁了就接手，沒綁就讓給宿主。這樣新增 Ctrl 組合
 /// 只要動綁定表，不必再回來改這裡。
 ///
+/// **Win 系一律讓**——那整組都是作業系統保留的（`Win+空白` 切輸入法、
+/// `Win+V` 剪貼簿、`Win+D` 顯示桌面…），我們沒有任何綁定用到它。
+///
+/// 少了這一條會出事的原因是**我們看不見 Win 鍵**：`Win+空白` 進到
+/// 這裡只剩一個裸的空白鍵，而空白在綁定表裡是注音的一聲，於是被
+/// 當成輸入吃掉——**系統收不到，使用者切不走輸入法**。實測是在
+/// 英雄聯盟裡發現的（遊戲本身也搶修飾鍵，症狀最明顯），但這跟宿主
+/// 無關，記事本裡一樣。
+///
+/// 對照組：`Ctrl+Shift` 那條切換路徑沒壞，所以單獨的修飾鍵在
+/// `OnTestKeyDown` 宣告「我要」這件事不必跟著動——沒壞的別碰。
+///
 /// `Ctrl+標點鍵` 不走這條——它在呼叫端就先攔下來了，見 `ctrl_punct`。
 fn defer_to_host(mode: keymap::Mode, vk: u32) -> bool {
     let alt = unsafe { GetKeyState(VK_MENU.0 as i32) < 0 };
-    if alt {
+    // Win 是系統的，整組讓掉——放行條件寫在這裡而不是綁定表，
+    // 因為「不碰 Win」是原則，不是某個鍵的例外
+    let win = unsafe { GetKeyState(VK_LWIN.0 as i32) < 0 || GetKeyState(VK_RWIN.0 as i32) < 0 };
+    let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) < 0 };
+    // 讀鍵盤與下判斷分開，判斷那半才測得到——`GetKeyState` 問的是
+    // 真實鍵盤，單元測試沒辦法假造「Win 按著」
+    defer_decide(mode, vk, alt, win, ctrl)
+}
+
+/// `defer_to_host` 的判斷本體，修飾鍵狀態由呼叫端傳進來。
+fn defer_decide(mode: keymap::Mode, vk: u32, alt: bool, win: bool, ctrl: bool) -> bool {
+    if alt || win {
         return true;
     }
-    let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) < 0 };
     // Ctrl 沒按著就不是這個函式要管的事
     if !ctrl {
         return false;
@@ -1532,9 +1540,9 @@ mod poison_tests {
         let m = Mutex::new(State::default());
         {
             let mut g = lock_state(&m);
-            g.cutting_menu = true;
+            g.seg_menu = true;
         }
-        assert!(lock_state(&m).cutting_menu, "正常路徑不該重設任何東西");
+        assert!(lock_state(&m).seg_menu, "正常路徑不該重設任何東西");
     }
 
     /// 中毒那一次要把組字狀態清乾淨——panic 可能停在組字的一半。
@@ -1543,12 +1551,110 @@ mod poison_tests {
         let m = Mutex::new(State::default());
         {
             let mut g = m.lock().unwrap();
-            g.cutting_menu = true;
+            g.seg_menu = true;
         }
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _g = m.lock().unwrap();
             panic!("裝的");
         }));
-        assert!(!lock_state(&m).cutting_menu, "中毒復原要把組字狀態清掉");
+        assert!(!lock_state(&m).seg_menu, "中毒復原要把組字狀態清掉");
+    }
+}
+
+#[cfg(test)]
+mod defer_tests {
+    use super::*;
+    use windows::Win32::UI::Input::KeyboardAndMouse::VK_SPACE;
+
+    const SPACE: u32 = VK_SPACE.0 as u32;
+
+    /// **`Win+空白` 必須讓給系統**——這是本組測試的主角。
+    ///
+    /// # 這條測試在擋什麼
+    ///
+    /// 原本 `defer_to_host` 只看 Alt 與 Ctrl，**完全沒在看 Win 鍵**。
+    /// 於是 `Win+空白` 進到判斷裡只剩一個裸的空白鍵，而空白在綁定表
+    /// 裡是注音的一聲（`Action::Input(' ')`），於是被當成輸入接手——
+    /// 系統收不到，**使用者切不走輸入法**。
+    ///
+    /// 症狀是在英雄聯盟裡發現的（遊戲本身也搶修飾鍵，所以脫不了身），
+    /// 但這與宿主無關，記事本裡一樣會發生。
+    #[test]
+    fn win加空白要讓給系統() {
+        assert!(
+            defer_decide(keymap::Mode::Typing, SPACE, false, true, false),
+            "Win+空白 是系統的輸入法切換鍵，接手會讓使用者切不走"
+        );
+        assert!(
+            defer_decide(keymap::Mode::Idle, SPACE, false, true, false),
+            "沒組字時也一樣——切換輸入法不必先清空組字區"
+        );
+    }
+
+    /// Win 系**整組**都讓，不是只放行空白。
+    ///
+    /// 我們沒有任何綁定用到 Win，而 `Win+V`／`Win+D` 這些都是系統的。
+    /// 逐鍵開例外遲早會漏，所以判斷寫成「有 Win 就讓」。
+    #[test]
+    fn win的其他組合也要讓() {
+        for vk in [0x44u32, 0x56, 0x45, 0x4C] {
+            assert!(
+                defer_decide(keymap::Mode::Typing, vk, false, true, false),
+                "Win+{vk:#04X} 應該讓給系統"
+            );
+        }
+    }
+
+    /// **反方向**：Win 沒按著時，空白仍然是注音的一聲。
+    ///
+    /// 這條跟上面那條是一組——只證明「按著 Win 會讓」不夠，還要證明
+    /// 修好之後**沒有順手把正常打字弄壞**。
+    #[test]
+    fn 沒按win的空白還是要接手() {
+        assert!(
+            !defer_decide(keymap::Mode::Typing, SPACE, false, false, false),
+            "裸的空白是注音一聲，讓掉會打斷組字"
+        );
+    }
+
+    /// Alt 系照舊全讓（本次改動不該影響它）。
+    #[test]
+    fn alt系照舊全讓() {
+        assert!(defer_decide(
+            keymap::Mode::Typing,
+            SPACE,
+            true,
+            false,
+            false
+        ));
+        assert!(defer_decide(keymap::Mode::Typing, 0x41, true, false, false));
+    }
+
+    /// Ctrl 系照舊「問綁定表，沒綁就讓」。
+    ///
+    /// **這條只驗轉發，不驗 `Ctrl+C` 的結果**——`keymap::lookup` 內部
+    /// 自己去讀真實鍵盤（`ctrl_down()`），測試環境沒人按著 Ctrl，所以
+    /// 它會把 `Ctrl+C` 當成字元 `c` 回答。那個坑（複製貼上失效）由
+    /// `ime_core::binding` 的測試守（那邊修飾鍵是參數，按得出 Ctrl），不在這一層。
+    #[test]
+    fn ctrl系照舊看綁定表() {
+        let bound = keymap::lookup(keymap::Mode::Typing, SPACE).is_some();
+        assert_eq!(
+            defer_decide(keymap::Mode::Typing, SPACE, false, false, true),
+            !bound,
+            "Ctrl 系要照綁定表的答案走"
+        );
+    }
+
+    /// Win 的優先權高於 Ctrl 的綁定表。
+    ///
+    /// `Ctrl+Win+空白` 這種同時按的情況，Win 先贏——系統保留的組合
+    /// 不該因為我們綁了 Ctrl 版本就被吃掉。
+    #[test]
+    fn win贏過ctrl的綁定() {
+        assert!(
+            defer_decide(keymap::Mode::Typing, SPACE, false, true, true),
+            "同時按著 Win 時一律讓，不再去問綁定表"
+        );
     }
 }

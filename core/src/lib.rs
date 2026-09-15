@@ -18,6 +18,7 @@
 
 // 設定檔的讀寫。掛在 `config` feature 後面，
 // 讓純演算法的工具能 --no-default-features 維持零依賴。
+pub mod binding;
 pub mod bopomofo;
 pub mod command;
 pub mod compose;
@@ -33,7 +34,9 @@ pub mod language;
 pub mod learn;
 pub mod lm;
 pub mod pack;
+pub mod pack_bin;
 pub mod render;
+pub mod reverse;
 pub mod romaji;
 pub mod sanitize;
 pub mod session;

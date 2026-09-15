@@ -1,6 +1,6 @@
 [package]
 name = "ime-settings"
-version = "0.3.1"
+version = "1.0.0"
 edition = "2021"
 
 # 設定頁是**獨立執行檔**，不是 DLL 的一部分。
@@ -15,6 +15,13 @@ edition = "2021"
 ime-core = { path = "../core" }
 eframe = "0.32"
 egui = "0.32"
+
+# 讀 GitHub Releases API 回的 JSON（更新檢查，見 `src/update.rs`）。
+#
+# **只拉 JSON 解析，不拉 HTTP 客戶端**：連線交給系統內建的 curl，TLS 用
+# 系統的——一年查不了幾次的功能不值得拉進 rustls 那一整串相依。
+# 2026-09-14 使用者同意新增（方向是「簡單就好」）。
+serde_json = "1"
 
 # 只為了叫系統的「選擇字型」對話框（ChooseFontW）。
 # 自己列幾百項字型再過濾符號字型太囉唆，系統對話框自帶清單與預覽。

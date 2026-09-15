@@ -21,6 +21,9 @@
 //! `%TEMP%\ime_debug.log`。每一行都帶宿主程式名，所以同一份 log 可以
 //! 一路測完記事本、瀏覽器、Word，事後再依程式分開看。
 //!
+//! **開關要在宿主啟動前就備好**——它只在行程第一次寫 log 時讀一次，
+//! 見 `debug_log` 的說明。
+//!
 //! 分析用 `tools/keyprobe.py`。
 
 use std::sync::OnceLock;

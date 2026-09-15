@@ -179,7 +179,7 @@ fn main() {
     }
 
     if verbose && !worst.is_empty() {
-        worst.sort_by(|a, b| b.0.cmp(&a.0));
+        worst.sort_by_key(|x| std::cmp::Reverse(x.0));
         println!("\n最慢的幾次重算：");
         for (_, s) in worst.iter().take(15) {
             println!("{s}");

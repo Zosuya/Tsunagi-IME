@@ -1,4 +1,5 @@
 # name: 內建符號
+# readonly: true
 # description: 星、箭頭、數學、天氣這些常用符號，中日英三種名字都叫得出來
 # version: 4.0
 # license: CC0

@@ -286,6 +286,20 @@ impl IndexRef {
         cur
     }
 
+    /// 還原第 `idx` 把鍵。**給反查用**（詞 → 按鍵）——正向查詢用不到，
+    /// 但設定頁的擴充包編輯器要掃過整份詞典建反向索引（§2.75.3）。
+    ///
+    /// 慢：每次都要從所屬區塊的開頭走過來。**只適合一次掃完建表**，
+    /// 不要放進熱路徑。
+    pub fn key_at(&self, idx: usize) -> Option<String> {
+        if idx >= self.n {
+            return None;
+        }
+        let mut buf = [0u8; 256];
+        let len = self.key_into(idx, &mut buf);
+        std::str::from_utf8(&buf[..len]).ok().map(str::to_string)
+    }
+
     /// 這把鍵排第幾？查不到回 `None`。
     pub fn find(&self, key: &str) -> Option<usize> {
         if self.n == 0 || key.len() > MAX_LEN {

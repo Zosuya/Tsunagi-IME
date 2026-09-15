@@ -108,6 +108,12 @@ fn single_letter_ok(keys: &str, chars: &[char], start: usize, end: usize) -> boo
     if chars.len() <= 1 || end != start + 1 {
         return true;
     }
+    // **大寫的單字母一律保留**：它是按了 Shift 的明確意圖，不可能是
+    // 注音殘渣（大寫不是注音，見 `bopomofo::split_syllables`）。
+    // 不放行的話 `Cji3`（C我）的 `C` 右邊緊接字母，在生成階段就被丟掉。
+    if chars[start].is_ascii_uppercase() {
+        return true;
+    }
     let left = start == 0 || chars[start - 1] == ' ' || punct::is_punct(keys, start - 1);
     let right = end >= chars.len() || chars[end] == ' ' || punct::is_punct(keys, end);
     left && right
@@ -275,6 +281,13 @@ mod tests {
         // a@b.com 的 a（後面是 @）與 b（前後都是標點）
         assert!(keep_seg("a@b.com", 0, 1), "a 後面是標點");
         assert!(keep_seg("a@b.com", 2, 3), "b 前後都是標點");
+    }
+
+    #[test]
+    fn 單字母_大寫的保留() {
+        // `Cji3` = C我：大寫是 Shift 打的，不是切碎的殘渣
+        assert!(keep_seg("Cji3", 0, 1));
+        assert!(!keep_seg("cji3", 0, 1), "小寫照舊丟棄");
     }
 
     #[test]

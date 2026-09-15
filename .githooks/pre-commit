@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# commit 前跑一次筆記守門（tools/check-notes.py）。
+#
+# 為什麼需要它：vault 的 YAML 寫壞、status 打錯、[[連結]] 斷掉，Obsidian
+# 都不會提示——檔案打開來正常，只在 MOC 裡變成 ❓ 或整篇消失。靠人記得
+# 跑一定會漏，所以掛在 commit 上。
+#
+# 為什麼不擋 commit：照 commit-msg 的精神，講一聲但不擋。腳本本身退出碼
+# 永遠是 0；這裡找不到 python3 或 pyyaml 也一樣靜默略過，不讓環境問題
+# 卡住跟筆記無關的 commit。
+#
+# 只在這次 commit 有動到 docs/ 時才跑，改程式碼的 commit 不必多等。
+# quotePath=false 不能省：vault 路徑含中文，預設會被包成 "docs/...\345..."，
+# 開頭多一個引號，grep '^docs/' 就永遠比不到，hook 靜靜地不跑。
+
+git -c core.quotePath=false diff --cached --name-only | grep -q '^docs/' || exit 0
+# Mac 叫 python3，Windows 的 Git Bash 通常只有 python（python3 可能是
+# Microsoft Store 的空殼），所以用「真的 import 得到 yaml」來挑
+PY=
+for c in python3 python; do
+    if "$c" -c 'import yaml' >/dev/null 2>&1; then PY=$c; break; fi
+done
+[ -n "$PY" ] || {
+    echo '筆記檢查略過：找不到裝了 pyyaml 的 python（pip install --user pyyaml）' >&2
+    exit 0
+}
+
+"$PY" tools/check-notes.py --quiet >&2
+exit 0

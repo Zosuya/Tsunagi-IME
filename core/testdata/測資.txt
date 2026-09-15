@@ -1558,6 +1558,7 @@ respond|天|，|我明天就過去|。|開好|，|我看見那隻鳥|。|perform
 こんにちは|_|明天|_|configreport|。|search|ありがとう|_|上傳|_|_|已經|_|logger|上|_|漫画|_|很好看	konnnichiha| |au/6wu0 | |configreport|.|search|arigatou| |g;4tj06| | |u3ru/ | |logger|g;4| |mannga| |cp3cl3d0 	konnnichiha au/6wu0  configreport.searcharigatou g;4tj06  u3ru/  loggerg;4 mannga cp3cl3d0 
 route|你|，|記得這個|_|フォーク|。|去|_|秋葉原|_|質問|box|_|review|_|測試|。|六點要下班|_|兩三年前	route|su3|,|ru42k65k4ek7| |fo-ku|.|fm4| |akihabara| |situmonn|box| |review| |hk4g4|.|xu.42u03ul4vu8410 | |xu;3n0 su06fu06	routesu3,ru42k65k4ek7 fo-ku.fm4 akihabara situmonnbox review hk4g4.xu.42u03ul4vu8410  xu;3n0 su06fu06
 年紀大了|，|買|data|_|六點要下班|，|server|買|，|你好|。|_|come|你|。|アドバイスを聞いていれば|。|那個|_|release|_|延期	su06ru4284xk7|,|a93|data| |xu.42u03ul4vu8410 |,|server|a93|,|su3cl3|.| |come|su3|.|adobaisuwokiiteireba|.|s84ek7| |release| |u06fu6	su06ru4284xk7,a93data xu.42u03ul4vu8410 ,servera93,su3cl3. comesu3.adobaisuwokiiteireba.s84ek7 release u06fu6
+#
 照片|_|then|去|_|一下|_|notebook|_|です|。|応援|_|上映|。|cronjob|_|沒跑|_|number|目|，|見面好吃	5l4qu04| |then|fm4| |u vu84| |notebook| |desu|.|ouenn| |g;4u/4|.|cronjob| |ai4ql3| |number|aj4|,|ru04au04cl3t 	5l4qu04 thenfm4 u vu84 notebook desu.ouenn g;4u/4.cronjob ai4ql3 numberaj4,ru04au04cl3t 
 我進去看看|_|アニメ|這個|，|単位を落とされてしまう|。|take|你|。|握手会|_|要抽選|_|hello|.|_|明天|_|記得	ji3rup4fm4d04d04| |anime|5k4ek7|,|tanniwootosareteshimau|.|take|su3|.|akushukai| |ul t. vm03| |hello|.| |au/6wu0 | |ru42k6	ji3rup4fm4d04d04 anime5k4ek7,tanniwootosareteshimau.takesu3.akushukai ul t. vm03 hello. au/6wu0  ru42k6
 hello|.|.|.|_|剩下|_|test|_|還沒跑|。|兩個|ramen|，|電車|search|，|這個|_|bug|_|很好|_|sensor|稿|_|見面|_|email	hello|.|.|.| |g/4vu84| |test| |c96ai4ql3|.|xu;3ek4|ramen|,|dennsha|search|,|5k4ek7| |bug| |cp3cl3| |sensor|el3| |ru04au04| |email	hello... g/4vu84 test c96ai4ql3.xu;3ek4ramen,dennshasearch,5k4ek7 bug cp3cl3 sensorel3 ru04au04 email
@@ -1929,8 +1930,37 @@ review|稿	review|el3	reviewel3
 # アドバイス 被 `is` 剖開成 あどば|is|うを
 # ——要夠長觸發分區凍結才重現得出來，所以整句照抄 long 節那一句
 年紀大了|，|買|data|_|六點要下班|，|server|買|，|你好|。|_|come|你|。|アドバイスを聞いていれば|。|那個|_|release|_|延期	su06ru4284xk7|,|a93|data| |xu.42u03ul4vu8410 |,|server|a93|,|su3cl3|.| |come|su3|.|adobaisuwokiiteireba|.|s84ek7| |release| |u06fu6	su06ru4284xk7,a93data xu.42u03ul4vu8410 ,servera93,su3cl3. comesu3.adobaisuwokiiteireba.s84ek7 release u06fu6
-
-
+#
+# ---- 中文詞層貪心搶字：左邊的詞把右邊的字搶走（本次）----
+# 單獨打「建立」是對的，加了前文才壞：詞庫裡「想見」「前件」都是真詞，
+# 由左往右最長先命中就跳，「建」被搶去當「見」／「件」，「立」落單。
+# 修法是尾端重切（compose::recut_tail），三道閘門：只在剛收完一個字時、
+# 只碰離尾端幾格、只在切得更完整時。
+想建立	vu;3ru04xu4	vu;3ru04xu4
+前建立	fu06ru04xu4	fu06ru04xu4
+# 前文越長越容易搶：「我想」把「想要建立」的第一個字吃掉，連鎖成
+# 「我想|要件|立」。
+我想要建立	ji3vu;3ul4ru04xu4	ji3vu;3ul4ru04xu4
+#
+# ---- n 行拗音（にゃ／にゅ／にょ）整行打不出來（本次）----
+# 合法性那層把「n 開頭、第二字元不是母音」一律當撥音擋掉，排在拗音
+# 規則前面，`nya` 的 y 不是母音就先被殺了。表裡明明有 ("nya","にゃ")，
+# 卻永遠走不到。測試盲區：拗音那組列了 kya/gya/bya/pya，獨缺 n 行。
+# 順手補上表也漏掉的 nye／nyi——別的行都收滿五個母音，只有 n 行沒有。
+# 「蒟蒻」現在出的是假名（こんにゃく）——**假名本身已經對了**，
+# 漢字轉換是選字層的事，這筆刻意留紅，鎖住的是「打得出假名」這件事。
+蒟蒻	konnnyaku	konnnyaku
+こんにゃく	konnnyaku	konnnyaku
+にゃんこ	nyannko	nyannko
+メニュー	menyu-	menyu-
+ニュース	nyu-su	nyu-su
+# 撥音接拗音、拗音接撥音，兩條規則相鄰的兩個方向都要測
+牛乳	gyuunyuu	gyuunyuu
+# ---- 大寫單字母接注音：Cji3 該是「C我」不是原樣的 Cji3（本 commit）----
+# 大寫原本被當成注音（keymap 不分大小寫），整串認成 ㄏㄨㄛˇ 卻查不到字；
+# 單字母規則又把 `C` 丟掉，C|我 連生都生不出來。
+C|我	C|ji3	Cji3
+你|C|我	su3|C|ji3	su3Cji3
 
 ## number ｜ 主測：數字 ｜ 來源：人工
 # 數字後面接三種語言。**這一節多數是紅的，那是刻意的。**
@@ -2057,3 +2087,48 @@ round2	round2	round2
 大約|15|_|km	284m, |15| |km	284m, 15 km
 6|個月	6|ek4m,4	6ek4m,4
 第|9|課	2u4|9|dk4	2u49dk4
+
+## fuzzy_tone ｜ 主測：選字 ｜ 來源：人工
+# 注音模糊音容錯（第十八組）：30 筆，使用者打錯一個音，期望仍輸出正確的字
+#
+# 【為什麼要這一節】模糊音容錯功能（開發文件 §2.81）在漏斗上完全不可見
+# ——現有 1432 句的鍵串都是 mkkeys 從正確讀音產生的，一筆打錯的音都沒有
+# （spike_fuzzy_tone --scan 實測 0 筆）。沒有這一節，功能做了跟沒做一樣
+# 看不出差別。
+#
+# 【怎麼造的】拿常用雙字詞的正確鍵串，用四組易混音對照替換其中一個音節
+# 的一個字元。四組：ㄣ/ㄥ(p,/)、ㄓ/ㄗ(5,y)、ㄔ/ㄘ(t,h)、ㄕ/ㄙ(g,n)。
+# 第三欄是「打錯的鍵」，第一欄是「期望的正確字」。
+#
+# 【這一節現在會全紅】功能還沒實作，測資反映需求不反映目前能力
+# （CLAUDE.md 的規矩）。
+新聞	vu/ jp6	vu/ jp6
+心情	vu/ fu/6	vu/ fu/6
+朋友	qp6u.3	qp6u.3
+風景	zp ru/3	zp ru/3
+辛苦	vu/ dj3	vu/ dj3
+森林	n/ xup6	n/ xup6
+根本	e/ 1p3	e/ 1p3
+金錢	ru/ fu06	ru/ fu06
+真的	yp 2k7	yp 2k7
+自然	54b06	54b06
+資料	5 xul4	5 xul4
+知道	y 2l4	y 2l4
+最近	5jo4rup4	5jo4rup4
+重要	yj/4ul4	yj/4ul4
+作者	5ji45k3	5ji45k3
+專注	yj0 5j4	yj0 5j4
+陳述	hp6gj4	hp6gj4
+經常	ru/ h;6	ru/ h;6
+超過	hl eji4	hl eji4
+測試	tk4g4	tk4g4
+差別	h8 1u,6	h8 1u,6
+草原	tl3m06	tl3m06
+初次	hj h4	hj h4
+出去	hj fm4	hj fm4
+什麼	nk6ai7	nk6ai7
+事情	n4fu/6	n4fu/6
+社會	nk4cjo4	nk4cjo4
+上面	n;4au04	n;4au04
+使用	n3m/4	n3m/4
+說明	nji au/6	nji au/6

@@ -82,9 +82,35 @@ pub struct Score {
     ///
     /// # 為什麼可以擺在最前面
     ///
-    /// 它**只在「整串剛好是一個合法注音音節」時才有值**，其他輸入一律
+    /// 它只在**「有一個完整的注音音節被切開」**時才有值，其他輸入一律
     /// 是 0，不會影響任何既有的排序。而且只罰「切開」——整串當英文
     /// （`up`）也是一段，不受影響，那種真歧義留給後面的欄位決定。
+    ///
+    /// # 兩種形狀（2026-09-12 補第二種）
+    ///
+    /// 原本只認「整串剛好是一個音節」，判準是 `total_len <= 4`。那是
+    /// 效能考量（熱路徑不能無條件配置字串），但它把**適用範圍**也一起
+    /// 限制掉了：前面一接別的段，整串長度就超標，保護失效。
+    ///
+    /// ```text
+    /// up␣      → 「因」      ✓ 整串就是一個音節，原本那條管得到
+    /// cl3up␣   → 「好up␣」   ✗ 整串 6 鍵，保護沒生效
+    /// ```
+    ///
+    /// 所以補第二種：**左鄰是注音段，而接下來連續幾段合起來剛好是一個
+    /// 音節**。判準用「直接鄰居」而不是全句統計——真正要打英文的人不會
+    /// 把英文接在注音段後面又剛好湊成一個完整音節。
+    ///
+    /// 兩個實作上的細節，各自都會讓這條規則失效：
+    ///
+    /// - **空白不算標點**。一聲就是空白鍵，它獨立成段而且 `is_mark=true`
+    ///   （`英:up | 英:␣`）。當標點擋掉的話 `up␣` 永遠湊不齊
+    /// - **含數字的組合不算**。主鍵盤的數字鍵本身就是注音鍵（`5`=ㄓ、
+    ///   `0`=ㄢ⋯⋯），不擋的話 `等5␣minutes` 會把 `5` 吃進注音變成
+    ///   「等之minutes」、`大約15␣km` 變「大約1支km」。實測不擋是
+    ///   number 節 −1、排名 1.21→1.50
+    ///
+    /// 補完之後漏斗 1320 不變（零退步），目標案例全部修好。
     pub fewer_split_syllable: std::cmp::Reverse<usize>,
     /// **顯示不出來的段落數**（取相反數——越少越好）。
     ///
@@ -476,6 +502,60 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
     let split_syllable = if segs.len() > 1 && total_len <= 4 {
         let whole: String = segs.iter().map(|s| s.keys.as_str()).collect();
         usize::from(crate::bopomofo::split_syllables(&whole).is_some_and(|v| v.len() == 1))
+    } else if segs.len() > 2 {
+        // **整句長於 4 鍵時，只救「被注音段夾住」的那一段。**
+        //
+        // 上面那條只擋得住「整句就是一個音節」。前面一接別的段就失效
+        // ——`cl3up␣`（好因）整串 6 鍵，`up␣`（ㄧㄣ）被切成英文段，
+        // 因為 `up` 是常用英文詞而正解「好因」不是中文詞，
+        // `covered`／`has_dict`／`dict_chars` 三欄都站在英文那邊。
+        //
+        // **判準是直接鄰居而不是全句統計**：夾在兩個注音段中間、自己
+        // 卻不是注音的段，合起來又剛好是一個完整音節——那幾乎一定是
+        // 被切壞的。真正要打英文的人不會把英文夾在兩個注音段之間。
+        //
+        // 只看鄰居的另一個好處是**擋掉數字那批**：`等5␣minutes` 的 `5`
+        // 右邊是英文段，不符合「兩邊都是注音」。主鍵盤的數字鍵本身
+        // 就是注音鍵，不擋的話數字會被吃進音節。
+        // **一聲是空白鍵，而空白會獨立成段**——`up␣`（ㄧㄣ）在候選裡
+        // 長這樣：`英:up | 英:␣`。所以不能只看「這一段」，要看**連續
+        // 幾段合起來**是不是一個音節。
+        let mut n = 0usize;
+        for i in 1..segs.len() {
+            // 左鄰必須是注音段：這是「被切壞的注音」最可靠的訊號，
+            // 而且它擋掉了數字那批（`等5␣minutes` 的 `5` 左鄰是注音，
+            // 但下面還要求整組不含數字）。
+            if segs[i - 1].lang != Language::Bopomofo || segs[i - 1].is_mark {
+                continue;
+            }
+            let mut acc = 0usize;
+            for j in i..segs.len() {
+                // 碰到注音段就停——那一段自己會被判定。
+                //
+                // **空白不算標點**：一聲就是空白鍵，而它會獨立成段而且
+                // `is_mark=true`。把它當標點擋掉的話 `up␣`（ㄧㄣ）永遠
+                // 湊不齊——那正是這條規則要救的形狀。
+                if segs[j].lang == Language::Bopomofo || (segs[j].is_mark && segs[j].keys != " ") {
+                    break;
+                }
+                acc += segs[j].keys.len();
+                if acc > 4 {
+                    break;
+                }
+                let whole: String = segs[i..=j].iter().map(|s| s.keys.as_str()).collect();
+                // **含數字的不算**：主鍵盤的數字鍵本身就是注音鍵
+                // （`5`=ㄓ、`0`=ㄢ⋯⋯），不擋的話 `等5␣minutes` 會把
+                // `5` 吃進注音變成「等之minutes」。實測不擋是 number −1。
+                if whole.chars().any(|c| c.is_ascii_digit()) {
+                    continue;
+                }
+                if crate::bopomofo::split_syllables(&whole).is_some_and(|v| v.len() == 1) {
+                    n += 1;
+                    break;
+                }
+            }
+        }
+        n
     } else {
         0
     };
@@ -853,7 +933,7 @@ fn bopomofo_facts(keys: &str) -> (usize, bool, bool) {
         let mut hit = 0usize;
         for len in (2..=MAX_WORD.min(n - i)).rev() {
             let part = &keys[offs[i]..offs[i + len]];
-            if crate::dict::is_bopomofo_word(part) {
+            if crate::dict::is_bopomofo_word(part) || crate::compose::fuzzy_is_word(part) {
                 covered += part.chars().count();
                 hit = len;
                 break;
@@ -994,6 +1074,66 @@ mod tests {
             .map(|s| format!("{}:{}", s.lang.short(), s.keys.replace(' ', "␣")))
             .collect::<Vec<_>>()
             .join(" | ")
+    }
+
+    /// 注音音節不可以被切成英文段——**前面接了別的段時也一樣**。
+    ///
+    /// `up␣` 是 ㄧㄣ，但 `up` 剛好是常用英文詞，`covered`／`has_dict`／
+    /// `dict_chars` 三欄都站在英文那邊。原本 `fewer_split_syllable` 只在
+    /// 「整串就是一個音節」時生效（`total_len <= 4`），所以：
+    ///
+    /// ```text
+    /// up␣     → 「因」      ✓ 整串 3 鍵，保護生效
+    /// cl3up␣  → 「好up␣」   ✗ 整串 6 鍵，保護失效
+    /// ```
+    ///
+    /// 這條守著補上去的第二種形狀（左鄰是注音段的情況）。
+    #[test]
+    fn 注音音節不被切成英文段() {
+        if !load() {
+            return;
+        }
+        for (keys, want_one_seg) in [
+            ("up ", true),        // 整串就是一個音節，原本那條就管得到
+            ("cl3up ", true),     // 好因——前面接了注音段
+            ("5/ up ", true),     // 爭因
+            ("2u4up 3k4", false), // 的音3惡——中間夾著，只要 up␣ 不被切走
+        ] {
+            let cands = sort(Incremental::from_keys(keys).cuttings());
+            let first = crate::cutpoint::normalize(&cands[0]);
+            let s = show(&first);
+            if want_one_seg {
+                assert!(
+                    first.len() == 1 && first[0].lang == Language::Bopomofo,
+                    "{keys} 該整串是一個注音段，實際 {s}"
+                );
+            }
+            assert!(!s.contains("英:up"), "{keys} 的 up␣ 被切成英文段了：{s}");
+        }
+    }
+
+    /// 數字不可以被吃進注音音節——**上面那條規則的反面**。
+    ///
+    /// 主鍵盤的數字鍵本身就是注音鍵（`5`=ㄓ、`0`=ㄢ⋯⋯），放寬單音節
+    /// 保護時如果不擋數字，`等5␣minutes` 會變成「等之minutes」。
+    /// 實測不擋是 number 節 −1、排名 1.21→1.50。
+    #[test]
+    fn 數字不被吃進注音音節() {
+        if !load() {
+            return;
+        }
+        for keys in ["2/3 5 items", "28y8 15 km"] {
+            let cands = sort(Incremental::from_keys(keys).cuttings());
+            let first = crate::cutpoint::normalize(&cands[0]);
+            let s = show(&first);
+            // 數字要自己成段（或留在英文段裡），不可以黏進注音段
+            assert!(
+                !first.iter().any(|x| x.lang == Language::Bopomofo
+                    && x.keys.chars().any(|c| c.is_ascii_digit())
+                    && x.keys.len() > 4),
+                "{keys} 的數字被吃進注音段了：{s}"
+            );
+        }
     }
 
     #[test]

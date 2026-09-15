@@ -19,8 +19,8 @@
 //!
 //! # 資料來源
 //!
-//! `日文輸入單位一覽.md`（使用者已核對）抄成靜態表，171 條；另補 53 條
-//! 一覽表沒列但引擎判合法的組合，共 224 條。
+//! `日文輸入單位一覽.md`（使用者已核對）抄成靜態表，171 條；另補 55 條
+//! 一覽表沒列但引擎判合法的組合，共 226 條。
 //! 抄而不是解析那份 .md，是因為它在 Obsidian 資料夾裡，不進版控——
 //! 跨電腦會找不到。`bopomofo::keymap` 也是同樣的做法。
 //!
@@ -108,6 +108,7 @@ const MORA_TABLE: &[(&str, &str)] = &[
     ("jye","じぇ"), ("jyi","じぃ"),
     ("kye","きぇ"), ("kyi","きぃ"),
     ("mye","みぇ"), ("myi","みぃ"),
+    ("nye","にぇ"), ("nyi","にぃ"),
     ("pye","ぴぇ"), ("pyi","ぴぃ"),
     ("rye","りぇ"), ("ryi","りぃ"),
     ("sye","しぇ"), ("syi","しぃ"),
@@ -298,6 +299,26 @@ mod tests {
         assert_eq!(to_kana("shashinn").as_deref(), Some("しゃしん"), "写真");
     }
 
+    /// §2.76：n 行拗音（にゃ／にゅ／にょ）。
+    ///
+    /// 曾經整行打不出來——合法性那層把 `n` 開頭一律當撥音擋掉，
+    /// 在輪到拗音規則之前就殺了它。上面的 `撥音()` 用 `kinnyoubi`
+    /// 守著反向：救回拗音不能把撥音弄壞。
+    #[test]
+    fn n_行拗音() {
+        assert_eq!(to_kana("nya").as_deref(), Some("にゃ"));
+        assert_eq!(to_kana("nyu").as_deref(), Some("にゅ"));
+        assert_eq!(to_kana("nyo").as_deref(), Some("にょ"));
+        assert_eq!(
+            to_kana("konnnyaku").as_deref(),
+            Some("こんにゃく"),
+            "蒟蒻——撥音接拗音，兩條規則相鄰"
+        );
+        assert_eq!(to_kana("nyannko").as_deref(), Some("にゃんこ"));
+        assert_eq!(to_kana("menyu-").as_deref(), Some("めにゅー"), "メニュー");
+        assert_eq!(to_kana("nyu-su").as_deref(), Some("にゅーす"), "ニュース");
+    }
+
     #[test]
     fn 非法日文回_none() {
         assert_eq!(to_kana("zzz"), None);
@@ -335,9 +356,11 @@ mod tests {
 
     #[test]
     fn 表的長度() {
-        // 一覽表抄下來 171 條，加上補的 53 條（一覽表沒列但引擎判合法
+        // 一覽表抄下來 171 條，加上補的 55 條（一覽表沒列但引擎判合法
         // 的組合：拗音接 e/i、cy- 系列、x/l 的拗音與特殊小字）。
-        assert_eq!(MORA_TABLE.len(), 224, "實際 {}", MORA_TABLE.len());
+        // 55 而不是 53：§2.76 補上漏掉的 `nye`／`nyi`——別的行都收滿
+        // 五個母音，只有 n 行整行被遺忘，跟拗音那個缺陷同一個根因。
+        assert_eq!(MORA_TABLE.len(), 226, "實際 {}", MORA_TABLE.len());
     }
 
     /// 引擎判為合法的單一 mora，這張表都查得到嗎？

@@ -280,10 +280,19 @@ impl Session {
         // 在這個切法底下選了字，等於認可了這個分段——
         // 之後重算要找回它，不能跳回第一名
         self.remember_cut();
-        // 記下來，之後重建格子時要套回去（見 `reapply_picks`）
+        // 記下來，之後重建格子時要套回去（見 `reapply_picks`）。
+        //
+        // **記的是「從第幾個按鍵開始」**，不是「第幾格」——格數會隨
+        // 切法變，按鍵序號不會。見 `Pick`。
         let keys = self.slots[i].keys.clone();
-        self.picks.retain(|(k, _)| *k != keys);
-        self.picks.push((keys, choice.to_string()));
+        let at: usize = self.slots[..i].iter().map(|s| s.keys.chars().count()).sum();
+        // 同一格重選就換掉舊的
+        self.picks.retain(|p| p.at != at);
+        self.picks.push(crate::session::Pick {
+            at,
+            keys,
+            text: choice.to_string(),
+        });
         compose::pick(&mut self.slots, i, choice);
     }
 

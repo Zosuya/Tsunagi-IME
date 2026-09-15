@@ -23,6 +23,17 @@ pub use syllable::Validity;
 ///
 /// 切不完就回 `None`——依「沒打完 = 非法」的規格，這一層不接受殘餘。
 pub fn split_syllables(keys: &str) -> Option<Vec<String>> {
+    // **大寫字母不是注音**：打得出大寫一定是按了 Shift（或開了 CapsLock），
+    // 那是「我要英文」的明確意圖。
+    //
+    // 原本 `keymap::lookup` 不分大小寫，於是 `Cji3` 被認成一整個注音音節
+    // ㄏㄨㄛˇ——但詞庫是用小寫按鍵查的，查不到字，畫面上只剩原樣的
+    // `Cji3`，而正解 `C|我` 因為「切開了一個注音音節」被排序罰到後面
+    // （實測回報 2026-09-15）。CapsLock 下打注音本來就出不了字（同一個
+    // 查不到的原因），所以這條沒有拿走任何原本能用的東西。
+    if keys.chars().any(|c| c.is_ascii_uppercase()) {
+        return None;
+    }
     let chars: Vec<char> = keys.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
@@ -74,6 +85,13 @@ mod tests {
 
     fn valid(keys: &str) -> bool {
         validity(keys) == Validity::Valid
+    }
+
+    #[test]
+    fn 大寫字母不是注音() {
+        assert!(!valid("Cji3"), "Shift 打出來的大寫是英文");
+        assert!(!valid("SU3CL3"));
+        assert!(valid("cji3"), "小寫照舊");
     }
 
     #[test]
