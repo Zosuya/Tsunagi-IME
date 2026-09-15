@@ -1440,16 +1440,36 @@ pub fn build_kana_layout(data_dir: &Path) -> Option<Vec<u8>> {
 /// 這串羅馬字是日文詞典裡的詞嗎？
 ///
 /// 先轉平假名再查——詞典存的是假名，切法拿的是羅馬字。
+///
+/// # 為什麼要問擴充包
+///
+/// 切法排序靠這支決定「這一段是不是一個詞」。**包原本問不到**，
+/// 所以包裡的詞在切法階段等於不存在——`robokosann` 的 `rob` 是
+/// `en_50k` 的真詞，切法就切給英文段，整串散掉之後選詞層再也拼不
+/// 回來（包是詞層，切法在它之前就決定了）。
+///
+/// 實測 VTuber 名字 315 筆有 40 筆敗在這裡，共同特徵是**開頭撞到
+/// 英文詞**（`rob`／`sas`／`maria`／`yagyu`…）。讓切法看得到包，
+/// 那一段才有機會整段留下來。
 pub fn is_japanese_word(keys: &str) -> bool {
     if crate::learn::cut_any()
         && crate::learn::cutting().lang_of(keys) == Some(crate::language::Language::Romaji)
     {
         return true;
     }
+    let kana = crate::romaji::kana::to_kana(keys);
+    // 包跟學習層同一個位階：使用者明講要的詞，切法就該看得見
+    if crate::pack::any() {
+        if let Some(k) = &kana {
+            if crate::pack::index().ja_get(k).is_some() {
+                return true;
+            }
+        }
+    }
     let Some(d) = ja() else {
         return false;
     };
-    match crate::romaji::kana::to_kana(keys) {
+    match kana {
         Some(k) => d.contains(&k),
         None => false,
     }
