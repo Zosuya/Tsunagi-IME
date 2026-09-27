@@ -1136,6 +1136,14 @@ impl Session {
                 p.at -= len;
             }
         }
+        // 模糊音凍結記錄跟著同一段規則平移／作廢
+        self.fuzzy_fixes
+            .retain(|p| p.at < start || p.at >= start + len);
+        for p in &mut self.fuzzy_fixes {
+            if p.at >= start + len {
+                p.at -= len;
+            }
+        }
         // `jp_bounds` 整個 session 只有一份，認的是「哪一段日文」——
         // 剛好是被刪的那一段就清掉，別段的調整留著
         if self.jp_bounds.as_ref().is_some_and(|b| b.keys == gone) {
@@ -1696,19 +1704,19 @@ mod tests {
         if !load() {
             return;
         }
-        let mut s = sess("loggerul4");
+        let mut s = sess("cursorel3");
         let first = s.seg_segments()[0].keys.clone();
-        // 找「整個 logger 是一段」那個候選
+        // 找「整個 cursor 是一段」那個候選
         let cands = s.seg_cands();
-        let Some(i) = cands.iter().position(|c| c.keys == "logger") else {
+        let Some(i) = cands.iter().position(|c| c.keys == "cursor") else {
             // 引擎連這個候選都給不出來的話這個測試沒意義，但那本身
             // 就是個問題——留個訊息
-            panic!("段選單該列得出 `logger` 這個候選，實際有：{cands:?}");
+            panic!("段選單該列得出 `cursor` 這個候選，實際有：{cands:?}");
         };
         s.seg_set_cand(i);
         s.seg_confirm();
-        assert_eq!(s.seg_segments()[0].keys, "logger", "選了就要定案");
-        assert_ne!(first, "logger", "前提：引擎第一名本來沒把 logger 當一段");
+        assert_eq!(s.seg_segments()[0].keys, "cursor", "選了就要定案");
+        assert_ne!(first, "cursor", "前提：引擎第一名本來沒把 cursor 當一段");
     }
 }
 
@@ -2040,11 +2048,11 @@ mod learn_tests {
         if !load() {
             return;
         }
-        let mut s = sess("loggerul4");
-        // 挑「整個 logger 是一段」
+        let mut s = sess("cursorel3");
+        // 挑「整個 cursor 是一段」
         let cands = s.seg_cands();
-        let Some(i) = cands.iter().position(|c| c.keys == "logger") else {
-            panic!("該列得出 logger");
+        let Some(i) = cands.iter().position(|c| c.keys == "cursor") else {
+            panic!("該列得出 cursor");
         };
         s.seg_set_cand(i);
         s.seg_confirm();
@@ -2074,15 +2082,15 @@ mod learn_tests {
         }
         crate::learn::clear();
 
-        let mut s = sess("loggerul4");
+        let mut s = sess("cursorel3");
         let cands = s.seg_cands();
-        if let Some(i) = cands.iter().position(|c| c.keys == "logger") {
+        if let Some(i) = cands.iter().position(|c| c.keys == "cursor") {
             s.seg_set_cand(i);
             s.seg_confirm();
         }
-        let mut s = sess("loggerul4");
+        let mut s = sess("cursorel3");
         let cands = s.seg_cands();
-        if let Some(i) = cands.iter().position(|c| c.keys == "logger") {
+        if let Some(i) = cands.iter().position(|c| c.keys == "cursor") {
             s.seg_set_cand(i);
             s.seg_confirm();
         }
@@ -2090,10 +2098,10 @@ mod learn_tests {
 
         // **詞層一條都不該有**：`Index::best` 查的是不帶前綴的 key，
         // 而段選單記的一律帶前綴（`record_cutting` 的 `LANG_PREFIX`／
-        // `CUT_PREFIX`）。使用者說「logger 是一個英文段」是**切法**的
+        // `CUT_PREFIX`）。使用者說「cursor 是一個英文段」是**切法**的
         // 知識，不該影響「這個注音該選哪個字」。
         assert_eq!(
-            crate::learn::index().best("loggerul4"),
+            crate::learn::index().best("cursorel3"),
             None,
             "段選單不該動到詞層"
         );
@@ -2153,24 +2161,24 @@ mod revisit_tests {
         if !load() {
             return;
         }
-        let mut s = sess("loggerul4");
+        let mut s = sess("logoute93");
         // 先定案「log」（引擎的預設）
         s.seg_confirm();
         let after_first = s.text();
-        // 走回第一段，改選整個 logger
+        // 走回第一段，改選整個 logout
         while s.seg_index() > 0 {
             s.seg_left();
         }
         let cands = s.seg_cands();
-        let Some(i) = cands.iter().position(|c| c.keys == "logger") else {
-            panic!("該列得出 logger，實際 {cands:?}");
+        let Some(i) = cands.iter().position(|c| c.keys == "logout") else {
+            panic!("該列得出 logout，實際 {cands:?}");
         };
         s.seg_set_cand(i);
         s.seg_confirm();
         assert_ne!(s.text(), after_first, "改了之後輸出該不一樣");
         assert!(
-            s.seg_segments()[0].keys == "logger",
-            "第一段該變成 logger，實際 {:?}",
+            s.seg_segments()[0].keys == "logout",
+            "第一段該變成 logout，實際 {:?}",
             s.seg_segments()[0].keys
         );
     }
@@ -2252,60 +2260,19 @@ mod advance_tests {
 mod taigi_tests {
     use super::*;
 
-    /// 寫一份臨時的台語包並載入。
+    /// 載入引擎與測試包（含那份測試台語）。
     ///
-    /// **不用產品的包**——測試要能獨立跑，而且不受使用者裝了什麼影響。
+    /// # 為什麼走 `compose::tests::load()` 而不是自己載一份
     ///
-    /// **所有台語測試共用這一份**：`pack::load` 寫的是全域狀態，兩份
-    /// 不同內容的測試包會互相覆蓋。實測分成兩份時單獨跑都過、一起跑
-    /// 掛三個（後載入的那份贏，反白落在別的詞上）。
+    /// `pack::load` 換的是**全域**索引——自己載一份台語包會把共用的
+    /// 那份整個取代掉，需要 `zh_long` 的測試就查不到東西了。
+    /// 症狀是「單獨跑過、整批跑掛」，而且**單執行緒也掛**（所以不是
+    /// 並行，是取代）。2026-09-20 實際踩到。
     ///
-    /// 鍵是**華語國字**不是注音，見 `pack::Index::tw`。
-    fn write_test_pack() -> bool {
-        let dir = std::env::temp_dir().join("tsunagi-taigi-test");
-        let _ = std::fs::create_dir_all(&dir);
-        let content = "# 測試用\n\
-            tw\t謝謝\t感恩\n\
-            tw\t謝謝\tseh-seh\n\
-            tw\t謝謝\t多謝\n\
-            tw\t我\t阮\n\
-            tw\t我們\t阮\n\
-            tw\t我們\t咱\n\
-            tw\t沙發\t膨椅\n";
-        if std::fs::write(dir.join("測試台語.txt"), content).is_err() {
-            return false;
-        }
-        crate::pack::load(dir.to_str().unwrap_or(""), &["測試台語".to_string()]);
-        crate::pack::any_tw()
-    }
-
-    /// 載入引擎與那份臨時台語包。**整組測試只做一次**。
-    ///
-    /// # 為什麼要 `OnceLock`
-    ///
-    /// 內容共用一份還不夠。`cargo test` 預設**並行**跑，17 個測試各自
-    /// 呼叫一次 `pack::load`，而 `load` 是「建好新索引再整個換掉」——
-    /// 換的那一瞬間別的測試正在查，就查到半套。症狀是**隨機掛一個**
-    /// （每次不同那個），單執行緒跑則全過。
-    ///
-    /// `OnceLock` 讓載入真的只發生一次：第一個到的做，其餘的等它做完
-    /// 再一起往下走。之後沒有人再動那個索引，查詢自然穩定。
-    ///
-    /// **不用 `serial_test` 那類序列化**：那會讓 17 個測試排隊跑，而
-    /// 它們其實只是共用同一份唯讀資料，並行本身沒有問題。
+    /// **索引只有一份，測試包就該只有一份**：那份台語包現在放在
+    /// `core/testdata/packs/測試台語.txt`，由共用的 `load()` 一起載。
     fn load_with_taigi() -> bool {
-        static READY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *READY.get_or_init(|| {
-            let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .join("data");
-            crate::preload(&data, crate::config::Engines::default());
-            if !crate::dict::all_loaded() {
-                return false;
-            }
-            write_test_pack()
-        })
+        crate::compose::tests::load() && crate::pack::any_tw()
     }
 
     /// **鎖定注音**的 session——台語只在那時出現（使用者裁定）。

@@ -35,13 +35,27 @@ mkdir -p "$STAGE"
 # 重建日文詞庫——實測 674ms，而宿主等我們連上線只等 3 秒（§2.52.23）。
 # 產出來之後載入是 15ms（mmap 直接用），而且隨附體積反而更小：帶
 # 40MB 的 .bin 就不必帶 111MB 的原始文字。
-echo "==> 產生二進位詞庫（缺的才產）"
-"$CARGO" build --release -p ime-core --bins --manifest-path "$ROOT/Cargo.toml" >/dev/null
-for pair in "dict_ja.bin:gen_dict_ja" "dict_zh.bin:gen_dict_zh" "connection.bin:gen_connection"; do
-	f="${pair%%:*}"; gen="${pair##*:}"
-	if [ -z "$(find "$ROOT/data" -name "$f" -print -quit 2>/dev/null)" ]; then
-		echo "    產 $f"
-		(cd "$ROOT" && "./target/release/$gen" >/dev/null)
+#
+# ★ 不能只看「缺不缺」★
+#
+# 原本這裡是「缺的才產」。**檔案在、但版面舊了**（程式把 VERSION 加一之後，
+# 開發機上還是上一版產的 `.bin`）就會原樣包出去——而安裝包裡只有 `.bin`、
+# 沒有文字詞典，程式認不得就沒有退路，日文詞典整個消失，不會有錯誤訊息。
+# dict_ja.bin 的 VERSION 2→3 就差點這樣發出去。
+#
+# 所以一律 `--if-stale`（認得就跳過、認不得或不存在就重產），再 `--check`
+# 守門。判準在 core（`dict_bin::is_current` 那幾支），跟執行期認檔同一套。
+echo "==> 二進位詞庫：這一版程式認不得就重產，再確認一次"
+GENS="gen_dict_zh gen_dict_ja gen_connection"
+for g in $GENS; do
+	"$CARGO" run --release -q -p ime-core --bin "$g" --manifest-path "$ROOT/Cargo.toml" -- --if-stale \
+		| sed 's/^/    /'
+done
+for g in $GENS; do
+	if ! "$CARGO" run --release -q -p ime-core --bin "$g" --manifest-path "$ROOT/Cargo.toml" -- --check \
+		| sed 's/^/    /'; then
+		echo "    ★ $g：要包進去的 .bin 不是這一版程式認得的版面" >&2
+		exit 1
 	fi
 done
 

@@ -5,6 +5,7 @@ status: done
 一句話: "attributesForCharacterIndex 在 7 個宿主全回有效矩形，沒有 macOS 版的 TS_E_NOLAYOUT；範圍內的索引都老實"
 相關:
   - "[[spike 3：候選視窗用 NSPanel]]"
+  - "[[候選面板在全螢幕不出現：全螢幕 Space 收掉時，收起的面板被降成只屬於桌面]]"
 ---
 
 # spike 4：插入點座標 7 個宿主都拿得到
@@ -22,6 +23,11 @@ status: done
 | VS Code（Electron） | (211, 783, 1, 15) | ✅ |
 | Microsoft Word | (249, 548, 1, 43) | ✅ |
 | Obsidian（Electron） | (390, 673, 1, 15) | ✅ |
+
+> **2026-09-16 補一個範圍限制**：上面七個宿主量的**全部是一般視窗**，
+> **全螢幕一個都沒測**。那天遇到 VS Code 全螢幕視窗「打得出字、候選面板
+> 不出現」，根因沒量到，但這張表不足以支持「全螢幕也沒問題」。
+> 見 [[候選面板在全螢幕不出現：全螢幕 Space 收掉時，收起的面板被降成只屬於桌面]]。
 
 **Windows §2.38 那個 `TS_E_NOLAYOUT` 的災情，macOS 沒有對應物。** 那邊網頁
 欄位常常回「還沒排版好」、要另外準備 `GetScreenExt` 退路；這邊 Safari 的

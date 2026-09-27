@@ -12,15 +12,26 @@
 //!
 //! 這是衍生資料，不進版控——跟 `connection.bin`、`dict_ja.bin` 一樣。
 //!
+//! 建置與打包腳本一律跑 `--if-stale`（版面改了才重產），打包另外用
+//! `--check` 守門，見 `common/gen_flags.rs`。
+//!
 //!     cargo run --release -p ime-core --bin gen_dict_zh
+//!     cargo run --release -p ime-core --bin gen_dict_zh -- --if-stale
+//!     cargo run --release -p ime-core --bin gen_dict_zh -- --check
 
 use std::time::Instant;
 
+#[path = "common/gen_flags.rs"]
+mod gen_flags;
+
 fn main() {
+    let mode = gen_flags::mode("gen_dict_zh");
     let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .join("data");
+    let out = data.join("bopomofo").join("dict_zh.bin");
+    gen_flags::gate("gen_dict_zh", mode, &out, ime_core::dict_bin_zh::is_current);
 
     let t = Instant::now();
     let Some(raw) = ime_core::dict::build_zh_layout(&data) else {
@@ -29,7 +40,6 @@ fn main() {
     };
     let build_ms = t.elapsed().as_millis();
 
-    let out = data.join("bopomofo").join("dict_zh.bin");
     if let Err(e) = ime_core::dict::write_data_file(&out, &raw) {
         eprintln!("寫不進 {}：{e}", out.display());
         std::process::exit(1);

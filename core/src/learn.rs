@@ -558,6 +558,18 @@ pub fn record(slots: &[crate::compose::Slot]) -> usize {
             start += 1;
             continue;
         }
+        // **擴充包的長輸出不進學習層**（使用者裁定 2026-09-20）。
+        //
+        // 那一格的 `(keys, text)` 是「整串按鍵 → 整串長輸出」
+        // （`ㄋㄧˇㄏㄠˇ` → 今天天氣好），記進去之後學習層會把它
+        // 釘成預設——而**關掉包也救不回來**，污染已經寫進學習檔了。
+        // 理由跟台語那條防線一樣，見 `Session::seg_taigi`。
+        //
+        // 判準是問包，不是比對文字：包裡可能有一筆剛好等於原樣。
+        if is_pack_long(&slots[start]) {
+            start += 1;
+            continue;
+        }
         let lang = slots[start].lang;
         // **標點自成一段**，不跟旁邊的語言段黏在一起。
         //
@@ -580,6 +592,20 @@ pub fn record(slots: &[crate::compose::Slot]) -> usize {
         set_index(idx);
     }
     n
+}
+
+/// 這一格是擴充包的長輸出嗎？
+///
+/// **問包而不是看文字**：長輸出那一格的 `keys` 是整串（多個音節併成
+/// 一格），文字是包給的整串。一般的格子一格一個音節，所以按鍵長度
+/// 先擋掉絕大多數，只有真的可能是長輸出時才查包。
+fn is_pack_long(slot: &crate::compose::Slot) -> bool {
+    // 一格一個音節的正常格子不必問包——這是每次送出都會走的路
+    if slot.keys.chars().count() < 2 || !crate::pack::any_zh_long() {
+        return false;
+    }
+    let longs = crate::pack::zh_long_all(&slot.keys);
+    longs.contains(&slot.text)
 }
 
 /// 依目前的記法記一條。**選字的四個記錄點共用**——記法只寫一次，
@@ -1266,6 +1292,7 @@ mod tests {
             is_mark: false,
             cands: None,
             picked,
+            fuzzy_fixed: false,
         }
     }
 
@@ -1311,6 +1338,7 @@ mod tests {
             is_mark: false,
             cands: None,
             picked: true,
+            fuzzy_fixed: false,
         }];
         record_run(&mut idx, &run);
         assert!(
@@ -1521,6 +1549,7 @@ mod tests {
             is_mark: false,
             cands: None,
             picked: true,
+            fuzzy_fixed: false,
         }];
         record_run(&mut idx, &run);
         assert_eq!(idx.count("ii", "いい"), 1);

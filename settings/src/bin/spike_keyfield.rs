@@ -123,9 +123,14 @@ fn detect(keys: &str) -> String {
 /// 裝中文字型——不裝的話注音符號全是豆腐塊，這支 spike 就白開了。
 /// 設定頁自己有一份完整的（含預覽字型），這裡只要最小的一份。
 fn install_cjk(ctx: &egui::Context) {
+    // **兩平台都要列**——只列 Windows 的話這支在 Mac 上開起來注音全是
+    // 豆腐塊，而它要驗的正好是 macOS 的行為（2026-09-19 的教訓：spike
+    // 只在一個平台跑過，結論就只在那個平台成立）。
     let candidates: &[(&str, u32)] = &[
         (r"C:\Windows\Fonts\msjh.ttc", 0),
         (r"C:\Windows\Fonts\mingliu.ttc", 0),
+        ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+        ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
     ];
     let Some((bytes, face)) = candidates
         .iter()

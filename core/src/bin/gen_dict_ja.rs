@@ -12,17 +12,38 @@
 //!
 //! 這是衍生資料，不進版控——跟 `connection.bin` 一樣，換機器重跑即可。
 //!
+//! **但安裝版沒有這條退路**：安裝程式只帶 `.bin`、不帶文字詞典，舊版面
+//! 被包出去就是整個沒有日文詞典。所以建置與打包腳本一律跑 `--if-stale`
+//! （版面改了才重產），打包另外用 `--check` 守門，見 `common/gen_flags.rs`。
+//!
 //!     cargo run --release -p ime-core --bin gen_dict_ja
+//!     cargo run --release -p ime-core --bin gen_dict_ja -- --if-stale
+//!     cargo run --release -p ime-core --bin gen_dict_ja -- --check
 
 use std::time::Instant;
 
+#[path = "common/gen_flags.rs"]
+mod gen_flags;
+
 fn main() {
+    let mode = gen_flags::mode("gen_dict_ja");
     let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .join("data");
-    if !data.join("japanese").exists() {
-        eprintln!("找不到 data/japanese/，先跑 data/download.ps1");
+    let out = data.join("japanese").join("dict_ja.bin");
+    gen_flags::gate("gen_dict_ja", mode, &out, ime_core::dict_bin::is_current);
+
+    // 原料不齊就不產：執行期的 `build_kana_layout` 缺原料會默默退化（那是
+    // 退路，該退），但這裡產的是要被包出去、被 `--if-stale` 當成「已是
+    // 最新」的成品——檔頭是對的，之後沒有任何關卡看得出它少了詞性
+    let missing = ime_core::dict::missing_kana_sources(&data);
+    if !missing.is_empty() {
+        eprintln!("原料不齊，不產 dict_ja.bin（產出來會默默少東西）：");
+        for p in &missing {
+            eprintln!("  缺 {}", p.display());
+        }
+        eprintln!("先跑 data/download.ps1");
         std::process::exit(1);
     }
 
@@ -33,7 +54,6 @@ fn main() {
     };
     let build_ms = t.elapsed().as_millis();
 
-    let out = data.join("japanese").join("dict_ja.bin");
     if let Err(e) = ime_core::dict::write_data_file(&out, &raw) {
         eprintln!("寫不進 {}：{e}", out.display());
         std::process::exit(1);

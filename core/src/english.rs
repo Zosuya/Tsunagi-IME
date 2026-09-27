@@ -107,9 +107,78 @@ pub fn is_word(word: &str) -> bool {
         return true;
     }
     match DICT.get() {
-        Some(d) => d.contains(lower.as_ref()),
+        Some(d) => d.contains(lower.as_ref()) || agent_noun(d, lower.as_ref()),
         None => false,
     }
+}
+
+/// 「動詞＋er」的行為者名詞：`sort`→`sorter`、`log`→`logger`、
+/// `link`→`linker`。
+///
+/// # 為什麼要有
+///
+/// en_50k 是字幕語料，這一類技術詞多半沒收。詞典沒收的詞在切法裡
+/// 沒辦法整段活下來，於是「英文詞＋一個中文字」會被切成英文碎片加假名：
+///
+/// ```text
+/// logger要（loggerul4）  →  英:log | 日:geru | 注:l4
+/// sorter要（sorterul4）  →  英:sort | 日:eru | 注:l4
+/// ```
+///
+/// 做法跟日文的 `romaji::inflect` 一樣：**還原成字根再查**，不補資料。
+/// `rank` 對這些詞仍回 `None`——它們不在語料裡，沒有排名可給。
+///
+/// # 三道門，各擋一種誤判
+///
+/// 日文動詞的「え段＋る」（食べる、閉める、上げる）拼出來就是 `…er…`，
+/// 這條還原最怕把它們吃掉，前兩道門都是為了這個：
+///
+/// 1. **字根要在前 5000 名**（跟 `is_top_word` 同一條線）：`shim`（第
+///    20180 名）＋er 會把 `shimerarenakatta`（閉められなかった）切成
+///    shimer｜arenakatta
+/// 2. **字根的長度**：sort＋er 型至少 4 個字母、queue＋r 型至少 5 個。
+///    `age`（第 756 名）＋r 會吃掉 `agerareta`（上げられた）；`tab`＋er
+///    會把 `taberarenakatta`（食べられなかった）切成 taber｜arenakatta
+///    ——這個是還沒有第一道門時量到的，現在 `tab`（第 7715 名）兩道門
+///    都擋
+/// 3. **字根要是動詞**：詞典收了它的 -ing 或 -ed 形（sorting、logged、
+///    mapping、linked、footing）。行為者名詞是從動詞來的，`about`、
+///    `there` 不是動詞。沒有這道門的話前 5000 名的字根能湊出 8570 個
+///    「詞」，絕大多數是 `abouter`、`therer`、`wentter` 這種；加上之後剩
+///    714 個（accesser、plotter、splitter…），要救的全都還在。
+///
+/// 第三道門直接拿「去掉 er 的那串」接 -ing／-ed：這三種詞尾共用同一套
+/// 拼寫變化（字尾的 e 拿掉、短母音後的子音重複），`logg`＋ing、
+/// `queu`＋ing 就是 logging、queuing，不必另外還原。
+fn agent_noun(d: &HashSet<String>, w: &str) -> bool {
+    let Some(stem) = w.strip_suffix("er") else {
+        return false;
+    };
+    let top = |root: &str| {
+        d.contains(root)
+            && RANK
+                .get()
+                .and_then(|m| m.get(root))
+                .is_some_and(|r| *r <= TOP_WORD_RANK)
+    };
+    // sort＋er、link＋er、foot＋er
+    let plain = stem.len() >= 4 && top(stem);
+    // queue＋r、parse＋r：去掉最後那個 r 就是字根（`stem`＋e）
+    let e_root = &w[..w.len() - 1];
+    let silent_e = e_root.len() >= 5 && top(e_root);
+    // log＋g＋er、map＋p＋er：短母音後的子音重複
+    let s = stem.as_bytes();
+    let doubled = s.len() >= 4
+        && s[s.len() - 1] == s[s.len() - 2]
+        && s[s.len() - 1].is_ascii_alphabetic()
+        && !b"aeiou".contains(&s[s.len() - 1])
+        && top(&stem[..stem.len() - 1]);
+    if !(plain || silent_e || doubled) {
+        return false;
+    }
+    // 字根要是動詞（見上面第三道門）。放在最後——走得到這裡的很少，
+    // 值得為它配置字串
+    d.contains(&format!("{stem}ing")) || d.contains(&format!("{stem}ed"))
 }
 
 /// 這是不是一個**夠常用**的英文詞？
@@ -266,5 +335,38 @@ mod tests {
             return;
         }
         assert!(!is_word("zzxxqqww"));
+    }
+
+    /// **「動詞＋er」詞典沒收也要認得**，而且三道門各自守得住。
+    ///
+    /// 要救的詞取自測資 en_vowel／en_split（`logger|要`、`sorter|要`、
+    /// `mapper|改`、`footer|早`、`linker|已`）。英文詞庫進版控，CI 上也跑得到。
+    #[test]
+    fn 動詞加er還原得回字根() {
+        let d = load(&data_dir());
+        if d.is_empty() {
+            return;
+        }
+        for w in ["sorter", "logger", "mapper", "footer", "linker"] {
+            assert!(!d.contains(w), "前提：{w} 不在 en_50k 裡，這條才測得到還原");
+            assert!(is_word(w), "{w} 該還原得回字根");
+            assert!(is_common_word(w), "{w} 夠長，該算常用");
+            assert_eq!(rank(w), None, "還原出來的詞不在語料裡，沒有排名");
+        }
+        // 日文動詞的「え段＋る」不可以被吃掉（前兩道門擋的）
+        assert!(
+            d.contains("shim") && !is_top_word("shim"),
+            "前提：shim 冷僻"
+        );
+        assert!(!is_word("shimer"), "會把 shimerarenakatta 切成 shimer｜…");
+        assert!(!is_word("taber"), "會把 taberarenakatta 切成 taber｜…");
+        // `age` 夠常用、也是動詞（aging），擋它的只有長度
+        assert!(is_top_word("age") && d.contains("aging"), "前提");
+        assert!(!is_word("ager"), "會吃掉 agerareta");
+        // 第三道門：字根要是動詞。`about`、`there` 在前 5000 名、長度也夠，
+        // 但詞典沒有 abouting／thering 這種形，它們不是動詞
+        assert!(is_top_word("about") && is_top_word("there"), "前提");
+        assert!(!is_word("abouter"), "about 不是動詞");
+        assert!(!is_word("therer"), "there 不是動詞");
     }
 }

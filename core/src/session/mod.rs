@@ -227,6 +227,13 @@ pub struct Session {
     /// 這條路在熱路徑上——`rebuild_slots` 每按一鍵跑一次，而**切法
     /// 選單的預覽每一列都跑一次**（`preview_slots`）。
     picks: Vec<Pick>,
+    /// 模糊音修正過、要跨按鍵凍住的格。
+    ///
+    /// 跟 `picks` 同一個機制（`Pick` 的形狀直接借來用，`text` 是修正後的
+    /// 字）：按 `(at, keys)` 認格，重建切法時在 `reapply_fuzzy_fixes` 一併
+    /// 套回去、標成 `fuzzy_fixed`。**不是 `picks` 的一部分**——`learn::record`
+    /// 只掃 `picked`，混進 `picks` 會被誤認成使用者選過而學進去。
+    fuzzy_fixes: Vec<Pick>,
     /// **段選單**：前面幾段是使用者定案的。
     ///
     /// # 只存一個數字
@@ -300,6 +307,25 @@ pub struct Session {
     /// 跟 `seg_taigi` 同一套做法（整段換掉），差別是換上去的那格**不給
     /// 選字**——符號沒有候選可挑，也不該進學習層。
     seg_symbol: Vec<(String, String)>,
+
+    /// **這幾串按鍵不要展開成長輸出**。
+    ///
+    /// 長輸出是多格併一格的（`ㄋㄧˇㄏㄠˇ` → 今天天氣好），併完就沒辦法
+    /// 逐字選字了。使用者在候選裡選回「原樣」時，那一格要**真的拆回
+    /// 多格**——把按鍵串記在這裡，`rebuild_slots` 傳給 `compose`
+    /// 跳過，重算出來自然就是多格。見 `unmerge_long`。
+    ///
+    /// # 為什麼記按鍵串而不是格子位置
+    ///
+    /// 位置會漂移（跟 `picks` 同一個理由）。按鍵串是跟著那一段走的，
+    /// 前面多打幾個字也不會指錯。
+    ///
+    /// # 為什麼不必清
+    ///
+    /// 那串按鍵不在組字區裡的時候，清單裡多一筆也不影響任何東西——
+    /// `merge_pack_long` 只在真的要併時比對。送出時整個 `Session`
+    /// 會 `clear()`，不會跨句累積。
+    no_expand: Vec<String>,
 
     /// 台語模式：反白從第幾**格**開始（一格一個字）。
     ///
@@ -390,9 +416,59 @@ impl Session {
             return false;
         }
         let Some(i) = self.marked_index() else {
-            return false;
+            // **沒有框時退掉最後一個輸入單位**（使用者裁定 2026-09-20）
+            return self.backspace_unit();
         };
         self.delete_marked_slot(i)
+    }
+
+    /// **退掉最後一個輸入單位**：日文一個 mora、中文一個注音音節。
+    /// 退不了回 `false`（呼叫端交回一般的退格）。
+    ///
+    /// # 為什麼是「單位」不是「整格」
+    ///
+    /// 自動模式下**一格未必是一個字**——`sushiwotabemasu` 整串只有一格，
+    /// 刪整格等於整句消失，太兇。而退一個單位剛好對上使用者的心智模型
+    /// （「打錯最後一個字」），也跟鎖定注音的退格語意一致（那裡本來就是
+    /// 退一個音節），**兩種模式行為因此統一**。
+    ///
+    /// # 為什麼是「連退 N 次」而不是直接改按鍵串
+    ///
+    /// 退格是「刪一個字元後整串重建」（累加式沒有反向的走法）。走
+    /// `backspace_one()` 的話，段選單凍結區那套保護
+    /// （`backspace_keeping_seg_choices`）自動沿用——自己動 `keys` 會繞過去。
+    ///
+    /// # 切不出單位時
+    ///
+    /// 回 `false` 交回一般退格。打到一半的 `sush` 切不出 mora、英文根本
+    /// 沒有「單位」這回事，那時退一個字元才是對的。
+    fn backspace_unit(&mut self) -> bool {
+        let keys = self.input.keys();
+        if keys.is_empty() {
+            return false;
+        }
+        // **看最後一段是什麼語言**：混語言長句 `helloすし` 的單位要照
+        // 尾巴那一段算，不是整串。
+        let Some(last) = self.input.cuttings().first().and_then(|c| c.last()) else {
+            return false;
+        };
+        let n = match last.lang {
+            crate::language::Language::Romaji => {
+                // `mora_spans` 回每個 mora 佔幾個按鍵，取最後一個
+                crate::romaji::kana::mora_spans(&last.keys).and_then(|v| v.last().map(|(k, _)| *k))
+            }
+            crate::language::Language::Bopomofo => crate::bopomofo::split_syllables(&last.keys)
+                .and_then(|v| v.last().map(|s| s.chars().count())),
+            // 英文沒有「輸入單位」，標點自成一段——都交回一般退格
+            _ => None,
+        };
+        let Some(n) = n.filter(|n| *n > 0) else {
+            return false;
+        };
+        for _ in 0..n {
+            self.backspace_one();
+        }
+        true
     }
 
     /// 把反白那一格整個刪掉。刪不了回 `false`（交回一般的退格）。
@@ -445,6 +521,13 @@ impl Session {
         let gone_len = len;
         self.picks.retain(|p| p.at != gone_at);
         for p in &mut self.picks {
+            if p.at > gone_at {
+                p.at -= gone_len;
+            }
+        }
+        // 模糊音凍結記錄跟 `picks` 同一條規則平移／作廢
+        self.fuzzy_fixes.retain(|p| p.at != gone_at);
+        for p in &mut self.fuzzy_fixes {
             if p.at > gone_at {
                 p.at -= gone_len;
             }
@@ -963,15 +1046,22 @@ impl Session {
         self.slots = if segs.is_empty() {
             Vec::new()
         } else {
-            compose::compose_all(
+            compose::compose_all_with(
                 &segs,
                 self.width,
                 self.jp_bounds.as_ref(),
                 // 鎖定語言時標點跟著鎖走——句首也才有依據
                 self.lock(),
+                // 使用者選回原樣的那幾串不要再併回長輸出
+                &self.no_expand,
             )
         };
         self.reapply_picks();
+        // 模糊音凍結跨按鍵保留，比照 `picks` 同一套機制。順序在
+        // `reapply_picks` 之後——手動選字（`pick_char`）已經把同一格的
+        // `fuzzy_fixes` 記錄作廢，這裡不會反過來把選過的字蓋掉。
+        self.reapply_fuzzy_fixes();
+        self.harvest_fuzzy_fixes();
         let taigi = std::mem::take(&mut self.seg_taigi);
         self.apply_seg_override(&taigi, true);
         self.seg_taigi = taigi;
@@ -1005,6 +1095,7 @@ impl Session {
                     if !selectable {
                         self.slots[start].selectable = false;
                         self.slots[start].picked = false;
+                        self.slots[start].fuzzy_fixed = false;
                     }
                     // **其餘格清空**——那一段的文字全在第一格了
                     for s in &mut self.slots[start + 1..=i] {
@@ -1030,6 +1121,49 @@ impl Session {
         let picks = std::mem::take(&mut self.picks);
         apply_picks(&mut self.slots, &picks);
         self.picks = picks;
+    }
+
+    /// 把「這一輪重建裡跨按鍵記著、但這次 pipeline 沒有重新推導出來」
+    /// 的模糊音修正套回去。
+    ///
+    /// 跟 `find_chosen`／`apply_picks` 同一個道理：`compose_all_with`
+    /// 每次都是全新算過，`fuzzy_fixed` 只有這次 pipeline 自己抓到的
+    /// 才會是 `true`。限縮重切／模糊音的範圍之後（`RECUT_SPANS`），
+    /// 被推出視野的段落不會再被 `apply_fuzzy_tone` 碰到，得靠這裡把
+    /// 上一輪記下的修正原樣填回去，才不會在那一鍵掉回錯字。
+    fn reapply_fuzzy_fixes(&mut self) {
+        let fixes = std::mem::take(&mut self.fuzzy_fixes);
+        apply_fuzzy_fixes(&mut self.slots, &fixes);
+        self.fuzzy_fixes = fixes;
+    }
+
+    /// 把這一輪 pipeline 新標出來的 `fuzzy_fixed` 格記下來，供下次
+    /// 按鍵時 `reapply_fuzzy_fixes` 用。
+    ///
+    /// 記法跟 `pick_char` 記 `picks` 一致：按「從第幾個按鍵開始」定位，
+    /// 而不是格數（格數會隨切法變動）。
+    fn harvest_fuzzy_fixes(&mut self) {
+        let mut at = 0usize;
+        for s in &self.slots {
+            let len = s.keys.chars().count();
+            if s.fuzzy_fixed {
+                self.fuzzy_fixes.retain(|p| p.at != at);
+                self.fuzzy_fixes.push(Pick {
+                    at,
+                    keys: s.keys.clone(),
+                    text: s.text.clone(),
+                });
+            } else {
+                // **這一格這次沒被標成凍結，且不是手動選過** → 舊的凍結
+                // 記錄作廢。手動選字已經在 `pick_char` 清過，這裡只補
+                // 「打字打過去、這段自然不再是模糊音候選」的情況
+                // （例如使用者刪字重打、或這段被詞層／原鍵正常查到）。
+                if !s.picked {
+                    self.fuzzy_fixes.retain(|p| p.at != at);
+                }
+            }
+            at += len;
+        }
     }
 
     /// 目前的全半形模式。
@@ -1091,6 +1225,41 @@ fn apply_picks(slots: &mut [Slot], picks: &[Pick]) {
             if pick.at == at && pick.keys == slots[i].keys {
                 let text = pick.text.clone();
                 compose::pick(slots, i, &text);
+                p += 1;
+            }
+        }
+        at += len;
+    }
+}
+
+/// 把記著的模糊音修正套回一份格子上。
+///
+/// 跟 `apply_picks` 同一個掃法（按 `at` 遞增同步比對），但**不呼叫
+/// `compose::pick`**——那支會把格子標成 `picked`，模糊音是引擎猜的，
+/// 不可以被當成使用者的選擇（`learn::record` 的門檻只認 `picked`）。
+/// 這裡只改 `text` 跟標 `fuzzy_fixed`，不觸發往後找詞的連鎖（`pick()`
+/// 那個規則是給使用者手動選字用的，模糊音修正本來就已經是完整的詞）。
+fn apply_fuzzy_fixes(slots: &mut [Slot], fixes: &[Pick]) {
+    if fixes.is_empty() {
+        return;
+    }
+    let mut order: Vec<usize> = (0..fixes.len()).collect();
+    order.sort_unstable_by_key(|&k| fixes[k].at);
+
+    let mut p = 0usize;
+    let mut at = 0usize;
+    for slot in slots.iter_mut() {
+        while p < order.len() && fixes[order[p]].at < at {
+            p += 1;
+        }
+        let len = slot.keys.chars().count();
+        // 手動選過的格不給模糊音凍結蓋——跟 `pick_char` 清 `fuzzy_fixes`
+        // 是同一條規則的兩面，這裡是保險
+        if slot.selectable && !slot.picked && p < order.len() {
+            let fix = &fixes[order[p]];
+            if fix.at == at && fix.keys == slot.keys {
+                slot.text = fix.text.clone();
+                slot.fuzzy_fixed = true;
                 p += 1;
             }
         }

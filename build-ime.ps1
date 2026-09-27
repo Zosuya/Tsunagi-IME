@@ -26,7 +26,7 @@
 #
 # # 用法
 #
-#     .\build-ime.ps1              # 建置 DLL
+#     .\build-ime.ps1              # 建置 DLL（建完會順便檢查二進位詞庫，舊版面就重產）
 #     .\build-ime.ps1 -All         # 連設定頁一起建
 #     .\build-ime.ps1 -CleanOnly   # 只清殘留檔，不建置
 #     .\build-ime.ps1 -PanicTest   # 帶「故意 panic」的測試開關（測完要重建）
@@ -132,6 +132,38 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($All) {
     & $cargo build --release -p ime-settings
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+# ── 二進位詞庫：版面改了就重產 ──
+#
+# 程式改了詞庫的版面（`dict_bin.rs` 等處的 VERSION 加一）之後，磁碟上那份
+# 舊 `.bin` 就認不得了。開發機會退回從文字重建——每個行程多等約 1 秒、
+# 多吃一份私有記憶體——**症狀只是「變慢」，沒人會聯想到要重產**。以前
+# 靠人記得跑 gen_*，dict_ja.bin 的 VERSION 2→3 那次就漏了。
+#
+# `--if-stale` 只問「這一版程式認不認得」：認得就跳過（一支零點幾秒），
+# 認不得或不存在才重產。**輸入法用著也寫得進去**：宿主映射著舊檔時，
+# `write_data_file` 在 NTFS 上直接蓋過去、在 exFAT／網路磁碟上把舊檔改名
+# 讓開（跟上面 DLL 讓路同一招）。
+#
+# 失敗就回非零：DLL 已經建好、照樣可以測，但詞庫的問題要被看到。
+$manifest = Join-Path $root 'Cargo.toml'
+$gens = @('gen_dict_zh')
+# 日文那兩份的原料不進版控：沒下載過的機器上產不出來，跳過並講一聲，
+# 不要讓「還沒跑 download.ps1」擋掉 DLL 的建置
+if (Test-Path (Join-Path (Join-Path $root 'data') 'japanese')) {
+    $gens += @('gen_dict_ja', 'gen_connection')
+} else {
+    Write-Host "沒有 data/japanese（詞庫原始檔還沒下載），日文詞庫跳過——先跑 data/download.ps1" -ForegroundColor Yellow
+}
+Write-Host ""
+Write-Host "檢查二進位詞庫的版面（這一版程式認不得就重產）" -ForegroundColor Cyan
+foreach ($g in $gens) {
+    & $cargo run --release -q --manifest-path $manifest -p ime-core --bin $g -- --if-stale
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "✗ $g 失敗：DLL 已經建好，但詞庫沒有跟上這一版程式的版面" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
 }
 
 Write-Host ""

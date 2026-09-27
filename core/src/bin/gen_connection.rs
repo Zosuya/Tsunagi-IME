@@ -18,25 +18,25 @@
 //!
 //! # 格式
 //!
-//! ```text
-//! magic  4 bytes  "TSCM"
-//! ver    u16      1
-//! n      u16      矩陣邊長（id 數）
-//! data   u16 × n×n   little-endian，索引 rid * n + lid
-//! ```
-//!
-//! **little-endian 是刻意的**：三個目標平台（Windows／macOS／Linux）
-//! 都是 LE，不必為了理論上的可攜性去付位元組序轉換的成本。
+//! 見 `dict::encode_connection`。**格式只寫在 core 那一處**——載入端
+//! 與這支共用，`--if-stale` 的判斷也是問 core（`connection_is_current`），
+//! 這裡不另抄一份檔頭。
 //!
 //! # 用法
 //!
 //! ```text
 //! cargo run --release -p ime-core --bin gen_connection
+//! cargo run --release -p ime-core --bin gen_connection -- --if-stale   # 版面沒變就跳過
+//! cargo run --release -p ime-core --bin gen_connection -- --check      # 只檢查，不是目前版面就回 1
 //! ```
 
 use std::path::Path;
 
+#[path = "common/gen_flags.rs"]
+mod gen_flags;
+
 fn main() {
+    let mode = gen_flags::mode("gen_connection");
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -44,6 +44,12 @@ fn main() {
         .join("japanese");
     let src = dir.join("connection_single_column.txt");
     let dst = dir.join("connection.bin");
+    gen_flags::gate(
+        "gen_connection",
+        mode,
+        &dst,
+        ime_core::dict::connection_is_current,
+    );
 
     let t = std::time::Instant::now();
     let content = std::fs::read_to_string(&src).expect("讀不到 connection_single_column.txt");
@@ -72,13 +78,7 @@ fn main() {
     }
     assert_eq!(data.len(), n * n, "行數不足：只讀到 {}", data.len());
 
-    let mut out: Vec<u8> = Vec::with_capacity(8 + data.len() * 2);
-    out.extend_from_slice(b"TSCM");
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&(n as u16).to_le_bytes());
-    for v in &data {
-        out.extend_from_slice(&v.to_le_bytes());
-    }
+    let out = ime_core::dict::encode_connection(n as u16, &data);
     // 原子寫入：這個檔會被 mmap，就地覆寫會動到正在打字的行程
     // 已經映射的位元組。見 `dict::write_data_file`
     ime_core::dict::write_data_file(&dst, &out).expect("寫不出 connection.bin");

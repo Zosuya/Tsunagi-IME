@@ -579,6 +579,14 @@ impl Index {
             })
     }
 
+    /// 三道熱路徑旗標該亮哪幾個：`(any, any_sym, any_tw)`。
+    ///
+    /// `set_index` 用它設旗標；拆成方法是為了讓測試**不換全域索引**
+    /// 也驗得到旗標算得對不對（見 `二進位包跟文字包查出一樣的東西` 的 ⑥）。
+    fn flags(&self) -> (bool, bool, bool) {
+        (self.has_words(), !self.sym_is_empty(), !self.tw_is_empty())
+    }
+
     /// 切出一個範圍裡的字串。**六層的取值都走這裡**。
     #[inline]
     fn vals(&self, s: Span) -> impl Iterator<Item = &str> {
@@ -650,6 +658,29 @@ impl Index {
             .or_else(|| self.ask_bins(|b| b.first(layer::ZH, keys)))
     }
 
+    /// 這串按鍵的**所有**詞，包裡的順序在前。
+    ///
+    /// `zh_get` 只回第一個——那是「不動選字鍵直接送出」要的預設值。
+    /// 選字時要挑得到第二個，走這一支（2026-09-20 使用者裁定，同一串
+    /// 按鍵可以有多個輸出）。
+    ///
+    /// 合併規則跟 `sym_get` 一致：使用者的排前面，`.bin` 的接在後面，
+    /// 去重。
+    pub fn zh_all(&self, keys: &str) -> Vec<String> {
+        let mut out: Vec<String> = match self.zh.find(&self.pool, keys) {
+            Some(s) => self.vals(s).map(str::to_string).collect(),
+            None => Vec::new(),
+        };
+        for b in &self.bins {
+            for s in b.all(layer::ZH, keys) {
+                if !out.iter().any(|x| x == s) {
+                    out.push(s.to_string());
+                }
+            }
+        }
+        out
+    }
+
     /// 有這串按鍵嗎？**不取值**——切點只問「包收了這個詞沒有」。
     pub fn zh_has(&self, keys: &str) -> bool {
         self.zh.has(&self.pool, keys) || self.bins.iter().any(|b| b.has(layer::ZH, keys))
@@ -665,6 +696,26 @@ impl Index {
             .find(&self.pool, keys)
             .and_then(|s| self.first(s))
             .or_else(|| self.ask_bins(|b| b.first(layer::ZH_LONG, keys)))
+    }
+
+    /// 這串按鍵的**所有**長輸出，包裡的順序在前。
+    ///
+    /// 跟 `zh_all` 同一個道理：`zh_long_get` 只回第一個（預設值），
+    /// 選字時要挑得到第二個。合併規則比照 `sym_get`——使用者的排前面、
+    /// `.bin` 的接在後面、去重。
+    pub fn zh_long_all(&self, keys: &str) -> Vec<String> {
+        let mut out: Vec<String> = match self.zh_long.find(&self.pool, keys) {
+            Some(s) => self.vals(s).map(str::to_string).collect(),
+            None => Vec::new(),
+        };
+        for b in &self.bins {
+            for s in b.all(layer::ZH_LONG, keys) {
+                if !out.iter().any(|x| x == s) {
+                    out.push(s.to_string());
+                }
+            }
+        }
+        out
     }
 
     pub fn zh_long_len(&self) -> usize {
@@ -867,9 +918,7 @@ pub fn set_index(new: Index) {
     // （它會問 `bins`），但 `HAS_TW` 是 false，而平台層靠這個旗標決定
     // 要不要開段選單——**按 TAB 完全沒反應**。查表、分派全對，錯在
     // 狀態沒設對，讀程式碼很難看出來（log 一看就知道）。
-    let has = new.has_words();
-    let has_sym = !new.sym_is_empty();
-    let has_tw = !new.tw_is_empty();
+    let (has, has_sym, has_tw) = new.flags();
     write_or_recover(slot(), |g| *g = Arc::new(new));
     HAS.store(has, Ordering::Relaxed);
     HAS_SYM.store(has_sym, Ordering::Relaxed);
@@ -1016,10 +1065,13 @@ fn build_index(packs: &Packs) -> Index {
             continue;
         };
         let (k, v) = (out.pool.put(&keys), out.pool.put(word));
+        // **同一串按鍵可以有多個輸出**（2026-09-20 使用者裁定）：
+        // 選字時全部列出來，第一個仍然是預設值。跨包時前面的包排前面，
+        // 跟 `sym` 同一個規則。
         if word.chars().count() == syllables.len() {
-            b_zh.push_first(k, v);
+            b_zh.push(k, v);
         } else {
-            b_long.push_first(k, v);
+            b_long.push(k, v);
         }
     }
     // 台語：**鍵是華語國字，不是按鍵**——跟其他層都不一樣。
@@ -1214,14 +1266,24 @@ pub fn load(custom: &str, enabled: &[String]) -> usize {
         return n;
     }
 
-    let (packs, bins) = read(custom, enabled);
-    let mut index = build_index(&packs);
-    index.bins = bins;
-    let n = index.en_len() + index.ja_len() + index.zh_len();
+    let (index, n) = build(custom, enabled);
     // 索引跟著換——查詢層只看索引，不看原始清單
     set_index(index);
     remember(fp, n);
     n
+}
+
+/// 讀檔＋建索引，回傳索引與總條數。**不碰任何全域狀態**。
+///
+/// 這是 `load` 的本體，拆出來是為了讓測試能驗「這組設定建出什麼
+/// 索引」而**不必換掉全域那一份**——索引是行程全域的，測試換掉它，
+/// 同時在跑的測試就會在半途看到別人的包（見 `換設定就換索引` 的說明）。
+fn build(custom: &str, enabled: &[String]) -> (Index, usize) {
+    let (packs, bins) = read(custom, enabled);
+    let mut index = build_index(&packs);
+    index.bins = bins;
+    let n = index.en_len() + index.ja_len() + index.zh_len();
+    (index, n)
 }
 
 /// 上一次載入的指紋與結果。
@@ -1738,8 +1800,29 @@ pub fn write_editable(custom: &str, file: &str, data: &Editable) -> std::io::Res
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{file}.txt"));
 
-    // 覆寫前先備份
+    // ★ 唯讀的包一律不覆寫 ★
+    //
+    // 設定頁那邊已經擋過一次（`state.readonly`），這是**第二道閘門**——
+    // 那一道是畫面狀態，走「新增一個同名的包」那條路根本不會經過它：
+    // 新建的 `state.readonly` 是 `false`，存檔就把既有的檔案整份蓋掉。
+    //
+    // 2026-09-20 真的發生了：使用者新建一個叫「台語」的包，官方台語包
+    // 91013 行被覆寫成 5 行（連 CC BY-SA 4.0 的姓名標示檔頭一起沒了，
+    // 那是**授權問題**不只是資料問題）。備份也救不了——`.bak` 存的是
+    // 上一次覆寫後的版本。
+    //
+    // 真正會毀掉檔案的是這裡，所以判準要讀**磁碟上那份檔案**怎麼寫，
+    // 不是呼叫端說什麼。
     if path.exists() {
+        if let Ok(existing) = read_pack(&path) {
+            if parse_meta(&existing).readonly {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("「{file}」是唯讀的包（檔頭寫了 readonly），沒有覆寫它"),
+                ));
+            }
+        }
+        // 覆寫前先備份
         let bak = dir.join(format!("{file}.txt.bak"));
         let _ = std::fs::copy(&path, &bak);
     }
@@ -1821,6 +1904,16 @@ pub fn zh_long(keys: &str) -> Option<String> {
     index().zh_long_get(keys).map(str::to_string)
 }
 
+/// 這串按鍵的**所有**長輸出（第一個是預設值）。
+///
+/// 選字時要挑得到第二個——`zh_long` 只回預設值。
+pub fn zh_long_all(keys: &str) -> Vec<String> {
+    if !any() {
+        return Vec::new();
+    }
+    index().zh_long_all(keys)
+}
+
 /// 有沒有任何長輸出條目？**熱路徑靠這個短路**——沒設定長輸出的人
 /// 不必在每次組字時多掃一遍組字區。
 pub fn any_zh_long() -> bool {
@@ -1849,15 +1942,199 @@ pub fn keys_to_bopomofo(keys: &str) -> String {
         .collect()
 }
 
+/// 這個名字**已經被另一個檔案佔住了嗎**——回傳那個檔案的路徑。
+///
+/// # 為什麼需要這支
+///
+/// 載入時 `find_pack` 的規則是「同一個資料夾裡 `.bin` 先問、`.txt` 後問，
+/// 而且**整份取代不是逐條合併**」。那個規則本身是對的（官方包的正常流程
+/// 就是維護 `.txt`、跑 `gen_pack_bin` 產 `.bin`，兩者同名並存是必要的）。
+///
+/// 出事的是**使用者自建的包撞上同一個名字**：他的 `.txt` 從來沒生效過，
+/// 而且三件事同時靜默出錯（編輯器開到不生效的那份、刪除只刪一半、
+/// 唯讀判斷看不到 `.bin`）。唯一能察覺的方式是「改了怎麼沒反應」。
+///
+/// # 判準是「名字被佔用」，不是「誰是官方」
+///
+/// 一度想用「資料夾裡有 `X.bin` ＝ `X` 是官方包」當判準，但那**依賴
+/// 「所有官方包都會做成 `.bin`」**，而使用者 2026-09-20 裁定以後可能會有
+/// 只發 `.txt` 的官方包——判準當場就漏。
+///
+/// 改成不問身分：**同一個資料夾裡不准有兩個同名的包**。撞到就擋下來、
+/// 請使用者換個名字。誰是官方變成不相干的事。
+///
+/// `ignore_txt` 給「編輯既有的 `X.txt` 再存檔」用——那份 `.txt` 是他自己
+/// 正在編的，不算佔用。
+pub fn name_taken_by(custom: &str, file: &str, ignore_txt: bool) -> Option<PathBuf> {
+    let d = resolved_dir(custom)?;
+    let bin = d.join(format!("{file}.bin"));
+    if bin.is_file() {
+        return Some(bin);
+    }
+    if !ignore_txt {
+        let txt = d.join(format!("{file}.txt"));
+        if txt.is_file() {
+            return Some(txt);
+        }
+    }
+    None
+}
+
+/// 這個名字還沒被佔用的話回它自己，否則往後加 `-2`、`-3`⋯⋯
+///
+/// **提一個名字讓使用者一鍵接受**，不要默默改掉他打的字（使用者裁定
+/// 2026-09-20：「擋下來或是幫他改」）。
+pub fn suggest_free_name(custom: &str, file: &str) -> String {
+    if name_taken_by(custom, file, false).is_none() {
+        return file.to_string();
+    }
+    // 上限純粹是保險，正常情況第一兩個就找得到
+    for n in 2..100 {
+        let cand = format!("{file}-{n}");
+        if name_taken_by(custom, &cand, false).is_none() {
+            return cand;
+        }
+    }
+    file.to_string()
+}
+
 /// 這個包是不是「隨程式一起裝的」？
 ///
 /// 內建包**不能就地改**——更新程式時會被覆蓋。編輯器要據此提醒
 /// 使用者「存下去等於在你自己的資料夾另存一份」。
 pub fn is_bundled_only(custom: &str, file: &str) -> bool {
-    let name = format!("{file}.txt");
-    let in_user = resolved_dir(custom).is_some_and(|d| d.join(&name).exists());
-    let in_bundled = bundled_dir().is_some_and(|d| d.join(&name).exists());
+    // **`.bin` 也要算**：官方包做成 `.bin` 之後，只看 `.txt` 會把它判成
+    // 「不存在」，於是唯讀提醒整個消失（2026-09-19 實測回報的一環）。
+    let has = |d: &std::path::Path| {
+        d.join(format!("{file}.txt")).exists() || d.join(format!("{file}.bin")).exists()
+    };
+    let in_user = resolved_dir(custom).is_some_and(|d| has(&d));
+    let in_bundled = bundled_dir().is_some_and(|d| has(&d));
     in_bundled && !in_user
+}
+
+#[cfg(test)]
+mod 同名佔用 {
+    use super::*;
+
+    /// 每條測試自己一個資料夾（`cargo test` 預設並行）。
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("tsunagi_clash_{name}"));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// ★ 這一組守的是 2026-09-19 實測回報的那串怪現象 ★
+    ///
+    /// 自建包取名撞上官方包時，載入永遠是 `.bin` 贏，使用者的 `.txt`
+    /// 從來沒生效過——而編輯器、刪除、唯讀判斷三處都看不到 `.bin`，
+    /// 所以完全沒有提示。
+    #[test]
+    fn 同名的_bin_算佔用() {
+        let d = tmp("bin");
+        std::fs::write(d.join("台語.bin"), b"\x00").unwrap();
+        let dir = d.to_string_lossy().to_string();
+        assert!(
+            name_taken_by(&dir, "台語", false).is_some(),
+            "同名的 .bin 會整份蓋過去，算佔用"
+        );
+        assert!(
+            name_taken_by(&dir, "台語", true).is_some(),
+            "ignore_txt 只放過自己那份 .txt，不放過 .bin"
+        );
+    }
+
+    /// 編輯既有的那份 `.txt` 再存檔**不算撞名**——那就是他自己。
+    #[test]
+    fn 自己那份_txt_不算佔用() {
+        let d = tmp("self");
+        std::fs::write(d.join("我的包.txt"), "# name: 我的包\n").unwrap();
+        let dir = d.to_string_lossy().to_string();
+        assert!(
+            name_taken_by(&dir, "我的包", false).is_some(),
+            "新建時算撞名"
+        );
+        assert!(
+            name_taken_by(&dir, "我的包", true).is_none(),
+            "編輯自己那份再存檔不該被擋"
+        );
+    }
+
+    #[test]
+    fn 沒撞到就回_none() {
+        let d = tmp("free");
+        let dir = d.to_string_lossy().to_string();
+        assert!(name_taken_by(&dir, "全新的包", false).is_none());
+    }
+
+    /// ★ 2026-09-20 真的毀過一次檔案 ★
+    ///
+    /// 使用者新建一個叫「台語」的包按存檔，官方台語包 91013 行被覆寫成
+    /// 5 行——連 CC BY-SA 4.0 的姓名標示檔頭一起沒了（那是**授權問題**，
+    /// 不只是資料問題）。`.bak` 也救不了，它存的是上一次覆寫後的版本。
+    ///
+    /// 設定頁的 `state.readonly` 擋不到這條路：新建包的那個值是 `false`，
+    /// 根本不會經過檢查。所以判準要讀**磁碟上那份檔案**怎麼寫。
+    #[test]
+    fn 唯讀的包不給覆寫() {
+        let d = tmp("readonly");
+        let dir = d.to_string_lossy().to_string();
+        let 原文 = "# name: 台語\n# readonly: true\n# license: CC BY-SA 4.0\n\nzh\tㄊㄞˊ\t台\n";
+        std::fs::write(d.join("台語.txt"), 原文).unwrap();
+
+        let data = Editable {
+            meta: Meta {
+                name: Some("台語".into()),
+                ..Default::default()
+            },
+            entries: vec![],
+        };
+        let r = write_editable(&dir, "台語", &data);
+        assert!(r.is_err(), "唯讀的包不該被覆寫");
+
+        let 現在 = std::fs::read_to_string(d.join("台語.txt")).unwrap();
+        assert_eq!(現在, 原文, "檔案必須一個字都沒變");
+    }
+
+    /// 不是唯讀的照樣存得進去——別把正常的編輯一起擋掉了。
+    #[test]
+    fn 一般的包照常覆寫() {
+        let d = tmp("normal");
+        let dir = d.to_string_lossy().to_string();
+        std::fs::write(d.join("我的包.txt"), "# name: 我的包\n\nen\thello\n").unwrap();
+
+        let data = Editable {
+            meta: Meta {
+                name: Some("我的包".into()),
+                ..Default::default()
+            },
+            entries: vec![],
+        };
+        assert!(
+            write_editable(&dir, "我的包", &data).is_ok(),
+            "一般的包該存得進去"
+        );
+    }
+
+    /// 提一個沒被佔用的名字讓使用者一鍵接受。
+    #[test]
+    fn 建議的名字要真的沒被佔用() {
+        let d = tmp("suggest");
+        std::fs::write(d.join("台語.bin"), b"\x00").unwrap();
+        std::fs::write(d.join("台語-2.txt"), "# name: 台語-2\n").unwrap();
+        let dir = d.to_string_lossy().to_string();
+        assert_eq!(
+            suggest_free_name(&dir, "台語"),
+            "台語-3",
+            "-2 也被佔了就往後找"
+        );
+        assert_eq!(
+            suggest_free_name(&dir, "沒人用的"),
+            "沒人用的",
+            "沒撞到就回它自己"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2276,18 +2553,31 @@ sym	心，heart	♥ ♡
     /// 停用一個包只是把索引換掉，下一次查詢就看不到它了。
     #[test]
     fn 換設定就換索引() {
+        // ★ **測試不可以換全域索引**——走 `build`，不走 `load` ★
+        //
+        // 症狀：`session::segmenu::taigi_tests` 隨機掛一到十條（整批跑
+        // 約每 10～30 次一次，`--test-threads=64` 時 60 次掛 5 次），每次
+        // 不同，單獨跑、`--test-threads=1` 都過。根因：這條（與下面兩條）原本用 `load`
+        // 換掉全域索引、最後再還原——它們拿了 `GLOBAL_FLAGS`，但**讀索引
+        // 的測試不拿**，換著的那幾毫秒裡，已經通過 `load()` 檢查、正在跑
+        // 的台語測試就查到別人的包（2026-09-23 埋 log 抓到：換成
+        // `zz指紋測試` 的那一刻，十幾條台語測試正在半途）。
+        //
+        // 鎖擋不住讀取端，還原也救不了半途的人；**不換**才根治。
+        // 換表本身（`set_index`）只有一行，共用的 `compose::tests::load`
+        // 每次都走它，不必在這裡再換一次。
         let d = testdata();
-        let n = load(&d, &["test_pack".to_string()]);
+        let (idx, n) = build(&d, &["test_pack".to_string()]);
         assert_eq!(n, 3, "英日中各一條");
-        assert!(any());
-        assert!(index().en_has("zzpacktestword"));
-        assert_eq!(index().ja_get("っっぱっく"), Some("パック試験"));
+        assert!(idx.flags().0, "有詞就要亮 any()");
+        assert!(idx.en_has("zzpacktestword"));
+        assert_eq!(idx.ja_get("っっぱっく"), Some("パック試験"));
 
-        // 停用——索引換成空的，熱路徑的旗標也跟著關
-        let n = load(&d, &[]);
+        // 停用——建出來的是空索引，熱路徑的旗標也跟著關
+        let (idx, n) = build(&d, &[]);
         assert_eq!(n, 0);
-        assert!(!any());
-        assert!(index().en.is_empty());
+        assert!(!idx.flags().0, "沒有詞就不該亮 any()");
+        assert!(idx.en.is_empty());
     }
 
     /// 包會流通：藏了雙向覆寫或零寬字元的條目，使用者看到的跟送進
@@ -2488,8 +2778,9 @@ mod 從別處來的包 {
     ///
     /// 這條守的是 `fingerprint` 對「同一個檔案被改掉」夠不夠靈敏。
     ///
-    /// **不跟別的測試共用全域索引**：`load` 寫的是全域狀態，所以用
-    /// 獨一無二的包名與資料夾，並在最後把索引還原成空的。
+    /// **不碰全域索引**：`load` 的閘門只是「指紋跟上次一樣就跳過」，
+    /// 所以「指紋變了」就等於「不會被擋掉」；重建出來的東西用 `build`
+    /// 驗（`load` 的本體就是它）。理由見 `換設定就換索引`。
     #[test]
     fn 改了包要重新載入() {
         let dir = std::env::temp_dir().join("tsunagi-pack-fingerprint-test");
@@ -2499,26 +2790,28 @@ mod 從別處來的包 {
         let names = ["zz指紋測試".to_string()];
 
         std::fs::write(&path, "en\tzzfingerprintone\n").unwrap();
-        load(d, &names);
-        assert!(index().en_has("zzfingerprintone"), "第一次載入該讀得到");
+        let before = fingerprint(d, &names);
+        let (idx, _) = build(d, &names);
+        assert!(idx.en_has("zzfingerprintone"), "第一次載入該讀得到");
 
         // **長度也要不一樣**：`fingerprint` 比的是 (大小, mtime)，
         // 而檔案系統的 mtime 解析度在某些平台只到秒——同一秒內改成
         // 相同長度是已知會漏判的極端情況（見 `FileStamp` 的說明），
         // 這條測的是一般情況
         std::fs::write(&path, "en\tzzfingerprinttwo_longer\n").unwrap();
-        load(d, &names);
-        assert!(
-            index().en_has("zzfingerprinttwo_longer"),
+        assert_ne!(
+            fingerprint(d, &names),
+            before,
             "改了內容要重新載入，不能被「沒變」擋掉"
         );
+        let (idx, _) = build(d, &names);
+        assert!(idx.en_has("zzfingerprinttwo_longer"), "重建要讀到新內容");
         assert!(
-            !index().en_has("zzfingerprintone"),
-            "舊的那條該消失——索引是整個換掉的"
+            !idx.en_has("zzfingerprintone"),
+            "舊的那條該消失——索引是整個重建的"
         );
 
         let _ = std::fs::remove_file(&path);
-        set_index(Index::default());
     }
 
     /// **`.bin` 走完整條路要跟 `.txt` 查出一樣的東西**。
@@ -2533,7 +2826,10 @@ mod 從別處來的包 {
     /// 不會有編譯錯誤——症狀是「查出別的詞」或「查不到」，而使用者只會
     /// 覺得「這個包壞了」。
     ///
-    /// **不跟別的測試共用全域索引**：用獨一無二的包名與資料夾，最後還原。
+    /// **不碰全域索引**：索引用 `build` 建在手上查（`load` 的本體就是
+    /// 它），不換掉全域那一份。這一條原本自己 `load()` 換掉全域索引，
+    /// 換著的時候台語測試會查到這個包的 `沙發→膨椅`、查不到「謝謝」
+    /// ——2026-09-23 抓到的隨機失敗之一，理由見 `換設定就換索引`。
     #[test]
     fn 二進位包跟文字包查出一樣的東西() {
         let dir = std::env::temp_dir().join("tsunagi-packbin-e2e-test");
@@ -2558,12 +2854,13 @@ mod 從別處來的包 {
         .unwrap();
 
         // ① 先走文字檔，記下答案
-        load(d, &names);
-        let want_en = index().en_has("zzbinword");
-        let want_ja = index().ja_get("っっびん").map(str::to_string);
-        let want_zh = index().zh_get("j4j4e2u6").map(str::to_string);
-        let want_tw = index().tw_says("膨椅");
-        let want_sym = index().sym_get("っっびんほし");
+        let fp_txt = fingerprint(d, &names);
+        let (idx, _) = build(d, &names);
+        let want_en = idx.en_has("zzbinword");
+        let want_ja = idx.ja_get("っっびん").map(str::to_string);
+        let want_zh = idx.zh_get("j4j4e2u6").map(str::to_string);
+        let want_tw = idx.tw_says("膨椅");
+        let want_sym = idx.sym_get("っっびんほし");
         assert!(want_en, "文字檔這一關就該過");
         assert!(!want_tw.is_empty(), "台語雙向查得到");
 
@@ -2574,13 +2871,15 @@ mod 從別處來的包 {
 
         // ③ 再載一次——`find_pack` 該挑 `.bin`（同名時它優先）
         //
-        // **指紋會發現檔案換了**：`.bin` 跟 `.txt` 的路徑與大小都不同
-        load(d, &names);
-        assert!(index().en_has("zzbinword"), "en 走 .bin 也要認得");
-        assert_eq!(index().ja_get("っっびん").map(str::to_string), want_ja);
-        assert_eq!(index().zh_get("j4j4e2u6").map(str::to_string), want_zh);
-        assert_eq!(index().tw_says("膨椅"), want_tw, "台語雙向要一樣");
-        assert_eq!(index().sym_get("っっびんほし"), want_sym);
+        // **指紋會發現檔案換了**：`.bin` 跟 `.txt` 的路徑與大小都不同，
+        // 所以 `load` 的閘門不會把這次擋掉
+        assert_ne!(fingerprint(d, &names), fp_txt, "換成 .bin 指紋要變");
+        let (idx, _) = build(d, &names);
+        assert!(idx.en_has("zzbinword"), "en 走 .bin 也要認得");
+        assert_eq!(idx.ja_get("っっびん").map(str::to_string), want_ja);
+        assert_eq!(idx.zh_get("j4j4e2u6").map(str::to_string), want_zh);
+        assert_eq!(idx.tw_says("膨椅"), want_tw, "台語雙向要一樣");
+        assert_eq!(idx.sym_get("っっびんほし"), want_sym);
 
         // ④ 檔頭也要跟著進來——授權是散布的必要條件
         let got = info(d, "zz二進位測試");
@@ -2602,12 +2901,14 @@ mod 從別處來的包 {
         // 在 `bins` 裡它看不到。結果是 `tw_says` 查得到資料、但旗標是
         // false，而平台層靠旗標決定要不要開段選單——**按 TAB 完全沒
         // 反應**，而且查表分派全對，讀程式碼很難看出來。
-        assert!(any(), "有詞就要亮 any()");
-        assert!(any_tw(), "有台語就要亮 any_tw()——段選單靠它");
-        assert!(any_sym(), "有符號就要亮 any_sym()");
+        //
+        // 驗的是 `flags()`——`set_index` 就是拿它設旗標的。
+        let (has, has_sym, has_tw) = idx.flags();
+        assert!(has, "有詞就要亮 any()");
+        assert!(has_tw, "有台語就要亮 any_tw()——段選單靠它");
+        assert!(has_sym, "有符號就要亮 any_sym()");
 
         let _ = std::fs::remove_file(&txt);
         let _ = std::fs::remove_file(&bin);
-        set_index(Index::default());
     }
 }

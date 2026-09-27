@@ -51,6 +51,11 @@ fn main() -> eframe::Result<()> {
     if let Some(data) = project_data_dir() {
         std::thread::spawn(move || {
             ime_core::dict::load_bopomofo(&data);
+            // **英文詞典也要**：`detect()` 判斷「這串按鍵是什麼語言」時
+            // 問的是切法，而切法要靠它才分得出英文段。少了它，編輯器的
+            // 「語言」欄會把注音串也算成不確定（2026-09-20 實測回報的
+            // 「?」有這一半）。
+            ime_core::english::load(&data);
         });
     }
 
@@ -604,6 +609,24 @@ fn behavior_page(ui: &mut egui::Ui, cfg: &mut Config) {
          選過的那格之後就不再自動修正。",
     );
 
+    section(ui, "擴充包的長輸出");
+    hint(
+        ui,
+        "擴充包可以設「打幾個音出一長串」（例如兩個注音出一句完整的話）。\
+         這裡決定它是打完就直接展開，還是要按選字鍵才換。",
+    );
+    ui.add_space(6.0);
+    ui.checkbox(&mut cfg.behavior.auto_expand_long, "打完直接展開成長輸出");
+    ui.add_space(4.0);
+    // **講清楚退路**：這也是會「自己改掉使用者打的東西」的功能，
+    // 跟模糊音同一個道理，不講退路的話撞到就不知所措。
+    hint(
+        ui,
+        "不勾的話打完維持原樣，按選字鍵才看得到長輸出。\
+         勾著的時候仍然退得回去——按選字鍵選「原樣」那一條，\
+         那一格會拆回原本的幾個字，接著就能逐字選字。",
+    );
+
     section(ui, "標點");
     // **切換鍵兩個平台不一樣**，不能寫死（macOS 收不到 Ctrl）。
     hint(
@@ -1005,10 +1028,10 @@ fn select_page(
     }
 
     ui.add_space(10.0);
-    ui.label("倒退鍵刪掉反白這一個字：");
+    ui.label("倒退鍵刪掉一整個字：");
     hint(
         ui,
-        "框停在中間時，倒退鍵刪掉整個字，而不是最後一個注音符號。這顆鍵原本是刪一個鍵，要選誰佔。",
+        "有反白框時刪掉整格；沒有框時退掉最後一個字（注音一個音節、日文一個 mora）。這顆鍵原本是刪一個鍵，要選誰佔。",
     );
     ui.add_space(4.0);
     ui.radio_value(
@@ -1029,7 +1052,7 @@ fn select_page(
     ui.add_space(4.0);
     hint(
         ui,
-        "預設不啟用：自動模式一格未必是一個字（日文一格可能是整句），而且刪完會重新斷句。",
+        "預設不啟用。沒有框時退的是一個字而不是一整格——自動模式一格未必是一個字（日文一格可能是整句）。英文段沒有這個單位，仍然退一個字母。",
     );
 
     section(ui, "段選單（TAB）");
@@ -1638,19 +1661,116 @@ fn bundled_packs_dir() -> Option<std::path::PathBuf> {
     shipped_dir("packs")
 }
 
-/// 隨程式一起裝的某個資料夾：先看 exe 旁邊（安裝後），再往上兩層
-/// （開發環境的專案根）。
+/// 隨程式一起裝的某個資料夾（`data`／`packs`）。
+///
+/// # ★ 指路檔那條不可以漏 ★
+///
+/// macOS 的開發建置**不把 146MB 的詞庫複製進 bundle**，而是在
+/// `Contents/Resources/` 放一個 `data-dir.txt` 指回專案（`build-app.sh`
+/// 寫的，輸入法那邊走 `paths::data_dir()` 讀它）。設定頁的執行檔就住在
+/// 那個 Resources 裡，指路檔近在眼前——**但這支原本不認得它**，於是
+/// 安裝之後設定頁一份詞庫都載不到。
+///
+/// 症狀很不像路徑問題：擴充包編輯器的「語言」欄一律顯示 `?`、
+/// **輸出欄打完詞不會自動反查填按鍵**（2026-09-20 使用者實測回報）。
+/// 兩者都靠詞庫，而詞庫是在背景執行緒載的，失敗不會有任何錯誤訊息。
+///
+/// 三條路依序試：
+///
+/// 1. **exe 旁邊**（正式安裝，詞庫真的複製進去了）
+/// 2. **往上兩層**（開發環境直接跑 `cargo run`：`target/release/` → 專案根）
+/// 3. **exe 旁邊的 `data-dir.txt`**（開發建置的 `.app`）——包就在詞庫的隔壁，
+///    跟 `paths::bundled_packs_dir()` 同一條規則
 fn shipped_dir(name: &str) -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let here = exe.parent()?;
+    resolve_shipped(exe.parent()?, name)
+}
 
+/// `shipped_dir` 的本體。**拆出來是為了測得到**——路徑解析不該只能靠
+/// 「裝起來打開看看」驗證，這個洞就是這樣躲過驗收的。
+fn resolve_shipped(here: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
     let installed = here.join(name);
     if installed.is_dir() {
         return Some(installed);
     }
 
-    let d = here.parent()?.parent()?.join(name);
+    if let Some(d) = here.parent().and_then(|p| p.parent()).map(|p| p.join(name)) {
+        if d.is_dir() {
+            return Some(d);
+        }
+    }
+
+    // 指路檔寫的是**詞庫目錄**。要 `packs` 的話取它的隔壁。
+    let raw = std::fs::read_to_string(here.join("data-dir.txt")).ok()?;
+    let data = std::path::PathBuf::from(raw.trim());
+    let d = if name == "data" {
+        data
+    } else {
+        data.parent()?.join(name)
+    };
     d.is_dir().then_some(d)
+}
+
+#[cfg(test)]
+mod 詞庫路徑 {
+    use super::resolve_shipped;
+    use std::path::PathBuf;
+
+    /// 每條測試自己一個資料夾（`cargo test` 預設並行）。
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("tsunagi_shipped_{name}"));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// ★ 這一條守的是 2026-09-20 的洞 ★
+    ///
+    /// macOS 的開發建置不把詞庫複製進 `.app`，只在 Resources 放一個
+    /// `data-dir.txt` 指回專案。設定頁原本不認得它，安裝之後一份詞庫
+    /// 都載不到——症狀是「語言」欄一律 `?`、輸出欄不再自動填按鍵。
+    /// 把指路檔那條拿掉，這裡會紅。
+    #[test]
+    fn 指路檔指得到詞庫() {
+        let root = tmp("pointer");
+        let data = root.join("data");
+        let packs = root.join("packs");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(&packs).unwrap();
+
+        // 模擬 .app/Contents/Resources：只有指路檔，沒有 data/packs
+        let res = root.join("Tsunagi.app/Contents/Resources");
+        std::fs::create_dir_all(&res).unwrap();
+        std::fs::write(res.join("data-dir.txt"), format!("{}\n", data.display())).unwrap();
+
+        assert_eq!(
+            resolve_shipped(&res, "data").as_deref(),
+            Some(data.as_path())
+        );
+        assert_eq!(
+            resolve_shipped(&res, "packs").as_deref(),
+            Some(packs.as_path()),
+            "包在詞庫的隔壁，跟 paths::bundled_packs_dir 同一條規則"
+        );
+    }
+
+    /// 正式安裝（詞庫真的複製進 Resources）時，指路檔那條根本輪不到。
+    #[test]
+    fn exe_旁邊的優先() {
+        let res = tmp("installed");
+        std::fs::create_dir_all(res.join("data")).unwrap();
+        assert_eq!(
+            resolve_shipped(&res, "data").as_deref(),
+            Some(res.join("data")).as_deref()
+        );
+    }
+
+    /// 什麼都沒有就是 `None`，不要回一個不存在的路徑讓呼叫端去撞。
+    #[test]
+    fn 都找不到就回_none() {
+        let d = tmp("nothing");
+        assert!(resolve_shipped(&d, "data").is_none());
+    }
 }
 
 #[cfg(test)]

@@ -16,21 +16,48 @@ mod 一般 {
             s
         }
 
+        /// **往右推確實會把假名吃過來**（`widen_word` 真正的行為）。
+        ///
+        /// 原本這條測的是 `gohannwotabemasu`（ご飯を食べます）：HEAD 上
+        /// 那句本來就打錯（`go` 被判成英文，整段變成「go版を食べます」，
+        /// 見 D 群診斷報告「附帶發現」），測試靠的是舊的錯切法，不是
+        /// `widen_word` 本身。D-H3／D-H4b 改判斷之後那句仍然錯（只是換了
+        /// 錯法），這條測試也跟著失去意義。
+        ///
+        /// 換成 `inuguminonaka`（犬組の中，VTuber 名字，詞典沒收，跟
+        /// `widen_word` 文件開頭那個「第一次輸入引擎不認識的詞」的例子
+        /// 同一類）：引擎切成 `inu|gum|i|no|naka` 五格，`no` 與 `naka`
+        /// 相鄰都是日文段。往右推 `no` 這一格，`naka` 的第一個假名
+        /// `na` 該被吃過來變成 `nona`，`naka` 只剩 `ka`——這才是真的在
+        /// 測「詞界往右伸縮一個假名」，不是湊巧測到別的 bug。
         #[test]
         fn 往右推會把假名吃過來() {
             if !load() {
                 return;
             }
-            // ごはん|を|たべ|ます
-            let mut s = 選到第一格("gohannwotabemasu");
+            // inu(犬) | gum(英文) | i(位) | no(の) | naka(中)
+            let mut s = 選到第一格("inuguminonaka");
+            s.select_right();
+            s.select_right();
+            assert_eq!(
+                s.slots()
+                    .get(s.select_index().unwrap())
+                    .map(|x| x.keys.as_str()),
+                Some("no"),
+                "反白框該停在 no 這一格"
+            );
             let before: Vec<String> = s.slots().iter().map(|x| x.keys.clone()).collect();
-            assert!(before.len() >= 2, "該切成多格：{before:?}");
-            assert!(s.widen_word(), "第一格該推得動");
+            assert!(s.widen_word(), "no 這一格該推得動——右邊 naka 也是日文段");
             let after: Vec<String> = s.slots().iter().map(|x| x.keys.clone()).collect();
             assert_ne!(before, after, "詞界該變了");
+            assert_eq!(
+                after.get(s.select_index().unwrap()).map(String::as_str),
+                Some("nona"),
+                "no 該吃到 naka 的第一個假名 na：{after:?}"
+            );
             // **按鍵一定要接得回原字串**——check_rewrite、整格刪除、
             // 學習全都靠這個性質
-            assert_eq!(after.concat(), "gohannwotabemasu");
+            assert_eq!(after.concat(), "inuguminonaka");
         }
 
         #[test]
@@ -469,6 +496,130 @@ mod 一般 {
         }
     }
 
+    /// 模糊音修正凍住之後，多段句子裡前面那段的修正不會在打到後面的
+    /// 段落時掉回錯字。
+    ///
+    /// 這是使用者實測回報的原始案例：`新聞ok今天ok很好`，「新聞」打成
+    /// ㄒㄧㄥ（`vu/`，正確是 `vup`），`apply_fuzzy_tone` 修成「新聞」，
+    /// 但打到第三段（「很好」）的那一鍵，如果重切／模糊音的範圍只看
+    /// 最後幾段，「新聞」那段被推出視野，重切／`apply_word_context`
+    /// 用**原鍵串**（打錯音）重算就變回「星文」。
+    mod 模糊音凍結 {
+        use super::*;
+
+        fn guard() -> std::sync::MutexGuard<'static, ()> {
+            crate::compose::GLOBAL_FLAGS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+        }
+
+        fn load() -> bool {
+            crate::compose::tests::load()
+        }
+
+        /// 多段句子打完，前段的模糊音修正要留著、不能被後段的重算
+        /// 翻回錯字。
+        #[test]
+        fn 多段句不因後段打字掉回錯字() {
+            if !load() {
+                return;
+            }
+            let _g = guard();
+            // `vu/ ` 是「新聞」ㄒㄧㄥ打成的錯音（正確是 `vup `）
+            let mut s = Session::new();
+            for c in "vu/ jp6ok".chars() {
+                s.push(c);
+            }
+            assert!(
+                s.text().starts_with("新聞"),
+                "模糊音修正該先把「新聞」修好：{}",
+                s.text()
+            );
+            // 繼續打第二段、第三段——「新聞」不該在任何一鍵掉回「星文」
+            for c in "rup wu0 ok".chars() {
+                s.push(c);
+                assert!(
+                    s.text().starts_with("新聞"),
+                    "打到「{}」時「新聞」掉回錯字了：{}",
+                    c,
+                    s.text()
+                );
+            }
+            for c in "cp3cl3".chars() {
+                s.push(c);
+                assert!(
+                    s.text().starts_with("新聞"),
+                    "打到「{}」時「新聞」掉回錯字了：{}",
+                    c,
+                    s.text()
+                );
+            }
+            assert_eq!(s.text(), "新聞ok今天ok很好");
+        }
+
+        /// 手動選字要蓋得過模糊音凍結——使用者的表態優先權更高。
+        #[test]
+        fn 手動選字蓋過凍結() {
+            if !load() {
+                return;
+            }
+            let _g = guard();
+            let mut s = Session::new();
+            for c in "vu/ jp6".chars() {
+                s.push(c);
+            }
+            assert_eq!(s.text(), "新聞", "前提：模糊音該先修成「新聞」");
+
+            // 選第 0 格，把「新」換成別的字（隨便挑候選裡不是「新」的）
+            s.enter_select_first();
+            let cands = s.char_candidates();
+            let other = cands
+                .iter()
+                .find(|c| c.as_str() != "新")
+                .cloned()
+                .expect("候選裡該有別的字可選");
+            s.pick_char(&other);
+            assert_eq!(s.slots()[0].text, other, "手動選字沒有生效");
+            assert!(s.slots()[0].picked, "選過的格該標成 picked");
+            assert!(!s.slots()[0].fuzzy_fixed, "手動選字之後不該再是模糊音凍結");
+
+            // 再打字，選過的字要留著，不能被模糊音或重切蓋回去
+            for c in "ok".chars() {
+                s.push(c);
+                assert!(
+                    s.text().starts_with(&other),
+                    "打到「{}」時手動選的字被蓋掉了：{}",
+                    c,
+                    s.text()
+                );
+            }
+        }
+
+        /// 模糊音凍結不可以進學習層——那是引擎猜的，不是使用者的表態。
+        /// `learn::record` 的門檻只認 `picked`，`fuzzy_fixed` 不該被
+        /// 誤判成使用者選過。
+        #[test]
+        fn 模糊音凍結不進學習層() {
+            if !load() {
+                return;
+            }
+            let _g = guard();
+            let mut s = Session::new();
+            for c in "vu/ jp6".chars() {
+                s.push(c);
+            }
+            assert_eq!(s.text(), "新聞");
+            assert!(
+                s.slots()[0].fuzzy_fixed,
+                "測試前提：第 0 格該是模糊音修正過的"
+            );
+            assert!(
+                !s.slots()[0].picked,
+                "模糊音修正不可以被標成 picked，否則會被學習層記錄"
+            );
+        }
+    }
+
     use crate::session::*;
 
     fn load() -> bool {
@@ -616,6 +767,27 @@ mod 一般 {
                 .find(|&i| s.slots()[i].selectable);
             s.arrow_right();
             assert_eq!(s.select_index(), last, "第一下只負責把框叫出來，不移動");
+        }
+
+        /// 框與清單是兩件事：`arrow_*` 只出框，候選清單要另外按鍵叫出來。
+        ///
+        /// 這條守的是 macOS 平台層曾經漏接的一個洞——之前左右鍵直接呼叫
+        /// `enter_select_last()` 再 `open_cands()`，等於把「移動」跟「開清單」
+        /// 黏在一起，症狀是按左右鍵框不動（要按兩下）還會多彈出候選面板。
+        /// 見開發筆記「Mac 實測翻出五件事」方向鍵那節。
+        #[test]
+        fn arrow不會自己打開候選清單() {
+            if !load() {
+                return;
+            }
+            let mut s = typed("su3cl3");
+            s.arrow_right();
+            assert!(!s.cands_open(), "只出框，清單不該自己開");
+            s.arrow_right();
+            assert!(!s.cands_open(), "移動也一樣，不該自己開");
+            s.exit_select();
+            s.arrow_left();
+            assert!(!s.cands_open(), "接續移動同樣不該自己開");
         }
 
         #[test]
@@ -861,6 +1033,98 @@ mod 一般 {
     /// 字、走 `backspace()`；自動模式一格未必是一個字、有自己的三態
     /// 設定、走獨立的入口。開發文件 §2.21 記了為什麼當初否決、現在
     /// 為什麼可以做。
+    /// **長輸出選回原樣要拆回多格**（2026-09-20 使用者裁定）。
+    ///
+    /// 長輸出是多格併一格的，併完就沒辦法逐字選字。候選裡有「原樣」
+    /// 那一條當退路，但光是把文字換回去不夠——那一格的 `keys` 還是
+    /// 整串，反白移不進去。選了原樣就要真的拆開。
+    mod 長輸出拆回多格 {
+        use super::*;
+
+        /// **跟 `compose` 那邊的長輸出測試共用一把鎖**。
+        ///
+        /// `關掉自動展開就不併` 動的是全域旗標 `AUTO_EXPAND_LONG`，
+        /// 關掉的那一瞬間這裡剛好在跑就會看到「沒併成一格」——症狀是
+        /// 隨機失敗（CLAUDE.md §2.64.16 那個坑，這次實際踩到了）。
+        fn global_guard() -> std::sync::MutexGuard<'static, ()> {
+            crate::compose::GLOBAL_FLAGS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+        }
+
+        /// **這一組要用 `compose::tests` 的 `load()`**，不是外層那個。
+        ///
+        /// 外層的 `load()` 只載詞庫，**不載測試包**——長輸出是包給的，
+        /// 沒載的話 `ji3fu/3` 根本沒有東西可併，測試會穩定紅在第一行。
+        /// 第一版就是這樣寫的，而且「故意還原修正」時其中一條照樣綠，
+        /// 等於沒測到（CLAUDE.md：**驗收方式是故意把修正還原看會不會紅**）。
+        fn load() -> bool {
+            crate::compose::tests::load()
+        }
+
+        #[test]
+        fn 選回原樣之後拆成多格而且逐字選得動() {
+            if !load() {
+                return;
+            }
+            let _g = global_guard();
+            // `ㄨㄛˇㄑㄧㄥˇ` → 我請你喝一杯（包裡的長輸出）
+            let mut s = typed("ji3fu/3");
+            assert_eq!(s.slots().len(), 1, "先併成一格：{:?}", s.slots());
+
+            // 候選裡最後一條是原樣（包給的全部 ＋ 原樣）
+            s.enter_select_first();
+            let cands = s.char_candidates();
+            let literal = cands.last().cloned().expect("要有原樣那條");
+            assert_ne!(literal, "我請你喝一杯", "最後一條該是原樣不是長輸出");
+
+            s.pick_char(&literal);
+            assert!(s.slots().len() > 1, "該拆回多格：{:?}", s.slots());
+            assert_eq!(
+                s.slots()
+                    .iter()
+                    .map(|x| x.keys.as_str())
+                    .collect::<String>(),
+                "ji3fu/3",
+                "按鍵要接得回原字串"
+            );
+
+            // **拆開之後逐字選得動**——這才是整件事的目的
+            s.enter_select_first();
+            assert_eq!(s.select_index(), Some(0), "反白該進得了第一格");
+            assert!(s.char_candidates().len() > 1, "第一格要有同音字可選");
+        }
+
+        /// 拆開之後**再打字也不該併回去**——使用者已經表態了。
+        #[test]
+        fn 拆開之後繼續打字不會併回去() {
+            if !load() {
+                return;
+            }
+            let _g = global_guard();
+            let mut s = typed("ji3fu/3");
+            s.enter_select_first();
+            let literal = s.char_candidates().last().cloned().expect("要有原樣");
+            s.pick_char(&literal);
+            assert!(s.slots().len() > 1, "先拆開：{:?}", s.slots());
+
+            // 再打兩個鍵。**前面那段仍然要是拆開的**——不能因為重算就
+            // 把使用者剛表態過的選擇吃掉
+            s.push('u');
+            s.push('4');
+            let keys: Vec<&str> = s.slots().iter().map(|x| x.keys.as_str()).collect();
+            assert!(
+                keys.iter().all(|k| k.chars().count() <= 4),
+                "每格該是一個音節，不是併回整串：{keys:?}"
+            );
+            assert!(
+                !s.text().starts_with("我請你喝一杯"),
+                "不該併回去：{}",
+                s.text()
+            );
+        }
+    }
+
     mod 自動模式刪整格 {
         use super::*;
 
@@ -917,15 +1181,44 @@ mod 一般 {
             assert!(!s.delete_marked_cell(), "鎖定模式該回 false");
         }
 
-        /// 沒有反白框的時候刪不了（呼叫端要退回一般的退格）。
+        /// **沒有框時退掉最後一個輸入單位**（使用者裁定 2026-09-20）。
+        ///
+        /// 舊行為是回 `false` 交回一般退格（刪一個按鍵）。改成退一個
+        /// 注音音節／mora——「打錯最後一個字」是使用者真正要的粒度，
+        /// 而且跟鎖定注音的退格語意一致。
         #[test]
-        fn 沒有框時回_false() {
+        fn 沒有框時退一個注音音節() {
             if !load() {
                 return;
             }
             let mut s = typed("su3cl3");
             assert!(s.marked_index().is_none(), "剛打完不該有框");
-            assert!(!s.delete_marked_cell(), "沒有框該回 false");
+            assert!(s.delete_marked_cell(), "沒有框該退一個單位");
+            assert_eq!(s.keys(), "su3", "該退掉整個 cl3，不是只退一個鍵");
+        }
+
+        /// 日文退一個 mora，**不是整格**——自動模式下 `sushi` 只有一格，
+        /// 刪整格等於整串消失。
+        #[test]
+        fn 沒有框時退一個_mora() {
+            if !load() {
+                return;
+            }
+            let mut s = typed("sushi");
+            assert!(s.delete_marked_cell(), "沒有框該退一個單位");
+            assert_eq!(s.keys(), "su", "該退掉 shi 這一個 mora");
+        }
+
+        /// 切不出單位時交回一般退格——**這條是退路，不能讓它卡住**。
+        #[test]
+        fn 切不出單位時回_false() {
+            if !load() {
+                return;
+            }
+            // 英文沒有「輸入單位」這回事
+            let mut s = typed("hello");
+            assert!(!s.delete_marked_cell(), "英文段該回 false 交回一般退格");
+            assert_eq!(s.keys(), "hello", "回 false 就不該動到按鍵");
         }
 
         /// **修正過的字要跟著平移，不能貼到別的格上。**
@@ -1291,6 +1584,92 @@ mod 一般 {
         let half = jp("sush,");
         assert!(half.contains('、'), "標點要在：{half}");
         assert!(half.contains("sh"), "殘留的半個 mora 也要在：{half}");
+    }
+
+    /// **鎖定日文打半個 mora 直接按 Enter，不能無聲消失**。
+    ///
+    /// `sush` 按 Enter 送出的是「す」，`sh` 兩個字元憑空消失——那是因為
+    /// `RomajiInput` 的 `keys`／`pending` 互斥，`text()` 只看 `keys()`，
+    /// 送出這條路（Enter／數字鍵中斷／輪替語言……）一律呼叫 `text()`，
+    /// 從沒有任何東西把 `pending` 結算進去。跟已經修過的「打標點時保留
+    /// 殘留 mora」是**同一個 bug 的另一條路**：那條測的是 `RomajiInput::push`
+    /// 遇到標點會把 pending 沖回 keys，Enter 沒有觸發那個機制。
+    ///
+    /// **裁決（2026-09-27）**：已成字的照常轉假名，沒成字的尾巴照原樣
+    /// 字母送出——`sush` + Enter → `すsh`，不是硬湊一個不完整的假名，
+    /// 也不是丟掉。`Session::commit_text()` 就是為了這個裁決加的：
+    /// 只在鎖定日文時把 `pending` 原樣接在 `text()` 後面。
+    ///
+    /// 判準：把 `commit_text()` 改回單純呼叫 `text()`，這條測試要紅。
+    #[test]
+    fn 鎖定日文打半個_mora_直接送出不會消失() {
+        use crate::language::Language;
+        let jp_commit = |keys: &str| {
+            let mut s = Session::new();
+            s.set_lock(Some(Language::Romaji));
+            for c in keys.chars() {
+                s.push(c);
+            }
+            s.commit_text()
+        };
+
+        // `su` 成字為「す」，`sh` 是使用者打過的殘留字母，原樣接在後面
+        assert_eq!(jp_commit("sush"), "すsh", "殘留的 sh 不能消失");
+
+        // 一個字母都還沒湊成 mora——整串原樣送出
+        assert_eq!(jp_commit("k"), "k", "連一個 mora 都沒有，原樣送出");
+
+        // `ka` 成字為「か」，單獨的 `n` 湊不成撥音（要打 `nn`），
+        // 停在 pending——原樣接上，不是硬湊成「かん」
+        assert_eq!(jp_commit("kan"), "かn", "單獨的 n 不是完整的撥音，不能硬湊");
+
+        // 完整打完的字（`sushi` 四個字母全部成字，pending 是空的）
+        // 不該受影響——`commit_text()` 對它等於 `text()`
+        let mut s = Session::new();
+        s.set_lock(Some(Language::Romaji));
+        for c in "sushi".chars() {
+            s.push(c);
+        }
+        assert_eq!(s.pending_symbols(), "", "sushi 打完不該有殘留");
+        assert_eq!(s.commit_text(), s.text(), "沒有殘留時兩支該回同一個結果");
+    }
+
+    /// **鎖定注音不受這個裁決影響**：半個注音符號本來就該丟棄
+    /// （2026-09-20 修過的規則），`commit_text()` 對它要等於 `text()`。
+    #[test]
+    fn 鎖定注音的半個音節不受_commit_text_影響() {
+        use crate::language::Language;
+        let mut s = Session::new();
+        s.set_lock(Some(Language::Bopomofo));
+        // 只打到聲母沒按聲調——那半個音節卡在 pending，
+        // 注音的規則是送出時丟掉
+        for c in "su3cl3s2".chars() {
+            s.push(c);
+        }
+        assert_eq!(
+            s.commit_text(),
+            s.text(),
+            "鎖定注音的 commit_text 不該跟 text 不一樣"
+        );
+    }
+
+    /// **自動模式與鎖定英文不受影響**：`Input::pending()` 對它們本來就是
+    /// 空字串，`commit_text()` 等於 `text()`。
+    #[test]
+    fn 自動模式與鎖定英文的_commit_text_等於_text() {
+        use crate::language::Language;
+        let mut auto = Session::new();
+        for c in "sush".chars() {
+            auto.push(c);
+        }
+        assert_eq!(auto.commit_text(), auto.text(), "自動模式不受影響");
+
+        let mut en = Session::new();
+        en.set_lock(Some(Language::English));
+        for c in "sush".chars() {
+            en.push(c);
+        }
+        assert_eq!(en.commit_text(), en.text(), "鎖定英文不受影響");
     }
 
     #[test]

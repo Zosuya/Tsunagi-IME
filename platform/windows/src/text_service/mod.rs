@@ -271,7 +271,13 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
             // 那正是「一打字瀏覽器就卡死」的原因（`OnKeyDown` 裡誤加了
             // 第二次上鎖）。
             let mut state = lock_state(&self.state);
+            // **`refresh_config` 是同步的，而且擴充包在它裡面**
+            // （`pack::load`，台語包那種 4MB 的官方包也算）。詞庫丟得
+            // 出去背景，這一段丟不出去——後面立刻要用設定值。所以它
+            // 是切換輸入法時使用者一定會等到的部分，要單獨量。
+            let tc = std::time::Instant::now();
             refresh_config(&mut state);
+            crate::dlog!("[啟用] refresh_config {}ms", tc.elapsed().as_millis());
             state.thread_mgr = Some(thread_mgr.clone());
             state.client_id = tid;
             // **設定要先讀完才知道哪些詞庫該載**，見下面
@@ -283,14 +289,23 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
             // **順序不能反**：要先讀設定才知道哪些引擎有開。關掉的引擎
             // 不載，日文那本要 0.7 秒，沒開日文的話那是純粹白等。
             spawn_dict_load(engines);
-            crate::dlog!("[啟用] 完成 @{}ms", t0.elapsed().as_millis());
+            // **這不是 `Activate` 的結尾**——下面還有 compartment 與
+            // 語言列，兩者都是同步的 COM 呼叫。初版把「完成」印在這裡，
+            // 讀 log 時會以為啟用只花了 5ms 就結束，真正的結尾在更後面。
+            crate::dlog!("[啟用] 詞庫已派工 @{}ms", t0.elapsed().as_millis());
 
             // **把「鍵盤開啟」狀態設成真**。
             //
             // TSF 用 compartment（一種全域狀態格）記錄輸入法開著沒有，
             // 工作列的輸入指示器會去讀它——狀態是「關閉」的話，那格
             // 本來就該不顯示。預設值是關閉，所以要自己打開。
+            //
+            // **要量時間**：這是跨行程的 COM 呼叫（compartment 是
+            // 全域狀態，TSF 要通知其他關心它的人），在全螢幕遊戲底下
+            // 值不值得懷疑，量了才知道。
+            let tk = std::time::Instant::now();
             set_keyboard_open(&thread_mgr, tid);
+            crate::dlog!("[啟用] set_keyboard_open {}ms", tk.elapsed().as_millis());
 
             // **工作列上的狀態按鈕**。
             //
@@ -369,10 +384,20 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
             }));
 
             let item: windows::Win32::UI::TextServices::ITfLangBarItem = button.to_interface();
-            match crate::lang_bar::install(&thread_mgr, &item) {
+            // **要量時間**：`AddItem` 要跟**工作列**打交道（語言列的
+            // 按鈕畫在那裡）。全螢幕獨佔的遊戲把工作列整個蓋掉，這種
+            // 情況下要求它加一個按鈕會發生什麼事，沒有量過。
+            let tb = std::time::Instant::now();
+            let r = crate::lang_bar::install(&thread_mgr, &item);
+            crate::dlog!("[啟用] lang_bar::install {}ms", tb.elapsed().as_millis());
+            match r {
                 Ok(()) => LANG_BAR.with(|b| *b.borrow_mut() = Some((button, item))),
                 Err(e) => crate::dlog!("[langbar] install 失敗: {e:?}"),
             }
+            // **這一行才是 `Activate` 真正的結尾**。它跟開頭那行
+            // `[啟用] Activate` 的差，就是「切換輸入法」在我們這邊
+            // 花掉的全部時間。
+            crate::dlog!("[啟用] Activate 結束 @{}ms", t0.elapsed().as_millis());
             Ok(())
         })
     }
@@ -660,8 +685,23 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     // **順序不能反**：要先讀設定才知道哪些引擎有開，
                     // 關掉的引擎不必載那本詞庫。
                     if state.session.is_empty() {
+                        // **這裡是使用者真的會等到的地方**，所以要量。
+                        //
+                        // 背景那條（`spawn_dict_load`）還沒載完的話，
+                        // 這一步就原地等——而我們跑在宿主的 UI 執行緒上、
+                        // 手上還握著狀態鎖，等於整個宿主凍住。平常背景
+                        // 早就載完了（實測 20ms），量到的是 ~0ms；量到
+                        // 大數字就代表那個環境的檔案存取被什麼東西拖住。
+                        let t = std::time::Instant::now();
                         refresh_config(&mut state);
-                        ensure_dict_loaded(state.config.behavior.engines);
+                        ensure_dict_loaded(state.config.behavior.engines, "按鍵");
+                        let ms = t.elapsed().as_millis();
+                        // **只在真的等到時才記**。這條路每次開始組字都會
+                        // 走，無條件記的話 log 會被 `0ms` 淹掉，真正要看
+                        // 的那一筆反而找不到。
+                        if ms > 50 {
+                            crate::dlog!("[卡頓] 第一鍵等了 {ms}ms ★宿主在這段時間是凍住的");
+                        }
                     }
                     // **鎖定英文＋非全形＝直接打進文件**，不組字、不彈候選。
                     //
@@ -718,7 +758,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 // ㄓ，那正是主鍵盤那排數字不能拿來選字的原因。
                 Action::NumpadInput(ch) => {
                     if !state.session.is_empty() {
-                        let text = state.session.text();
+                        let text = state.session.commit_text();
                         end_composition(context, &mut state, EndKind::Commit(&text))?;
                     }
                     // 全形模式下數字也要變全形，跟組字那條路一致
@@ -823,7 +863,12 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 }
 
                 Action::Commit => {
-                    let text = state.session.text();
+                    // **`commit_text()` 不是 `text()`**：鎖定日文打 `sush`
+                    // 直接按 Enter，`sh` 卡在輸入層的 `pending`、`text()`
+                    // 看不到它——這裡要用會把沒成字的尾巴接上的那支，
+                    // 不然使用者打過的字母會無聲消失（裁決 2026-09-27，
+                    // 見開發文件「鎖定日文打半個 mora 直接送出」）。
+                    let text = state.session.commit_text();
                     state.seg_menu = false;
                     learn_from(&mut state);
                     end_composition(context, &mut state, EndKind::Commit(&text))?;
@@ -917,7 +962,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                         state.seg_menu = false;
                         // 理由同 `SegConfirm`
                         if state.config.behavior.commit_on_last_seg {
-                            let text = state.session.text();
+                            let text = state.session.commit_text();
                             learn_from(&mut state);
                             end_composition(context, &mut state, EndKind::Commit(&text))?;
                             return Ok(BOOL(1));
@@ -947,7 +992,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                         // 「最後一段選完直接送出」。**段選單有自己的開關**
                         // （使用者要求 2026-09-09），原本跟選字共用。
                         if state.config.behavior.commit_on_last_seg {
-                            let text = state.session.text();
+                            let text = state.session.commit_text();
                             learn_from(&mut state);
                             end_composition(context, &mut state, EndKind::Commit(&text))?;
                             return Ok(BOOL(1));
@@ -1081,7 +1126,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                     }
                     // 設定成「最後一個字選完直接送出」的話，離開選字就送出
                     if left_select && state.config.behavior.commit_on_last {
-                        let text = state.session.text();
+                        let text = state.session.commit_text();
                         end_composition(context, &mut state, EndKind::Commit(&text))?;
                     } else {
                         update_composition(self, context, &mut state)?;
@@ -1105,7 +1150,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                             // 那個模式不該有組字存在，留著的話會變成一串永遠
                             // 送不出去的底線文字——使用者接著打的字直接進文件，
                             // 組字區卻還掛在那裡。
-                            let text = state.session.text();
+                            let text = state.session.commit_text();
                             end_composition(context, &mut state, EndKind::Commit(&text))?;
                         } else {
                             // 輪替之後已經打的字也要跟著重算
@@ -1136,7 +1181,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                         if direct_input_mode(&state) {
                             // 鎖定英文時從全形切到半形＝進入「直接輸入」，
                             // 手上的組字要先送出去，理由同語言輪替那段
-                            let text = state.session.text();
+                            let text = state.session.commit_text();
                             end_composition(context, &mut state, EndKind::Commit(&text))?;
                         } else {
                             // 組字中的話標點要重畫（半形變全形）

@@ -38,6 +38,39 @@ use class_factory::ClassFactory;
 const S_OK: HRESULT = HRESULT(0);
 const S_FALSE: HRESULT = HRESULT(1);
 
+/// Windows 載入器把這顆 DLL 映射進行程時最先呼叫的東西。
+///
+/// # 為什麼要有（只為了量一行時間）
+///
+/// 量 LOL 的卡頓時遇到一個死角：整份 log 每一步都是毫秒級，使用者
+/// 卻實際等了十幾秒——**那段空白落在第一行 log 之前**。`DllGetClassObject`
+/// 是 COM 要物件的時刻，而在那之前還有一整段「載入器映射模組、跑
+/// 相依項、（有反作弊的話）掃描剛進來的程式碼」，那段我們量不到。
+///
+/// 這支只做一件事：在 `PROCESS_ATTACH` 記一行。它跟後面
+/// `[載入] DllGetClassObject` 的時間差，就是那段空白有多長。
+///
+/// # 為什麼這樣寫是安全的
+///
+/// `DllMain` 裡幾乎什麼都不能做——載入器鎖著一把全域鎖，在裡面碰
+/// COM、開執行緒、載別的 DLL 都可能死鎖。所以這裡**只寫一行 log**
+/// （開檔、寫入、關檔），而且只在 `PROCESS_ATTACH` 那一次。
+///
+/// 除錯開關關著的時候整支是一個原子讀取就回來了，正式使用沒有成本。
+///
+/// # Safety
+/// 由 Windows 載入器呼叫，簽章必須與 `BOOL DllMain(HINSTANCE, DWORD, LPVOID)`
+/// 相符。
+#[no_mangle]
+unsafe extern "system" fn DllMain(_hinst: *mut c_void, reason: u32, _reserved: *mut c_void) -> i32 {
+    const DLL_PROCESS_ATTACH: u32 = 1;
+    if reason == DLL_PROCESS_ATTACH {
+        // **這是整份 log 的第一行**，也是相對毫秒的原點。
+        crate::debug_log::log("[載入] DllMain PROCESS_ATTACH");
+    }
+    1 // TRUE：載入成功
+}
+
 /// COM 用這個入口向 DLL 要一個「類別工廠」，再由工廠生出實際物件。
 ///
 /// # Safety
@@ -51,9 +84,12 @@ unsafe extern "system" fn DllGetClassObject(
 ) -> HRESULT {
     // **最早的進入點**——在這裡裝 panic 攔截器，之後任何 panic
     // 都會留下線索（見 `debug_log::install_panic_hook`）
-    // **最早的進入點**——在這裡裝 panic 攔截器，之後任何 panic
-    // 都會留下線索（見 `debug_log::install_panic_hook`）
     crate::debug_log::install_panic_hook();
+    // 這一行是**量卡頓的原點**。它與後面 `[啟用] Activate` 的時間差
+    // ＝「宿主決定用這個輸入法」到「我們開始初始化」之間的空白；那段
+    // 不在我們的程式裡，卡在那裡代表是外部因素（例如反作弊逐一掃描
+    // 剛載入的模組），不是我們能改的。見相容性測試清單 H11。
+    crate::dlog!("[載入] DllGetClassObject");
     unsafe {
         if ppv.is_null() {
             return windows::core::Error::from(windows::Win32::Foundation::E_POINTER).code();

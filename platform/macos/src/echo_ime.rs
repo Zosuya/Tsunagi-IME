@@ -713,21 +713,21 @@ impl EchoController {
                 self.after_seg(sender);
             }
 
-            // ── 選字 ──
+            // ── 選字：左右鍵一律走 `arrow_*`，跟 Windows 同一條路 ──
             //
-            // **左鍵從最後一格進**：使用者按左鍵的直覺是「從右邊選過來」，
-            // 從第一格進來會看起來像跳過了最後一個字。進了選字就把清單打開，
-            // 不然畫面上只有框、沒有候選字可以看。
-            Action::EnterSelect | Action::EnterSelectLast => {
-                {
-                    let mut s = self.session().borrow_mut();
-                    if action == Action::EnterSelectLast {
-                        s.enter_select_last();
-                    } else {
-                        s.enter_select_first();
-                    }
-                    s.open_cands();
-                }
+            // 不能各自呼叫 `enter_select_first/last()`——那兩支從頭進入選字，
+            // 框還留著時（剛選完、剛按過 Enter）會被拉回同一格，使用者要按
+            // 兩下才動得了一格。`arrow_right/left()` 才知道「框留著就直接移」，
+            // 見 core `session::select` 的說明。
+            //
+            // 也不能跟著呼叫 `open_cands()`——框與候選是兩件事，Windows 的
+            // 左右鍵只出框、不彈候選面板（上下鍵手勢那條才會，見 `on_gesture`）。
+            Action::EnterSelect => {
+                self.session().borrow_mut().arrow_right();
+                self.refresh(sender);
+            }
+            Action::EnterSelectLast => {
+                self.session().borrow_mut().arrow_left();
                 self.refresh(sender);
             }
             // ↑↓ 先走手勢偵測（`ime_core::command::Gesture`）——組字內容是指令時，
@@ -919,6 +919,17 @@ impl EchoController {
     /// ```
     ///
     /// 這是兩個平台**刻意不一致**的一處，理由是遵循各自的慣例。
+    ///
+    /// # ★ 這支**只給組字區顯示用**，送出一律 `session.text()` ★
+    ///
+    /// 它含 `pending_symbols`（還沒湊成字的注音符號）——**顯示要畫出來、
+    /// 送出要丟掉**，兩種用途的需求正好相反。`commit()` 曾經誤用它，
+    /// 症狀是送出「你ㄏㄠ」而不是「你」（2026-09-20 修）。
+    ///
+    /// 現有的兩個呼叫點都是顯示用途（`refresh()` 與滑鼠點候選字），
+    /// 而且**依賴它含 pending**：`set_marked()` 拿這個字串算游標位置
+    /// （要停在含 pending 的整串尾端）與面板的空判斷。**所以不要改這支
+    /// 的回傳值去「修」送出**——要改的是呼叫端。
     fn composition(&self) -> String {
         let s = self.session().borrow();
         if self.ivars().seg_menu.get() {
@@ -1101,7 +1112,7 @@ impl EchoController {
         if text.is_empty() || (items.is_empty() && hint.is_empty()) {
             candidate_panel::hide();
         } else if let Some(caret) = candidate_panel::caret_rect(sender) {
-            candidate_panel::show(&items, sel, cols, &hint, self.as_ref(), caret);
+            candidate_panel::show(&items, sel, cols, &hint, self.as_ref(), sender, caret);
         }
     }
 }
@@ -1121,7 +1132,39 @@ impl EchoController {
         width_panel::hide();
         self.ivars().seg_menu.set(false);
 
-        let text = self.composition();
+        // ★ 送出用 `text()`，**不可以用 `composition()`** ★
+        //
+        // `composition()` 是給**組字區顯示**用的，它含 `pending_symbols`
+        // ——還沒湊成字的注音符號。顯示當然要畫出來（不然使用者看不到
+        // 自己按了什麼），但那些**不是文字**，送出時要丟掉。
+        //
+        // 誤用的症狀：鎖定注音打「你好」按一次倒退鍵再送出，Windows 送出
+        // 「你」，macOS 送出「你ㄏㄠ」——`ㄏㄠ` 是退格之後退回音節緩衝的
+        // 殘渣，被當成文字塞進宿主了。Windows 那邊一律 `session.text()`。
+        // ★ 擴充包編輯器舉旗時改送**原始按鍵** ★
+        //
+        // 那個欄位要收的是 `su3cl3` 而不是「你好」，但**宿主收不到鍵盤**
+        // （按鍵先進輸入法），而 macOS 的組字區裝的是轉換後的國字，所以它
+        // 沒有別的管道拿得到按鍵。Windows 不需要這條——那邊的組字區本來
+        // 就是原始按鍵。整條路的來龍去脈見 `ime_core::keycapture`。
+        //
+        // **組字中照舊送轉換後的字**（`composition()` 不受影響），使用者
+        // 看得到自己在打什麼；只有送出這一下換成按鍵串。
+        //
+        // ★ 用 `commit_text()` 不是 `text()` ★
+        //
+        // 兩者只在鎖定日文、還有半個 mora 卡在 `pending` 時不一樣：
+        // `sush` 按 Enter，`text()` 只看得到已經湊成「す」的部分，`sh`
+        // 會無聲消失。`commit_text()` 把沒成字的尾巴照原樣接上（裁決
+        // 2026-09-27，見開發文件「鎖定日文打半個 mora 直接送出」）。
+        // 鎖定注音不受影響——那條路的半個注音符號本來就該丟棄，
+        // `commit_text()` 對它等於 `text()`。
+        let capture = ime_core::keycapture::wanted();
+        let text = if capture {
+            self.session().borrow().keys().to_string()
+        } else {
+            self.session().borrow().commit_text()
+        };
         if text.is_empty() {
             self.session().borrow_mut().clear();
             return;
@@ -1132,7 +1175,13 @@ impl EchoController {
         // `learn_on_commit()` 讀的是 `slots`——**清掉就什麼都學不到了**。
         // 我第一版把它放在 `clear()` 之後，症狀是學習檔永遠不會生出來，
         // 而且完全沒有錯誤訊息（它只是回 0 筆）。
-        self.learn_and_save();
+        //
+        // **擷取按鍵時不學**：那一下送出去的是按鍵串、目的地是編輯器的
+        // 欄位，不是使用者真的在寫字。記進去只會污染學習層（跟台語包
+        // 不進學習層同一個道理）。
+        if !capture {
+            self.learn_and_save();
+        }
         self.session().borrow_mut().clear();
 
         let s = NSString::from_str(&text);

@@ -30,6 +30,7 @@ pub mod dict_bin;
 pub mod dict_bin_zh;
 pub mod english;
 pub mod input;
+pub mod keycapture;
 pub mod language;
 pub mod learn;
 pub mod lm;
@@ -77,19 +78,49 @@ pub struct Candidate {
 /// 引擎是**後來才打開**的話這裡不會補載，但惰性載入還在，第一次查詢
 /// 會自己讀進來；下次啟用輸入法時就會被這裡預載了。
 pub fn preload(data_dir: &std::path::Path, engines: config::Engines) {
-    english::load(data_dir);
+    preload_traced(data_dir, engines, |_, _| {});
+}
+
+/// `preload` 的計時版：每載完一本就回報 `(名字, 毫秒)`。
+///
+/// # 為什麼要開這道門
+///
+/// 「載入卡住」的修法完全看**是哪一本卡住**——所以量測必須分得開。
+/// 但 `core` 是平台無關的，不能自己寫 log（那是平台層的事），而在
+/// 平台層另外抄一份載入順序會跟這裡漂掉，漂掉的症狀是「量到的跟真正
+/// 跑的不是同一條路」，不會有任何編譯錯誤。
+///
+/// 收一個回呼就兩邊都滿足：順序只有這一份，記到哪裡由呼叫端決定。
+///
+/// 一般呼叫走 `preload`，那是這一支傳空回呼。
+pub fn preload_traced(
+    data_dir: &std::path::Path,
+    engines: config::Engines,
+    mut on_done: impl FnMut(&str, u128),
+) {
+    // 量一段並回報。`OnceLock` 已經載過的情況會量到 ~0ms，那是對的
+    // ——它代表「這本沒有花時間」，跟「沒載」要分得開。
+    macro_rules! step {
+        ($name:expr, $body:expr) => {{
+            let t = std::time::Instant::now();
+            $body;
+            on_done($name, t.elapsed().as_millis());
+        }};
+    }
+
+    step!("english", english::load(data_dir));
     if engines.bopomofo {
-        dict::load_bopomofo(data_dir);
+        step!("bopomofo", dict::load_bopomofo(data_dir));
         // 選字要用的中文 bigram。**載不到不影響**——`compose::apply_lm`
         // 看到沒有模型就整段跳過，選字退回原本的純字頻行為。
         // 它跟詞庫是分開的兩份資料，缺一份不該讓另一份也不能用。
-        lm::load(data_dir, dict::char_freq_map(data_dir));
+        step!("lm", lm::load(data_dir, dict::char_freq_map(data_dir)));
     }
     if engines.romaji {
-        dict::load_japanese(data_dir);
+        step!("japanese", dict::load_japanese(data_dir));
         // 整句轉換要用的完整接續矩陣。**載不到不影響**——那時
         // `convert` 的接續成本一律當 0，退化成「只看詞成本」，
         // 仍然比整段不轉好。見 `romaji::convert`。
-        dict::load_connection(data_dir);
+        step!("connection", dict::load_connection(data_dir));
     }
 }

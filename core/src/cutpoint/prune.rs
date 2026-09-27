@@ -33,8 +33,10 @@ pub fn keep(keys: &str, chars: &[char], start: usize, end: usize) -> bool {
     }
     let seg = super::slice(keys, chars, start, end);
 
-    // 標點自成一段，不受這兩條規則管
-    if end == start + 1 && punct::is_punct(keys, start) {
+    // 標點自成一段，不受這兩條規則管。**軟標點也是**（`hello.␣` 的 `.`，
+    // 見 `punct::is_soft_punct`）——不放行的話它會被單字母規則殺掉，
+    // 「句點＋分隔符」這個解讀就生不出來
+    if end == start + 1 && punct::is_mark_at(chars, start) {
         return true;
     }
     // 分隔符同理
@@ -63,7 +65,7 @@ pub fn keep(keys: &str, chars: &[char], start: usize, end: usize) -> bool {
         return true;
     }
 
-    single_letter_ok(keys, chars, start, end) && english_word_ok(chars, start, end, &seg)
+    single_letter_ok(chars, start, end) && english_word_ok(chars, start, end, &seg)
 }
 
 /// 整段就是一個數字嗎（`264`、`0.49`、`2.64`）？
@@ -103,7 +105,7 @@ fn numeric_segment(seg: &str) -> bool {
 /// a@b.com   的 a → 後面是標點              → 保留
 /// su3cl3    切出的 s → 前後都是字母        → 丟棄
 /// ```
-fn single_letter_ok(keys: &str, chars: &[char], start: usize, end: usize) -> bool {
+fn single_letter_ok(chars: &[char], start: usize, end: usize) -> bool {
     // 整串就這麼短的話沒得挑，留著
     if chars.len() <= 1 || end != start + 1 {
         return true;
@@ -114,8 +116,9 @@ fn single_letter_ok(keys: &str, chars: &[char], start: usize, end: usize) -> boo
     if chars[start].is_ascii_uppercase() {
         return true;
     }
-    let left = start == 0 || chars[start - 1] == ' ' || punct::is_punct(keys, start - 1);
-    let right = end >= chars.len() || chars[end] == ' ' || punct::is_punct(keys, end);
+    // 用切片版：`keys` 可以長到兩百鍵，`is_punct` 每問一次就收一次整串
+    let left = start == 0 || chars[start - 1] == ' ' || punct::is_punct_at(chars, start - 1);
+    let right = end >= chars.len() || chars[end] == ' ' || punct::is_punct_at(chars, end);
     left && right
 }
 
@@ -428,5 +431,23 @@ mod tests {
         let keys = "0.49";
         let chars: Vec<char> = keys.chars().collect();
         assert!(keep(keys, &chars, 0, 4), "0.49 整段要留得住");
+    }
+
+    /// **軟標點自成一段時放行**（`hello.␣` 的 `.`）。
+    ///
+    /// `.␣` 是合法的ㄡ一聲，`is_punct` 判它是注音；照單字母規則，它左邊是
+    /// `o`（不是邊界），會被當成切碎的殘渣殺掉——「句點＋分隔符」這條切法
+    /// 就生不出來，排序再怎麼調都救不回來。
+    #[test]
+    fn 軟標點_句點加空白自成一段放行() {
+        assert!(
+            !punct::is_punct("hello. world", 5),
+            "前提：is_punct 判成注音"
+        );
+        assert!(keep_seg("hello. world", 5, 6), "hello. 的句點");
+        assert!(keep_seg("su3cl3. come", 6, 7), "你好. 的句點");
+        assert!(keep_seg("ok; ", 2, 3), "ok; 的分號");
+        // 對照：後面不是空白就不是軟標點，`.` 是韻母（`ru.4` 就），照舊丟
+        assert!(!keep_seg("ru.4", 2, 3), "就 的ㄡ不是標點");
     }
 }

@@ -25,6 +25,9 @@ data/bopomofo/*
 data/japanese/
 data/english/*
 
+# 別人寫的文字（社群貼文等），只當本機評估材料：不進版控、不進公開 repo
+data/private/
+
 # priority.txt 例外：那是人工判斷寫出來的排序調整表，不是下載來的
 # 資料，重新下載不會產生它，必須進版控。
 !data/bopomofo/priority.txt

@@ -111,11 +111,14 @@ pub(crate) fn refresh_config(state: &mut State) {
     );
     if ps != state.pack_stamp {
         state.pack_stamp = ps;
+        // 官方包走 mmap（台語那份 4.4MB），文字包是真的讀進來解析。
+        // **記時間**：這一段是同步的，卡住就是使用者在等。
+        let t = std::time::Instant::now();
         let n = ime_core::pack::load(
             &state.config.behavior.packs_dir,
             &state.config.behavior.packs,
         );
-        crate::dlog!("[設定] 領域包載入 {} 條", n);
+        crate::dlog!("[設定] 領域包載入 {} 條 {}ms", n, t.elapsed().as_millis());
     }
 }
 
@@ -144,6 +147,7 @@ fn apply_config(state: &mut State) {
         lock_punct,
         ctrl_punct,
         fuzzy_tone,
+        auto_expand_long,
     } = &state.config.behavior;
     let (width, engines) = (*width, *engines);
     let (backspace_whole_cell, lock_punct) = (*backspace_whole_cell, *lock_punct);
@@ -162,6 +166,9 @@ fn apply_config(state: &mut State) {
     // ——`compose` 是純函式、四個入口都不收設定，而這個開關一個行程一份，
     // 語意跟 `learn::any()` 一樣。見 `compose::set_fuzzy_tone`。
     ime_core::compose::set_fuzzy_tone(*fuzzy_tone);
+    // 擴充包的長輸出要不要打完就展開。**跟 `fuzzy_tone` 同一個模式**
+    // ——全域旗標，`compose` 是純函式收不了設定。
+    ime_core::compose::set_auto_expand_long(*auto_expand_long);
 
     // ── 以下不在這裡套用，但**必須交代** ──
     //
@@ -222,19 +229,39 @@ pub(crate) fn spawn_dict_load(engines: ime_core::config::Engines) {
     }
     std::thread::spawn(move || {
         let t = std::time::Instant::now();
-        ensure_dict_loaded(engines);
+        ensure_dict_loaded(engines, "背景");
         crate::dlog!("[啟用] 詞庫背景載入完成 {}ms", t.elapsed().as_millis());
         LOADING.store(false, Ordering::SeqCst);
     });
 }
 
-pub(crate) fn ensure_dict_loaded(engines: ime_core::config::Engines) {
+/// 把詞庫讀完。`who` 標明是誰在讀，會寫進 log。
+///
+/// # `who` 為什麼重要
+///
+/// 同一支函式有兩個呼叫端，而它們的後果天差地遠：背景執行緒讀是
+/// 免費的（使用者感覺不到），**按鍵執行緒讀是凍住宿主**——TSF 的
+/// 按鍵回呼跑在宿主的 UI 執行緒上，而且那時狀態鎖還握著。
+///
+/// log 不分開標的話，兩者長得一模一樣，就量不出「使用者到底有沒有
+/// 真的等到」。
+pub(crate) fn ensure_dict_loaded(engines: ime_core::config::Engines, who: &str) {
     if let Some(dir) = crate::registration::data_dir() {
+        let t = std::time::Instant::now();
         // 學習記錄跟詞庫一起載——它是分層的第三層，見 `ime_core::learn`
         let n = ime_core::learn::load(Some(&dir));
-        crate::dlog!("[學習] 載入 {} 條", n);
+        crate::dlog!(
+            "[詞庫:{who}] learn {}ms ({} 條)",
+            t.elapsed().as_millis(),
+            n
+        );
         // 不必自己擋重複呼叫——每本詞庫各自是 `OnceLock`，
         // already-loaded 的情況只是一次原子讀取
-        ime_core::preload(&dir, engines);
+        //
+        // **逐本記時間**：哪一本卡住決定修法（見 `preload_traced`）。
+        ime_core::preload_traced(&dir, engines, |name, ms| {
+            crate::dlog!("[詞庫:{who}] {name} {ms}ms");
+        });
+        crate::dlog!("[詞庫:{who}] 全部完成 {}ms", t.elapsed().as_millis());
     }
 }

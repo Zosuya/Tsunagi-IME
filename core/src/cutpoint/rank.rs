@@ -112,18 +112,30 @@ pub struct Score {
     ///
     /// 補完之後漏斗 1320 不變（零退步），目標案例全部修好。
     pub fewer_split_syllable: std::cmp::Reverse<usize>,
-    /// **顯示不出來的段落數**（取相反數——越少越好）。
+    /// **顯示不出來的音節**（取相反數——越少越好）。
     ///
-    /// 有些切法會在句子中間留下一串沒轉換的按鍵：
+    /// 注音段可能切得出音節、卻有音節查不到任何字（`/6` 是ㄥˊ，合法但
+    /// 沒有字念這個音）。那種切法會在畫面上留下一串沒轉換的按鍵：
     ///
     /// ```text
-    /// 這種fu/6況就是藥用      ← `/6`（ㄥˊ）合法，但沒有字念這個音
-    /// 這種情dj盎就是藥用
+    /// 這種fu/6況就是藥用      ← `/6` 原樣露出來
+    /// 這種情dj盎就是藥用      ← `dj` 原樣露出來
+    /// 第1合う/6               ← 在句尾也一樣（本意是「第1名」）
     /// ```
     ///
-    /// 那不是「打到一半」——**最後一段不算**，還在打的尾巴本來就
-    /// 還沒成形，罰它會把候選推向日文（那正是 `fewer_split_syllable`
-    /// 在修的病）。這一欄只罰**夾在中間**、後面還有正常內容的。
+    /// # 整串的最後一個音節也算（2026-09-23）
+    ///
+    /// 原本最後一段的最後一個音節豁免，理由是「那可能只是還在打、聲調
+    /// 還沒按」。但這個情況**到不了這一欄**：注音段一定是
+    /// `bopomofo::validity` 判 `Valid` 的，而沒按聲調的音節不是 `Valid`
+    /// （`au/` 不會成為注音段）——會落到這裡的 `/6` 已經打完了，它就是
+    /// 一串會原樣露出來的按鍵。
+    ///
+    /// 豁免的代價是 `第1名`：`2u4 | 1 | au/6` 的正解輸給 `日:au | 注:/6`
+    /// （`au` 是合法假名，`/6` 又被豁免）。拿掉豁免之後漏斗修好這一句、
+    /// 弄壞 0 句，改寫次數不變。
+    ///
+    /// 每一段最多記 2（見 `BopoFacts::unreadable`）。
     pub fewer_unreadable: std::cmp::Reverse<usize>,
     /// 把分隔符或標點吞進其他段的**次數**（取相反數——越少越好）。
     ///
@@ -138,6 +150,25 @@ pub struct Score {
     ///
     /// 光靠 `clean_word` 不夠——那只讓它「不加分」，但吞掉之後段數
     /// 變少，在同分時反而勝出。這一欄直接罰它。
+    ///
+    /// # 注音段把標點或分隔符當成音節
+    ///
+    /// 一鍵兩用的 `,` `.` `;` `/` 是韻母鍵、空白是一聲，所以「標點＋
+    /// 分隔符」常常也是一個合法的一聲音節。下面三種形狀也記在這一欄
+    /// （`soft_punct_swallowed`）：
+    ///
+    /// | 形狀 | 吞掉的樣子 | 本意 |
+    /// |---|---|---|
+    /// | 英日後面的注音段以 `.␣`／`;␣`／`/␣` 開頭 | `英:hello \| 注:.␣`（hello歐） | hello. |
+    /// | 注音段裡自成音節的 `,␣` | `注:su3cl3,␣`（你好ㄝ） | 你好, |
+    /// | 注音段結尾自成音節的 `.␣`，後面接外文 | `注:su3cl3.␣ \| 英:come`（你好歐come） | 你好. come |
+    ///
+    /// 這三種要先有軟標點（`punct::is_soft_punct`）才生得出「標點＋分隔符」
+    /// 那條切法，這一欄決定它什麼時候贏。
+    ///
+    /// **數字鍵＋一聲空白後接外文不當成吞字**：實測會把「搭uber」判成
+    /// 「28 uber」（`28`＝ㄉㄚ也同時是數字鍵），已否決（2026-09-25），
+    /// 見開發筆記「漏斗 1335 之後」。
     pub fewer_swallowed: std::cmp::Reverse<usize>,
     /// **英文段偷走注音音節開頭**的次數（取相反數——越少越好）。
     ///
@@ -153,6 +184,17 @@ pub struct Score {
     /// 判準是**把最後一個字元還給後面之後，兩邊是不是都更好**：
     /// 還回去之後英文段仍是詞、注音段仍合法，那就是偷來的。
     /// `was ＋ cl3` 不會誤觸發，因為 `wa` 不是英文詞。
+    ///
+    /// # 日文段也會偷（`kana_stole_head`）
+    ///
+    /// 注音鍵就是字母，中文字的第一鍵常常是羅馬字的母音（`e`＝ㄍ、
+    /// `u`＝ㄧ），於是英文詞後面那個中文字的頭被拉去拼假名：
+    ///
+    /// ```text
+    /// user稿（userel3）   日:usere | 注:l3     還回 e → 英:user ＋ 注:el3
+    /// ```
+    ///
+    /// 形狀跟上面一樣是「前一段多吃了後面音節的第一個鍵」，所以記在同一欄。
     pub fewer_stolen: std::cmp::Reverse<usize>,
     /// **英文詞被切成兩半**的次數（取相反數——越少越好）。
     ///
@@ -169,6 +211,24 @@ pub struct Score {
     /// 判準：相鄰兩段合起來是英文詞，而**至少一段不是英文段**。
     /// 兩段都是英文的話不算（`review|commit` 是兩個詞，不是一個詞
     /// 被切開）。
+    ///
+    /// # 英文詞尾被分隔空白湊成一聲（`tail_eaten_by_tone1`）
+    ///
+    /// 同一種病的另一個形狀：英文詞後面打了分隔用的空白，最後一個字母
+    /// 跟空白被讀成一聲的注音字——`token␣要` 變成 `日:toke | 注:n␣ul4…`
+    /// （n␣ 是ㄙ，私）。`token` 一樣是被切開了，只是另一半躲在注音段裡。
+    ///
+    /// # 日文詞被冷僻的英文段切開（`steals_ja_head`）
+    ///
+    /// 反方向：`一緒に`（issyoni）被切成 `英:iss | 日:yoni`，真正的詞
+    /// `issyo` 橫跨切點。`iss` 排第 40101 名，冷僻到不該拿來切日文。
+    ///
+    /// 這一條跟 `fewer_stolen` 裡的「日文段偷注音頭」看起來是鏡像，卻
+    /// 記在不同欄，是因為**被切壞的東西不同**：那一條是後面一個注音
+    /// **音節**的第一個鍵被拿走（`usere|l3` 的 `e` 屬於 `el3`），這一條是
+    /// 一個**詞**橫跨切點——那正是這一欄在數的。兩種放法在漏斗上逐句
+    /// 相同（2026-09-23 量過；`fewer_stolen` 的優先序比這一欄高，所以
+    /// 只是現有測資上等價），就照語意放。
     pub fewer_split_word: std::cmp::Reverse<usize>,
     /// **一個詞被另一種語言的短段從中間剖開**的次數（越少越好）。
     ///
@@ -176,11 +236,12 @@ pub struct Score {
     /// 別的語言，兩側各自都合法，於是零懲罰勝出：
     ///
     /// ```text
-    /// 日:adoba | 英:is | 日:uwo…   アドバイス 被 `is` 剖開
-    /// 英:rev   | 日:ie | 英:we     review 被 `ie`（いえ）剖開
+    /// 日:adoba | 英:is  | 日:uwo…   アドバイス 被 `is` 剖開
+    /// 英:rev   | 日:ie  | 英:we     review 被 `ie`（いえ）剖開
+    /// 日:enn   | 英:ban | 注:n␣…    円盤（ennbann）被 `ban` 與注音的 `n␣` 剖開
     /// ```
     ///
-    /// 兩個方向都罰，見 `split_sandwich`。
+    /// 前兩種見 `split_sandwich`（兩個方向都罰），第三種見 `split_sandwich_zh`。
     pub fewer_split_sandwich: std::cmp::Reverse<usize>,
     /// **英文 passthrough 的字元數**（取相反數——越少越好）。
     ///
@@ -266,20 +327,6 @@ pub struct Score {
     pub dict_chars: usize,
 }
 
-/// 這一段**顯示得出來嗎**？
-///
-/// 注音段可能切得出音節、卻有音節查不到任何字（`/6` 是ㄥˊ，
-/// 合法的打字中途狀態，但沒有字念這個音）。那種段落在畫面上就是
-/// 一串沒轉換的按鍵：
-///
-/// ```text
-/// 這種fu/6況就是藥用      ← `/6` 原樣露出來
-/// 這種情dj盎就是藥用      ← `dj` 原樣露出來
-/// ```
-///
-/// **這不是「打到一半」**——那時整串的最後一段本來就還沒成形，
-/// 而這裡講的是**夾在中間**、後面還有正常內容的段落。
-///
 /// 「短到不可能是一句日文」的字元數。
 ///
 /// 日文段落**合法但不在詞典裡**有兩種可能：一是活用形句子（mozc 只收
@@ -310,19 +357,47 @@ struct SegFacts {
     clean: bool,
     /// 是常見英文詞嗎（前後空白已去掉）
     common_en: bool,
-    /// 這一段**除了最後一個音節以外**，有顯示不出來的嗎？見 `renderable`。
-    bad_head: bool,
-    /// 這一段的**最後一個音節**顯示不出來嗎？
-    ///
-    /// 跟 `bad_head` 分開，是因為整串的最後一個音節可能只是**還在打**
-    /// （聲調還沒按），那不該罰。
-    bad_last: bool,
+    /// 注音段切一次音節就能回答的幾件事。非注音段一律是預設值（0／false）
+    bopo: BopoFacts,
     /// 這一段是**日文動詞的活用形**嗎（`romaji::inflect`）？
     ///
     /// **一定要走快取**——它要試各種還原規則、每次都查詞典，實測直接
     /// 呼叫會讓 p99 從 6.6ms 衝到 24.3ms（排序每鍵要對上千個段落算分）。
     /// 快取之後同一個段落只算一次。非日文段一律 false，連呼叫都省。
     inflected: bool,
+    /// 這一段日文只有**一個假名**嗎（`single_mora`，碎片懲罰用）？
+    ///
+    /// **一樣要走快取**。`split_moras` 每次都配置一串字串，原本在
+    /// `kana_bits` 裡對每個候選的每個日文段現算——那一項佔掉整個計分
+    /// 的兩成多（每個候選約 0.6µs，是計分裡最貴的一項）。
+    /// 非日文段、或長過 `KANA_FRAGMENT`（碎片懲罰根本不看）的一律 false。
+    single_mora: bool,
+}
+
+/// 一段注音**切一次音節**就能回答的幾件事（`bopomofo_facts` 算）。
+///
+/// 「前後幾個音節有沒有被詞認領」都是由左而右取最長匹配（跟
+/// `bopomofo_claimed_chars` 同一套）的結果，不是「有沒有任何一種拆法」。
+#[derive(Clone, Copy, Default)]
+struct BopoFacts {
+    /// 被詞典的多音節詞認領的字元數，見 `bopomofo_claimed_chars`
+    claimed: usize,
+    /// **顯示不出來的音節**，每段最多記 2：最後一個以外有沒有（有幾個
+    /// 都記 1）、最後一個是不是（記 1）。切不出音節的整段記 1。
+    ///
+    /// 會分成「前面」與「最後一個」兩項，是因為最後一個音節原本豁免
+    /// （見 `Score::fewer_unreadable`）。豁免拿掉時照原本的兩項相加，
+    /// 沒有改成逐音節計數——那會改變排序，沒有量過。
+    unreadable: u8,
+    /// **第一個音節**被多音節詞認領了嗎（`.␣5.␣` 歐洲 的 `.␣`）？
+    ///
+    /// 軟標點的罰則用它放行真的詞：`.␣` 是ㄡ一聲，也可能是句點＋分隔符，
+    /// 但它在「歐洲」裡的時候就是「歐」。見 `soft_punct_swallowed`。
+    first_in_word: bool,
+    /// **最後一個音節**被多音節詞認領了嗎（`1o3.␣` 北歐 的 `.␣`）？
+    ///
+    /// 用途同 `first_in_word`。
+    last_in_word: bool,
 }
 
 /// 段落判斷的快取。
@@ -333,45 +408,96 @@ struct SegFacts {
 ///
 /// 按語言分層是為了**查得到就不必配置字串**：`HashMap<(String, Lang)>`
 /// 沒辦法用 `(&str, Lang)` 查，每次都得先 clone 一份鍵，那就白做了。
+///
+/// **不是單一段落的判斷也放這裡**（`prefix`）：只要答案只跟按鍵有關，
+/// 就該跟段落判斷共用同一個有效期（詞庫版本、`MEMO_LIMIT`），不要各自
+/// 帶一份 `thread_local`——那種快取沒人清，詞庫載完之前的答案會一直留著。
 #[derive(Default)]
-struct Memo(std::collections::HashMap<Language, std::collections::HashMap<String, SegFacts>>);
+struct Memo {
+    /// 單一段落的判斷，按語言分層（理由見上）
+    segs: std::collections::HashMap<Language, std::collections::HashMap<String, SegFacts>>,
+    /// `steals_ja_head` 的答案：英文段 → 日文段 → 偷了沒。
+    ///
+    /// 兩層而不是 `(String, String)` 當鍵：後者沒辦法用兩個 `&str` 查，
+    /// 每查一次都得先 clone 兩份字串。
+    ja_head: std::collections::HashMap<String, std::collections::HashMap<String, bool>>,
+    /// `ja_head` 內層的總筆數（`len` 用，不必每次掃一遍內層）
+    ja_head_len: usize,
+}
 
 impl Memo {
     fn facts(&mut self, s: &Segment) -> SegFacts {
-        let by_lang = self.0.entry(s.lang).or_default();
+        let by_lang = self.segs.entry(s.lang).or_default();
         if let Some(f) = by_lang.get(s.keys.as_str()) {
             return *f;
         }
         let n = s.keys.chars().count();
-        // **注音的三件事一次算完**：`claimed_chars` 與「顯示得出來嗎」
+        // **注音的幾件事一次算完**：`claimed_chars` 與「顯示得出來嗎」
         // 都要先切音節，而 `split_syllables` 每個候選長度都配置一個
         // 字串——分兩次呼叫實測讓 p99 從 10.9ms 衝到 14.3ms。
-        let (bopo_claimed, bad_head, bad_last) = if s.lang == Language::Bopomofo {
+        let bopo = if s.lang == Language::Bopomofo {
             bopomofo_facts(&s.keys)
         } else {
-            (0, false, false)
+            BopoFacts::default()
         };
         let f = SegFacts {
             n,
             claimed: claimed(&s.keys, s.lang, n),
             claimed_chars: if s.lang == Language::Bopomofo {
-                bopo_claimed
+                bopo.claimed
             } else {
                 claimed_chars(&s.keys, s.lang, n)
             },
             in_dict: in_dict(&s.keys, s.lang, n),
             clean: clean_word(&s.keys),
             common_en: crate::english::is_common_word(s.keys.trim()),
-            bad_head,
-            bad_last,
+            bopo,
             inflected: s.lang == Language::Romaji && crate::romaji::inflect::is_inflected(&s.keys),
+            single_mora: s.lang == Language::Romaji && n <= KANA_FRAGMENT && single_mora(&s.keys),
         };
         by_lang.insert(s.keys.clone(), f);
         f
     }
 
+    /// 冷僻的英文段偷走了後面日文詞的開頭嗎？見 `steals_ja_head`。
+    ///
+    /// 答案只跟兩段的按鍵有關，同一對段落在幾百個候選裡反覆出現，所以
+    /// 要快取。原本那支自帶一份 `thread_local`，有兩個毛病：
+    ///
+    /// - **不跟詞庫版本失效**。macOS 的詞庫是背景載入的，載完之前查到的
+    ///   「不是日文詞」會一直留著；切詞學習（`is_japanese_word` 看它）、
+    ///   擴充包、`is_top_word` 的答案變了也一樣。這幾件事都會跳
+    ///   `dict::generation`，而 `Memo` 正是跟著它清的（`refresh_memo`）
+    /// - **每查一次就配置兩個 `String`**（`(String, String)` 當鍵）
+    ///
+    /// 形狀條件（語言、長度、全是字母）在查表之前擋——絕大多數相鄰兩段
+    /// 在這裡就走了，連雜湊都不必算。
+    fn steals_ja_head(&mut self, en: &Segment, ja: &Segment) -> bool {
+        if en.lang != Language::English || ja.lang != Language::Romaji || en.is_mark || ja.is_mark {
+            return false;
+        }
+        let n = en.keys.chars().count();
+        if !(2..=4).contains(&n) || !en.keys.chars().all(|c| c.is_ascii_alphabetic()) {
+            return false;
+        }
+        if let Some(&v) = self
+            .ja_head
+            .get(en.keys.as_str())
+            .and_then(|m| m.get(ja.keys.as_str()))
+        {
+            return v;
+        }
+        let v = steals_ja_head(&en.keys, &ja.keys);
+        self.ja_head
+            .entry(en.keys.clone())
+            .or_default()
+            .insert(ja.keys.clone(), v);
+        self.ja_head_len += 1;
+        v
+    }
+
     fn len(&self) -> usize {
-        self.0.values().map(|m| m.len()).sum()
+        self.segs.values().map(|m| m.len()).sum::<usize>() + self.ja_head_len
     }
 }
 
@@ -426,23 +552,62 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
         .count();
     // 每一段先把要問的都問完（重複的段落只查一次，見 `Memo`）
     let facts: Vec<SegFacts> = segs.iter().map(|s| memo.facts(s)).collect();
-    // 吞掉分隔符或標點的段
+    // 吞掉分隔符或標點的段：英日段把標點包進去（`英:hello.`），以及注音段
+    // 把標點或分隔符當成一聲音節的幾種形狀（見 `Score::fewer_swallowed`）
     let swallowed = segs
         .iter()
         .zip(&facts)
         .filter(|(s, f)| !s.is_mark && s.lang != Language::Bopomofo && f.n > 1 && !f.clean)
-        .count();
-    // 英文詞被切成兩半了嗎？
+        .count()
+        + soft_punct_swallowed(segs, &facts);
+    // ── 相鄰幾段一起看的判斷：只有 `steals_ja_head` 走 `Memo`，其餘現算 ──
+    //
+    // `tail_eaten_by_tone1`、`split_sandwich_zh`、`kana_stole_head` 的答案
+    // 也只跟按鍵有關，照「新判斷一律走 Memo」本來該快取。2026-09-23 逐一
+    // 量過（整份測資逐鍵走 `Session::push`，約 2500 萬對相鄰段落），決定
+    // **不快取**：
+    //
+    // | 判斷 | 過了語言門檻 | 之後每次 | 合計 | 單鍵最多 |
+    // |---|---|---|---|---|
+    // | `kana_stole_head` | 8%（200 萬次） | 67ns | 135ms | 0.7ms |
+    // | `tail_eaten_by_tone1` | 0.8% | 88ns | 17ms | 0.2ms |
+    // | `split_sandwich_zh` | 0.13%（2.9 萬次） | 2.1µs | 60ms | 0.8ms |
+    //
+    // 九成以上在第一道語言比對就回 false（幾 ns），查表反而比它貴——雜湊
+    // 兩三個字串就要幾十 ns。過了門檻之後，前兩支的成本本來就只是一次
+    // 詞典查詢，換成查表省不到東西；只有 `split_sandwich_zh` 每次 2µs 值得
+    // 記，但它合計只有 60ms（整份測資逐鍵合計十幾秒）。對照：同一批相鄰
+    // 段落上，既有的 `split_english_word`／`stole_head`／`split_sandwich`
+    // 各花 0.9～1.3 秒，那才是這一段的大宗。
+    //
+    // `steals_ja_head` 走 `Memo` 是因為它原本就自帶快取，要修的是有效期
+    // （見 `Memo::steals_ja_head`）。
+    //
+    // 英文詞被切成兩半了嗎？（含英文詞尾被一聲空白吃掉）
     let split_word = (0..segs.len().saturating_sub(1))
-        .filter(|&i| split_english_word(&segs[i], &segs[i + 1]))
+        .filter(|&i| {
+            split_english_word(&segs[i], &segs[i + 1])
+                || tail_eaten_by_tone1(&segs[i], &segs[i + 1])
+        })
         .count();
-    // 【SPIKE 乙】英文段夾在兩個日文段中間，三段合起來是日文詞？
+    // 一個詞被另一種語言的短段從中間剖開了嗎？（三段的形狀）
     let split_ja = (0..segs.len().saturating_sub(2))
-        .filter(|&i| split_sandwich(&segs[i], &segs[i + 1], &segs[i + 2]))
+        .filter(|&i| {
+            split_sandwich(&segs[i], &segs[i + 1], &segs[i + 2])
+                || split_sandwich_zh(&segs[i], &segs[i + 1], &segs[i + 2])
+        })
         .count();
-    // 英文段偷走了後面注音音節的開頭嗎？
+    // 英文段（或日文段）偷走了後面注音音節的開頭嗎？
     let stolen = (0..segs.len().saturating_sub(1))
-        .filter(|&i| stole_head(&segs[i], &segs[i + 1]))
+        .filter(|&i| {
+            stole_head(&segs[i], &segs[i + 1])
+                || kana_stole_head(i.checked_sub(1).map(|p| &segs[p]), &segs[i], &segs[i + 1])
+        })
+        .count();
+    // 日文詞被冷僻英文段切開了嗎？（`英:iss | 日:yoni`，詞是 issyo）——
+    // 跟上面的 `split_word` 記在同一欄，理由見 `Score::fewer_split_word`
+    let ja_word_split = (0..segs.len().saturating_sub(1))
+        .filter(|&i| memo.steals_ja_head(&segs[i], &segs[i + 1]))
         .count();
     for (s, f) in segs.iter().zip(&facts) {
         // 標點與分隔符不參與計分——它們本來就自成一段，不是「詞」
@@ -465,7 +630,7 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
                 // **單一假名不管在不在詞典裡**。`!in_dict` 這道門本來很鬆：
                 // 2～3 字母的合法假名組合裡，**984 個都在 mozc 詞典裡**（它收了
                 // 大量單假名詞條，`る` 就是其一），於是碎片懲罰幾乎從來不生效。
-                && (!f.in_dict || single_mora(&s.keys))
+                && (!f.in_dict || f.single_mora)
                 // **真的是動詞活用形的不算碎片**。
                 //
                 // 碎片與短的活用形長得一模一樣——都是「合法、不在詞典裡、
@@ -485,14 +650,9 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
                 && !f.inflected
         })
         .count();
-    // 顯示不出來的音節數。**整串的最後一個音節不算**——那可能只是
-    // 還在打（聲調還沒按）。見 `Score::fewer_unreadable`
-    let last_i = segs.len().saturating_sub(1);
-    let unreadable: usize = facts
-        .iter()
-        .enumerate()
-        .map(|(i, f)| usize::from(f.bad_head) + usize::from(f.bad_last && i != last_i))
-        .sum();
+    // 顯示不出來的音節數，**整串的最後一個音節也算**——它不會是「還在
+    // 打」的半成品，理由見 `Score::fewer_unreadable`
+    let unreadable: usize = facts.iter().map(|f| usize::from(f.bopo.unreadable)).sum();
     let total_len: usize = facts.iter().map(|f| f.n).sum();
     // **整串是一個注音音節卻被切開**了嗎？見 `Score::fewer_split_syllable`。
     //
@@ -579,7 +739,7 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
     Score {
         fewer_split_syllable: std::cmp::Reverse(split_syllable),
         fewer_unreadable: std::cmp::Reverse(unreadable),
-        fewer_split_word: std::cmp::Reverse(split_word),
+        fewer_split_word: std::cmp::Reverse(split_word + ja_word_split),
         fewer_split_sandwich: std::cmp::Reverse(split_ja),
         fewer_kana_bits: std::cmp::Reverse(kana_bits),
         fewer_stolen: std::cmp::Reverse(stolen),
@@ -630,11 +790,104 @@ fn score_with(memo: &mut Memo, segs: &[Segment]) -> Score {
     }
 }
 
-/// 這相鄰兩段，是不是一個英文詞被切成兩半？
+/// 注音段把**軟標點**當成一聲音節吃掉的次數（記進 `fewer_swallowed`）。
 ///
-/// 條件：合起來是英文詞，而且**不是兩段都是英文**——兩段都是英文的
-/// 話那是兩個詞相接（`review|commit`），不是一個詞被切開。
-/// 【SPIKE 乙】一個詞被**另一種語言的短段**從中間剖開了嗎？
+/// 軟標點（`punct::is_soft_punct`：`,` `.` `;` `/` 後接空白）讓「標點＋
+/// 分隔符」跟「一聲音節」兩種解讀都生得出來，這裡決定哪些形狀該判成
+/// 標點。三條各管一種形狀；① 與 ③ 在那個音節**被多音節詞認領時不算**
+/// （② 不必：ㄝ一聲不是任何詞的一部分，見那一條）：
+///
+/// ```text
+/// ① 英:hello | 注:.␣ | 英:world     hello歐world  → hello. world
+/// ② 注:su3cl3,␣ | 英:hello          你好ㄝhello   → 你好, hello
+/// ③ 注:su3cl3.␣ | 英:come           你好歐come    → 你好. come
+///    英:trip | 注:.␣5.␣              trip歐洲      不罰（歐洲是詞）
+///    注:1o3.␣ | 英:style             北歐style     不罰（北歐是詞）
+/// ```
+///
+/// # 為什麼要有「被詞認領就不罰」這道門
+///
+/// ① 與 ③ 第一版不看詞，測資外「歐」開頭或結尾、旁邊接英文的詞幾乎
+/// 全被改成句點（trip歐洲→trip. 洲、北歐style→北。 style，26 個組合
+/// 壞 15 個），而整份測資一個「歐」字都沒有，漏斗看不到。那一面的
+/// 證據是 `BopoFacts::first_in_word`／`last_in_word`：`.␣` 是「歐洲」
+/// 「北歐」的一部分，就是字，不是句點。加門之後漏斗逐句不變，那 15 個
+/// 救回 10 個（剩下的是詞典沒收的組合：歐巴、歐陽、歐美劇）。
+fn soft_punct_swallowed(segs: &[Segment], facts: &[SegFacts]) -> usize {
+    // ① **英日（或標點）後面的注音段以 `.␣`／`;␣`／`/␣` 開頭**：
+    // `hello.␣` 的 `.␣` 被當成單獨一個ㄡ一聲（hello歐）。
+    //
+    // 左鄰是注音時不算——`好.␣` 是「好歐」還是「好。」，光看左邊分不出
+    // 來（那由 ③ 看右邊）。左鄰是分隔符也不算：`hello␣.␣` 的 `.` 前面是
+    // 空白，本來就不是軟標點，那是「hello 歐」。
+    let after_foreign = (1..segs.len())
+        .filter(|&i| {
+            let (p, s) = (&segs[i - 1], &segs[i]);
+            s.lang == Language::Bopomofo
+                && !facts[i].bopo.first_in_word
+                && p.lang != Language::Bopomofo
+                && p.keys != super::SEPARATOR
+                && [". ", "; ", "/ "].iter().any(|h| s.keys.starts_with(h))
+        })
+        .count();
+    // ② **注音段裡夾著自成一個音節的 `,␣`**（ㄝ一聲）。那個音節唯一的
+    // 候選是注音符號「ㄝ」本身——`dict::has_chars` 查得到，所以
+    // `fewer_unreadable` 抓不到它，畫面上就是「你好ㄝ」。`punct` 把 `,␣`
+    // 列為空音節、判成標點（`EMPTY_SYLLABLES`），但那只讓 `英:,` 那條
+    // 切法生得出來，`注:su3cl3,␣` 照樣在，而且段數少、會贏。
+    //
+    // 自成音節才算：`u,␣`＝ㄧㄝ（耶）的 `,` 是韻母，不罰。不必像 ① ③
+    // 那樣問「被詞認領」：詞表（`BPMFMappings.txt`）裡沒有任何一個詞
+    // 含ㄝ一聲這個音節。
+    let lone_comma = segs
+        .iter()
+        .filter(|s| s.lang == Language::Bopomofo && !s.is_mark)
+        .filter(|s| {
+            let b = s.keys.as_bytes();
+            (0..b.len().saturating_sub(1))
+                .any(|p| b[p] == b',' && b[p + 1] == b' ' && starts_syllable(b, p))
+        })
+        .count();
+    // ③ **注音段結尾是自成一個音節的 `.␣`／`;␣`／`/␣`（ㄡ／ㄤ／ㄥ一聲），
+    // 後面接的又不是注音**——那是句點＋分隔符，不是「你好歐come」。
+    //
+    // 右邊接英文／日文時歧義就解開了：ㄡ一聲單獨收在句尾再直接接外文，
+    // 比「你好。 come」罕見得多。右邊還是注音，或整串到此為止（還在打，
+    // 沒有下一段），都不算。不罰的話長句凍結會把「你好歐」定死。
+    //
+    // 自成音節才算：`e.␣`＝ㄍㄡ（溝）的 `.` 是韻母，不罰。
+    let before_foreign = (0..segs.len().saturating_sub(1))
+        .filter(|&i| {
+            let (s, nx) = (&segs[i], &segs[i + 1]);
+            if s.lang != Language::Bopomofo
+                || s.is_mark
+                || nx.lang == Language::Bopomofo
+                || facts[i].bopo.last_in_word
+            {
+                return false;
+            }
+            let b = s.keys.as_bytes();
+            let n = b.len();
+            n >= 2
+                && b[n - 1] == b' '
+                && matches!(b[n - 2], b'.' | b';' | b'/')
+                && starts_syllable(b, n - 2)
+        })
+        .count();
+    after_foreign + lone_comma + before_foreign
+}
+
+/// `b[p]` 是一個注音音節的**開頭**嗎：在段首，或前一個鍵是聲調鍵
+/// （一聲是空白）。
+///
+/// 分辨 `,␣`／`.␣` 是自成一個一聲音節（ㄝ／ㄡ），還是前一個音節的韻母
+/// ——`u,␣` 是ㄧㄝ（耶）、`e.␣` 是ㄍㄡ（溝）。
+fn starts_syllable(b: &[u8], p: usize) -> bool {
+    use crate::bopomofo::keymap::{role_of, Role};
+    p == 0 || role_of(char::from(b[p - 1])) == Some(Role::Tone)
+}
+
+/// 一個詞被**另一種語言的短段**從中間剖開了嗎？
 ///
 /// `split_word` 罰的是「相鄰兩段合起來是英文詞」，擋不住換成三段的
 /// 形狀——中間插一小段別的語言，兩側各自都合法，於是零懲罰勝出：
@@ -682,6 +935,58 @@ fn split_sandwich(a: &Segment, b: &Segment, c: &Segment) -> bool {
     false
 }
 
+/// 日文詞被**短英文段＋注音段的開頭**剖開了嗎？（夾心的第三種形狀）
+///
+/// ```text
+/// 日:enn     | 英:ban | 注:n␣m4e.4xk7    円盤（ennbann）
+/// 日:tannkou | 英:hon | 注:n␣vu84…      単行本（tannkouhonn）
+/// ```
+///
+/// 撥音 `nn` 的後一個 `n` 被注音拿去跟空白湊成ㄙ，中間剩下的剛好是
+/// 英文詞。`split_sandwich` 要求兩側同語言，接不到這個形狀。
+///
+/// `split_sandwich` 也說「注音不參與，按鍵集合語意不同」——但這裡被
+/// 拿走的 `n` 本來就是羅馬字「ん」的一部分，按鍵是共用的。所以只准拿
+/// 注音段**開頭的 1～2 個字母**回來接，不是整段黏起來查。
+///
+/// # 它擋住了 `in_dict` 改問「有把握」的副作用
+///
+/// `単行本` 的首選不夠常用，`in_dict` 改問 `is_confident_japanese` 之後，
+/// 整段的 `tannkouhonn` 不再算查得到詞典，被剖開的那一種就贏了。這裡
+/// 問的是 `is_japanese_word`（查得到就算），把那種切法罰回去——**兩條
+/// 要一起上**，拿掉這一條「単行本 下個月」就切不出來。
+///
+/// 沒走 `Memo`：量過不值得（多半在語言門檻就回了），理由見 `score_with` 裡那張表。
+fn split_sandwich_zh(a: &Segment, b: &Segment, c: &Segment) -> bool {
+    if a.is_mark || b.is_mark || c.is_mark {
+        return false;
+    }
+    if a.lang != Language::Romaji || b.lang != Language::English || c.lang != Language::Bopomofo {
+        return false;
+    }
+    if b.keys.chars().count() > 3 || !b.keys.chars().all(|x| x.is_ascii_alphabetic()) {
+        return false;
+    }
+    let cc: Vec<char> = c.keys.chars().collect();
+    for take in 1..=2.min(cc.len()) {
+        let head: String = cc[..take].iter().collect();
+        if !head.chars().all(|x| x.is_ascii_alphabetic()) {
+            break;
+        }
+        let joined = format!("{}{}{}", a.keys, b.keys, head);
+        if romaji::validity(&joined) == romaji::Validity::Valid
+            && crate::dict::is_japanese_word(&joined)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// 這相鄰兩段，是不是一個英文詞被切成兩半？
+///
+/// 條件：合起來是英文詞，而且**不是兩段都是英文**——兩段都是英文的
+/// 話那是兩個詞相接（`review|commit`），不是一個詞被切開。
 fn split_english_word(a: &Segment, b: &Segment) -> bool {
     if a.is_mark || b.is_mark {
         return false;
@@ -776,6 +1081,146 @@ fn stole_head(en: &Segment, bo: &Segment) -> bool {
         (Some(_), None) => true,
         _ => false,
     }
+}
+
+/// **日文段**偷走了後面注音音節的開頭，而且還回去之後剩下的正好是個
+/// 英文詞？（`stole_head` 的日文版，記在 `fewer_stolen`）
+///
+/// ```text
+/// 日:usere | 注:l3     還回 e → user ＋ el3（稿）
+/// ```
+///
+/// 注音鍵就是字母，中文字的第一鍵常常剛好是羅馬字的母音（`e`＝ㄍ、
+/// `u`＝ㄧ、`a`＝ㄇ），被前面英文詞的尾巴拉去拼成假名。拆開以後兩半
+/// 各自合法，別的欄位看不出錯；`covered` 還替假名多算一格，錯的反而贏。
+///
+/// # 常用的日文詞不算，除非左邊是冷僻的英文碎片
+///
+/// 沒有這道門時 `です安`（desu0␣）會變成 des煙、`雨愛` 變成 am概——
+/// 那些日文詞去掉最後一個母音剛好是英文詞，後面又剛好接零聲母的字。
+/// 所以**有把握的日文詞（`is_confident_japanese`）不罰**。
+///
+/// 但 `widget目` 被切成 `英:wid | 日:geta | 注:j4`，而 `geta`（下駄）
+/// 是有把握的日文詞，那道門就把它放過了。分辨的線索在左邊：`wid`
+/// 排第 42957 名，是某個英文詞的前半截。所以**左鄰是冷僻英文段時照樣
+/// 罰**；左鄰是常用英文詞時保護（`英:ok | 日:desu | 注:0␣`＝ok です安
+/// 是正常的混打）。只看「左鄰是英文」不看冷僻的話，`testです安` 會
+/// 變成 testdes煙。
+///
+/// 沒走 `Memo`：量過不值得（多半在語言門檻就回了），理由見 `score_with` 裡那張表。
+fn kana_stole_head(prev: Option<&Segment>, ja: &Segment, next: &Segment) -> bool {
+    if ja.lang != Language::Romaji || ja.is_mark || next.is_mark || next.lang == Language::Romaji {
+        return false;
+    }
+    // 熱路徑：用切片不配置字串，只有前兩道門都過了才組 `moved`
+    let Some(c) = ja.keys.chars().last() else {
+        return false;
+    };
+    let head = &ja.keys[..ja.keys.len() - c.len_utf8()];
+    if head.chars().count() < 2 || !crate::english::is_common_word(head) {
+        return false;
+    }
+    let moved = format!("{c}{}", next.keys);
+    if crate::bopomofo::validity(&moved) != crate::bopomofo::Validity::Valid {
+        return false;
+    }
+    // 有把握的日文詞不罰，除非左鄰是冷僻的英文碎片（理由見上）
+    let left_fragment = prev.is_some_and(|p| {
+        p.lang == Language::English && !p.is_mark && !crate::english::is_top_word(&p.keys)
+    });
+    left_fragment || !crate::dict::is_confident_japanese(&ja.keys)
+}
+
+/// 英文詞的最後一個字母，被後面的注音段拿去跟**分隔用的空白**湊成
+/// 一聲音節了嗎？（記在 `fewer_split_word`）
+///
+/// ```text
+/// 日:toke  | 注:n␣ul4…   token␣ 的 n␣ 被讀成ㄙ（私）
+/// 英:scrip | 注:t␣ul4…   script␣ 的 t␣ 被讀成ㄔ（吃）
+/// ```
+///
+/// 一聲就是空白鍵，所以「英文詞＋分隔空白」的最後一個字母跟空白剛好
+/// 湊得成一個單鍵的注音音節。`space.rs` 的 notebook 保護（`k␣` 是ㄜˉ）
+/// 只管空白切塊那一步，排序這一層原本沒有對應的規則。
+///
+/// 只認「**字母＋空白**」開頭的注音段：數字鍵（`5␣`＝ㄓ）不算，那是
+/// 數字後面的分隔符，另有規則管。
+///
+/// 前一段本身已經是常用英文詞時，要「補回那個字母之後**更常用**」才算
+/// ——跟 `stole_head` 的排名比較同一個道理：`we吃飯`（we＋t␣z04）補回
+/// `t` 是 `wet`，比 `we` 冷僻，那個 `t␣` 本來就是「吃」。
+///
+/// 沒走 `Memo`：量過不值得（多半在語言門檻就回了），理由見 `score_with` 裡那張表。
+fn tail_eaten_by_tone1(a: &Segment, b: &Segment) -> bool {
+    if a.is_mark || b.is_mark || a.lang == Language::Bopomofo || b.lang != Language::Bopomofo {
+        return false;
+    }
+    let mut it = b.keys.chars();
+    let (Some(x), Some(' ')) = (it.next(), it.next()) else {
+        return false;
+    };
+    if !x.is_ascii_alphabetic() {
+        return false;
+    }
+    let joined = format!("{}{x}", a.keys);
+    if joined.chars().count() < 3 || !crate::english::is_common_word(&joined) {
+        return false;
+    }
+    // 英文段本身也是詞的話，要「補回那個字母之後更常用」才算
+    if a.lang == Language::English && crate::english::is_common_word(&a.keys) {
+        return match (crate::english::rank(&joined), crate::english::rank(&a.keys)) {
+            (Some(j), Some(h)) => j < h,
+            (Some(_), None) => true,
+            _ => false,
+        };
+    }
+    true
+}
+
+/// **冷僻的英文段偷走了後面日文詞的開頭**嗎？（記在 `fewer_split_word`）
+///
+/// ```text
+/// 英:iss | 日:yoni       iss＋yo  是「一緒」（issyo）
+/// 英:kon | 日:nichiwa    kon＋n   是「今」（konn）
+/// ```
+///
+/// en_50k 收了大量冷僻的三字母詞（`iss` 第 40101 名、`kon` 第 40869 名），
+/// 它們在日文詞的開頭切一刀，兩邊各自都合法，原本沒有任何一欄罰它。
+///
+/// 條件，各擋一種誤判：
+///
+/// - **英文段不在前 5000 名**：`ii`（いい，第 3557 名）這種常用詞不動
+///   ——罰「夾在注音中間的短英文碎片」那次就是打壞了 `ii` 才撤掉的
+/// - **接起來至少 4 個字元、而且查得到詞**：2～3 字母的假名組合幾乎全在
+///   mozc 裡，短的接起來查得到不算證據
+/// - **日文段剩下的部分仍是合法羅馬字**：還回去之後後半段要站得住
+///
+/// 排序裡**不要直接叫這支**：走 `Memo::steals_ja_head`，語言與長度的
+/// 形狀條件在那裡先擋，答案也在那裡快取。
+fn steals_ja_head(en: &str, ja: &str) -> bool {
+    if ja.is_empty() || crate::english::is_top_word(en) {
+        return false;
+    }
+    // 日文段的前 1～3 個字元接到英文段後面：取字元邊界切片，不收 `Vec<char>`
+    let cuts = ja
+        .char_indices()
+        .map(|(i, _)| i)
+        .skip(1)
+        .chain(std::iter::once(ja.len()));
+    for cut in cuts.take(3) {
+        let (head, rest) = ja.split_at(cut);
+        let joined = format!("{en}{head}");
+        if romaji::validity(&joined) != romaji::Validity::Valid {
+            continue;
+        }
+        if !rest.is_empty() && romaji::validity(rest) != romaji::Validity::Valid {
+            continue;
+        }
+        if joined.chars().count() >= 4 && crate::dict::is_japanese_word(&joined) {
+            return true;
+        }
+    }
+    false
 }
 
 /// 這一段乾淨嗎？——不含分隔符也不含標點。
@@ -893,21 +1338,21 @@ fn claimed_chars(keys: &str, lang: Language, n: usize) -> usize {
 /// 只算**多音節詞**：單音節一律查得到（每個合法音節都有同音字），
 /// 算進去的話 `covered` 就等於段長，失去鑑別力。
 fn bopomofo_claimed_chars(keys: &str) -> usize {
-    bopomofo_facts(keys).0
+    bopomofo_facts(keys).claimed
 }
 
-/// 一段注音的三件事，**切一次音節全部算完**。
+/// 一段注音要問的幾件事，**切一次音節全部算完**（見 `BopoFacts`）。
 ///
-/// 回傳 `(被詞典認領的字元數, 前面有顯示不出來的, 最後一個顯示不出來)`。
-///
-/// 後兩者分開，是因為**整串的最後一個音節可能只是還在打**（聲調還沒
-/// 按），那不該罰；夾在中間的才是「這條切法會在畫面上留下一串沒轉換
-/// 的按鍵」。見 `Score::fewer_unreadable`。
-fn bopomofo_facts(keys: &str) -> (usize, bool, bool) {
+/// 每一件都要先切音節，而 `split_syllables` 每個候選長度都配置一個字串，
+/// 分開問的話同一段要切好幾次。
+fn bopomofo_facts(keys: &str) -> BopoFacts {
     const MAX_WORD: usize = 6;
     let Some(syllables) = crate::bopomofo::split_syllables(keys) else {
         // 切不出音節＝整段原樣顯示
-        return (0, true, false);
+        return BopoFacts {
+            unreadable: 1,
+            ..BopoFacts::default()
+        };
     };
     let last_bad = syllables.last().is_some_and(|s| !crate::dict::has_chars(s));
     let head_bad = syllables
@@ -928,6 +1373,8 @@ fn bopomofo_facts(keys: &str) -> (usize, bool, bool) {
     debug_assert_eq!(acc, keys.len(), "音節接起來該等於原字串");
     let n = syllables.len();
     let mut covered = 0usize;
+    let mut first_in_word = false;
+    let mut last_in_word = false;
     let mut i = 0;
     while i < n {
         let mut hit = 0usize;
@@ -939,9 +1386,20 @@ fn bopomofo_facts(keys: &str) -> (usize, bool, bool) {
                 break;
             }
         }
+        if hit > 0 && i == 0 {
+            first_in_word = true;
+        }
+        if hit > 0 && i + hit == n {
+            last_in_word = true;
+        }
         i += if hit > 0 { hit } else { 1 };
     }
-    (covered, head_bad, last_bad)
+    BopoFacts {
+        claimed: covered,
+        unreadable: u8::from(head_bad) + u8::from(last_bad),
+        first_in_word,
+        last_in_word,
+    }
 }
 
 /// 這段日文只有**一個假名**嗎？
@@ -979,6 +1437,15 @@ fn in_dict(keys: &str, lang: Language, n: usize) -> bool {
     }
     match lang {
         Language::Bopomofo => crate::dict::is_bopomofo_word(keys),
+        // 查得到就算——跟 `claimed` 的日文分支同一個問法。
+        //
+        // 曾經試過要求「首選要夠常用才算查得到」（`is_confident_japanese`），
+        // 理由是 mozc 收了大量冷僻詞條，2～3 字母的合法假名組合 984 個
+        // 全在裡面，碎片懲罰因此幾乎不生效。但代價太大：隨機 349 個日文
+        // 名詞壞 36、修 0（`膝裏`→`hiThe裏`、`部屋中`→`he野獣`、
+        // `医歯薬`→`is医薬`），助詞緊接數字全壞（`会議は10時`→
+        // `会議ha10時`、`友達が3人`→`tomodat位が3人` 之類）。已否決
+        // （2026-09-25）。
         Language::Romaji => crate::dict::is_japanese_word(keys),
         Language::English => n >= 2 && crate::english::is_common_word(keys.trim()),
     }
@@ -1288,6 +1755,98 @@ mod tests {
         assert!(!stole_head(&a, &b), "game 本來就是那個詞，不是偷來的");
     }
 
+    /// **「冷僻英文偷日文詞頭」的快取要跟著詞庫版本清**。
+    ///
+    /// 它原本自帶一份 `thread_local`，沒有人清：macOS 的詞庫是背景載入的，
+    /// 載完之前查到的「不是日文詞」會一直留著，切詞學習與擴充包改了答案
+    /// 也一樣。現在答案記在 `Memo`，跟段落判斷一起在 `dict::generation`
+    /// 變了時整份丟掉。
+    ///
+    /// 做法：在 `Memo` 裡塞一個「詞庫還沒載好時查到的」舊答案，確認排序
+    /// 真的拿它來用（不是另有一份快取），再跳一次詞庫版本，確認舊答案不見、
+    /// 換回真的答案。**繞過 `Memo` 直接算的話第一步就會紅**。
+    #[test]
+    fn 偷日文詞頭的快取跟著詞庫版本清() {
+        if !crate::compose::tests::load() || !crate::dict::all_loaded() {
+            return;
+        }
+        // 取自測資 ja_en「一緒に|lunch」（issyonilunch）的錯誤切法 `英:iss | 日:yoni`
+        let segs = [
+            Segment {
+                keys: "iss".into(),
+                is_mark: false,
+                lang: Language::English,
+            },
+            Segment {
+                keys: "yoni".into(),
+                is_mark: false,
+                lang: Language::Romaji,
+            },
+        ];
+        let mut memo = Memo::default();
+        // 先對齊這條執行緒記的詞庫版本，後面才分得出「版本變了」
+        refresh_memo(&mut memo);
+        memo.ja_head
+            .entry("iss".into())
+            .or_default()
+            .insert("yoni".into(), false);
+        memo.ja_head_len += 1;
+        assert_eq!(
+            score_with(&mut memo, &segs).fewer_split_word,
+            std::cmp::Reverse(0),
+            "排序沒拿 Memo 裡的答案——另有一份快取，或根本沒快取"
+        );
+
+        crate::dict::bump_generation();
+        refresh_memo(&mut memo);
+        assert_eq!(memo.len(), 0, "詞庫版本變了，整份 Memo 都要丟掉");
+        assert_eq!(
+            score_with(&mut memo, &segs).fewer_split_word,
+            std::cmp::Reverse(1),
+            "iss＋yo 是「一緒」，冷僻的 iss 偷了日文詞頭"
+        );
+    }
+
+    /// **碎片懲罰問的「只有一個假名嗎」要從 `Memo` 拿**，不要每個候選現算。
+    ///
+    /// `split_moras` 每次都配置一串字串，原本在 `kana_bits` 裡對每個候選
+    /// 的每個日文段現算，佔掉整個計分的兩成多。做法跟「偷日文詞頭」那條
+    /// 一樣：在 `Memo` 裡把答案改掉，確認計分真的拿它來用——直接呼叫
+    /// `single_mora` 的話改了也沒用，這條就紅。
+    #[test]
+    fn 單一假名的判斷走快取() {
+        if !crate::compose::tests::load() || !crate::dict::all_loaded() {
+            return;
+        }
+        // る——`ru.4`（就）的前兩鍵被切成日文段的那種碎片
+        let segs = [Segment {
+            keys: "ru".into(),
+            is_mark: false,
+            lang: Language::Romaji,
+        }];
+        let mut memo = Memo::default();
+        let f = memo.facts(&segs[0]);
+        assert!(
+            f.single_mora && f.in_dict,
+            "前提：る 在詞典裡、而且是單一假名"
+        );
+        assert_eq!(
+            score_with(&mut memo, &segs).fewer_kana_bits,
+            std::cmp::Reverse(1)
+        );
+        // 把快取裡的答案改掉：計分要跟著變
+        memo.segs
+            .get_mut(&Language::Romaji)
+            .and_then(|m| m.get_mut("ru"))
+            .expect("剛算過")
+            .single_mora = false;
+        assert_eq!(
+            score_with(&mut memo, &segs).fewer_kana_bits,
+            std::cmp::Reverse(0),
+            "計分沒拿 Memo 裡的答案——還在現算 single_mora"
+        );
+    }
+
     #[test]
     fn 碎片分數低() {
         if !load() {
@@ -1385,5 +1944,457 @@ mod tests {
         assert!(!clean_word("5. "), "後面是空白，不是小數點");
         assert!(!clean_word("hello."), "句點該自成一段");
         assert!(!clean_word(".64"), "開頭就是點，不是小數");
+    }
+}
+
+/// 英文詞後面直接接中文字、或英日字母串接在一起時，那幾條點名式懲罰。
+///
+/// 每一條都釘兩層：**計分**（那一欄真的記到了，拿掉呼叫就紅）與**排序
+/// 的結果**（測資裡那一句的第一名）。只釘排序的話，同一句常常有別條
+/// 規則順便救起來，拿掉這一條也不會紅。
+#[cfg(test)]
+mod seam_tests {
+    use super::*;
+    use crate::cutpoint::incremental::Incremental;
+    use std::cmp::Reverse;
+    use Language::{Bopomofo, English, Romaji};
+
+    /// 日文詞庫沒進版控，CI 上沒有——這幾條全靠它，沒有就跳過
+    fn load() -> bool {
+        crate::compose::tests::load() && crate::dict::all_loaded()
+    }
+
+    fn seg(keys: &str, lang: Language) -> Segment {
+        Segment {
+            keys: keys.into(),
+            is_mark: false,
+            lang,
+        }
+    }
+
+    /// 排序第一名（正規化之後），格式跟 `dbg_rank` 一樣
+    fn first(keys: &str) -> String {
+        let cands = sort(Incremental::from_keys(keys).cuttings());
+        crate::cutpoint::normalize(&cands[0])
+            .iter()
+            .map(|s| format!("{}:{}", s.lang.short(), s.keys.replace(' ', "␣")))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    /// **日文段偷了注音的頭，還回去剩英文詞**——記在 `fewer_stolen`。
+    #[test]
+    fn 日文段偷注音頭_還回去剩英文詞就罰() {
+        if !load() {
+            return;
+        }
+        // 取自測資 en_vowel「user|稿」（userel3）的錯誤切法：うせれ｜襖
+        assert!(
+            !crate::dict::is_confident_japanese("usere") && crate::english::is_common_word("user"),
+            "前提：失せれ 是冷僻詞條、user 是常用英文"
+        );
+        let wrong = [seg("usere", Romaji), seg("l3", Bopomofo)];
+        assert_eq!(score(&wrong).fewer_stolen, Reverse(1));
+        assert_eq!(first("userel3"), "英:user | 注:el3");
+    }
+
+    /// **有把握的日文詞不罰，除非左鄰是冷僻的英文碎片**。
+    #[test]
+    fn 日文段偷注音頭_有把握的日文詞看左鄰() {
+        if !load() {
+            return;
+        }
+        // です安（desu＋0␣）：去掉 u 剩 des（英文詞）、u0␣ 是「煙」，形狀全中
+        let desu = seg("desu", Romaji);
+        let an = seg("0 ", Bopomofo);
+        assert!(
+            crate::dict::is_confident_japanese("desu") && crate::english::is_common_word("des"),
+            "前提：です 有把握、des 是英文詞"
+        );
+        assert!(
+            !kana_stole_head(None, &desu, &an),
+            "です安 不可以變成 des煙"
+        );
+        for left in ["ok", "test"] {
+            assert!(
+                !kana_stole_head(Some(&seg(left, English)), &desu, &an),
+                "左鄰 {left} 是常用英文詞，{left}です安 是正常的混打"
+            );
+        }
+        // 取自測資 en_vowel「widget|目」（widgetaj4）的錯誤切法：
+        // `geta`（下駄）有把握，擋它的只剩左邊那個冷僻的 `wid`
+        let geta = seg("geta", Romaji);
+        let mu = seg("j4", Bopomofo);
+        assert!(
+            crate::dict::is_confident_japanese("geta") && !crate::english::is_top_word("wid"),
+            "前提：下駄 有把握、wid 冷僻"
+        );
+        assert!(!kana_stole_head(None, &geta, &mu), "單獨的 geta 是日文詞");
+        assert!(
+            kana_stole_head(Some(&seg("wid", English)), &geta, &mu),
+            "左鄰是冷僻碎片 wid，geta 的 a 是偷來的"
+        );
+        assert_eq!(first("widgetaj4"), "英:widget | 注:aj4");
+    }
+
+    /// **英文詞尾被分隔空白湊成一聲**——記在 `fewer_split_word`。
+    #[test]
+    fn 英文詞尾被一聲空白吃掉就罰() {
+        if !load() {
+            return;
+        }
+        // 取自測資 holdout「token|_|要更新」（token ul4e/ vup ）的錯誤切法：n␣ 是ㄙ
+        let wrong = [seg("toke", Romaji), seg("n ul4e/ vup ", Bopomofo)];
+        assert_eq!(score(&wrong).fewer_split_word, Reverse(1));
+        assert_eq!(first("token ul4e/ vup "), "英:token | 英:␣ | 注:ul4e/␣vup␣");
+        // 取自測資 holdout「那個|_|script|_|要改」：t␣ 是ㄔ
+        assert!(tail_eaten_by_tone1(
+            &seg("scrip", English),
+            &seg("t ul4e93", Bopomofo)
+        ));
+        assert_eq!(
+            first("s84ek7 script ul4e93"),
+            "注:s84ek7 | 英:␣ | 英:script | 英:␣ | 注:ul4e93"
+        );
+        // 反例：we吃飯（we＋t␣z04）。補回 t 是 wet，比 we 冷僻——t␣ 本來就是「吃」
+        assert!(!tail_eaten_by_tone1(
+            &seg("we", English),
+            &seg("t z04", Bopomofo)
+        ));
+    }
+
+    /// **「動詞＋er」還原**（`english::agent_noun`）接到排序上：詞典沒收的
+    /// logger、sorter 整段活得下來，不再被切成英文碎片加假名。
+    #[test]
+    fn 動詞加er的詞整段排第一() {
+        if !load() {
+            return;
+        }
+        // 取自測資 en_vowel「logger|要」「sorter|要」「mapper|改」
+        assert_eq!(first("loggerul4"), "英:logger | 注:ul4");
+        assert_eq!(first("sorterul4"), "英:sorter | 注:ul4");
+        assert_eq!(first("mappere93"), "英:mapper | 注:e93");
+    }
+
+    /// **冷僻英文段切開日文詞**——記在 `fewer_split_word`。快取那一層由
+    /// `tests::偷日文詞頭的快取跟著詞庫版本清` 釘著，這裡釘判斷本身與排序。
+    #[test]
+    fn 冷僻英文段偷日文詞頭就罰() {
+        if !load() {
+            return;
+        }
+        // 取自測資 ja_en「一緒に|lunch」（issyonilunch）的錯誤切法
+        assert!(steals_ja_head("iss", "yoni"), "iss＋yo 是「一緒」");
+        let wrong = [
+            seg("iss", English),
+            seg("yoni", Romaji),
+            seg("lunch", English),
+        ];
+        assert_eq!(score(&wrong).fewer_split_word, Reverse(1));
+        assert_eq!(first("issyonilunch"), "日:issyoni | 英:lunch");
+        // 「今日は」打成 konnichiwa 時的 `英:kon | 日:nichiwa`
+        assert!(steals_ja_head("kon", "nichiwa"), "kon＋n 是「今」");
+        // 常用英文詞不動（`ii`＝いい 就是這樣被保住的）
+        assert!(crate::english::is_top_word("go"), "前提：go 在前 5000 名");
+        assert!(!steals_ja_head("go", "hann"), "go 是常用英文詞");
+    }
+
+    /// **`in_dict` 的日文分支問 `is_japanese_word`（查得到就算），不是
+    /// 「首選要夠常用才算查得到」（`is_confident_japanese`，D-H4b，
+    /// 已否決見 `in_dict` 上的註解）。
+    ///
+    /// 冷僻的日文名詞（`hizaura`＝膝裏、`heyajuu`＝部屋中）打過的坑：
+    /// 改問「有把握」之後這種詞的首選被拆成英文碎片
+    /// （`膝裏`→`hiThe裏`、`部屋中`→`he野獣`）。這裡釘住：只要問
+    /// `is_japanese_word`，整段就站得住，不會被切開。
+    #[test]
+    fn 冷僻日文名詞單獨打要整段日文() {
+        if !load() {
+            return;
+        }
+        // モデ、失せれ：詞典收了，但都是冷僻詞條——`in_dict` 照樣要算查得到
+        for w in ["mode", "usere"] {
+            assert!(
+                crate::dict::is_japanese_word(w) && !crate::dict::is_confident_japanese(w),
+                "前提：{w} 詞典收了、但冷僻"
+            );
+            assert!(
+                in_dict(w, Romaji, w.len()),
+                "{w} 查得到（問 is_japanese_word）"
+            );
+        }
+        assert!(in_dict("sushi", Romaji, 5), "寿司 也查得到");
+        // 取自實測：`hizaura`（膝裏）、`heyajuu`（部屋中）整段不能被剖開
+        assert_eq!(first("hizaura"), "日:hizaura");
+        assert_eq!(first("heyajuu"), "日:heyajuu");
+    }
+
+    /// **助詞緊接數字，首選不能把助詞吃進英文段**（D-H4b 的另一個代價：
+    /// `会議は10時` 改問「有把握」之後變成 `会議ha10時`）。
+    #[test]
+    fn 助詞緊接數字首選正確() {
+        if !load() {
+            return;
+        }
+        // 今日は3時（きょうは3じ）——今日｜は 相鄰同語言，normalize 後黏成一段
+        assert_eq!(first("kyouha3zi"), "日:kyouha | 英:3 | 日:zi");
+        // 友達が3人（ともだちが3にん）
+        assert_eq!(first("tomodatiga3hito"), "日:tomodatiga | 英:3 | 日:hito");
+    }
+
+    /// **日文詞被短英文段＋注音頭剖開**——記在 `fewer_split_sandwich`。
+    #[test]
+    fn 日文詞被短英文段和注音頭剖開就罰() {
+        if !load() {
+            return;
+        }
+        // 取自測資 otaku「円盤|_|預購了」（ennbann m4e.4xk7）的錯誤切法：円ban私慾
+        let wrong = [
+            seg("enn", Romaji),
+            seg("ban", English),
+            seg("n m4e.4xk7", Bopomofo),
+        ];
+        assert_eq!(score(&wrong).fewer_split_sandwich, Reverse(1));
+        assert_eq!(first("ennbann m4e.4xk7"), "日:ennbann | 英:␣ | 注:m4e.4xk7");
+        // 取自測資 otaku「単行本|_|下個月」：単行本 不夠有把握，`in_dict` 不替它
+        // 加分，擋住被剖開那一種的就只剩這一條
+        assert!(
+            crate::dict::is_japanese_word("tannkouhonn")
+                && !crate::dict::is_confident_japanese("tannkouhonn"),
+            "前提：単行本 詞典收了、但不算有把握"
+        );
+        assert_eq!(
+            first("tannkouhonn vu84ek4m,4"),
+            "日:tannkouhonn | 英:␣ | 注:vu84ek4m,4"
+        );
+    }
+}
+
+/// 注音段把標點或分隔符當成一聲音節的幾條罰則（`soft_punct_swallowed`），
+/// 以及最後一個音節不豁免的 `fewer_unreadable`。
+///
+/// 每一條都分兩層：**計分層**直接問 `score` 的那一欄（規則本身，罰或不罰
+/// 的邊界），**排序層**走 `Incremental::from_keys → sort` 看第一名（產品
+/// 真正的路，確認那一欄真的決定了結果）。按鍵串都是 `mkkeys --sent` 產的。
+#[cfg(test)]
+mod punct_digit_tests {
+    use super::*;
+    use crate::cutpoint::incremental::Incremental;
+
+    /// **三本詞庫都在才測**。計分層要查注音詞典（`歐洲`、`北歐` 被詞認領），
+    /// 排序層的第一名跟日文詞典載了沒有有關——只載一半的話，結果會跟著
+    /// 別的測試載入的時機飄（CLAUDE.md「測試隨機掛」那一條）。
+    fn load() -> bool {
+        crate::compose::tests::load() && crate::dict::all_loaded()
+    }
+
+    fn seg(lang: Language, keys: &str) -> Segment {
+        Segment {
+            keys: keys.into(),
+            is_mark: false,
+            lang,
+        }
+    }
+
+    fn zh(keys: &str) -> Segment {
+        seg(Language::Bopomofo, keys)
+    }
+
+    fn en(keys: &str) -> Segment {
+        seg(Language::English, keys)
+    }
+
+    /// 標點或分隔符——`to_segments` 標成 `is_mark` 的英文段
+    fn mark(keys: &str) -> Segment {
+        Segment {
+            keys: keys.into(),
+            is_mark: true,
+            lang: Language::English,
+        }
+    }
+
+    fn swallowed(segs: &[Segment]) -> usize {
+        score(segs).fewer_swallowed.0
+    }
+
+    /// 排序第一名，`normalize` 過（同語言的切點不影響輸出）
+    fn first(keys: &str) -> String {
+        let cands = sort(Incremental::from_keys(keys).cuttings());
+        crate::cutpoint::normalize(&cands[0])
+            .iter()
+            .map(|s| format!("{}:{}", s.lang.short(), s.keys.replace(' ', "␣")))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    /// **英文後面的 `.␣` 是句點，不是ㄡ一聲**（`soft_punct_swallowed` ①）。
+    ///
+    /// `hello.␣` 的 `.␣` 剛好是合法的ㄡ一聲（歐），不罰的話「hello歐」段數
+    /// 少、會贏。打到 `hello.␣` 還沒接下一個字時就要是句點——那時沒有右鄰，
+    /// ③ 管不到，只有這一條。
+    #[test]
+    fn 軟標點_英文後面的句點不當成歐() {
+        if !load() {
+            return;
+        }
+        // 規則本身：`.␣`／`;␣`／`/␣`（ㄡ／ㄤ／ㄥ一聲）接在英文後面
+        assert_eq!(swallowed(&[en("hello"), zh(". ")]), 1, "hello歐");
+        assert_eq!(swallowed(&[en("ok"), zh("; ")]), 1, "ok骯");
+        assert_eq!(swallowed(&[en("and"), zh("/ ")]), 1, "andㄥ");
+        // 左鄰是注音：`好.␣` 光看左邊分不出「好歐」還是「好。」，這一條不管
+        assert_eq!(swallowed(&[zh("su3cl3"), zh(". ")]), 0, "你好歐（還在打）");
+        // 左鄰是分隔符：`hello␣.␣` 的 `.` 前面是空白，本來就是「hello 歐」
+        assert_eq!(swallowed(&[en("hello"), mark(" "), zh(". ")]), 0);
+
+        assert_eq!(first("hello. "), "英:hello | 英:. | 英:␣");
+        assert_eq!(first("ok; "), "英:ok | 英:; | 英:␣");
+    }
+
+    /// **注音段結尾自成音節的 `.␣`，後面接外文就是句點**（③）。
+    ///
+    /// `你好.␣come`：左鄰是注音，① 不管；但右邊接的是英文，歧義就解開了
+    /// ——ㄡ一聲單獨收尾再直接接外文，比「你好。 come」罕見得多。不罰的話
+    /// 長句凍結會把「你好歐come」定死（long 節那一句切不出來）。
+    #[test]
+    fn 軟標點_句尾的歐接外文判成句點() {
+        if !load() {
+            return;
+        }
+        assert_eq!(swallowed(&[zh("su3cl3. "), en("come")]), 1, "你好歐come");
+        // 還在打（沒有下一段）、右邊還是注音：都不罰，維持原排序
+        assert_eq!(swallowed(&[zh("su3cl3. ")]), 0, "你好歐（還在打）");
+        assert_eq!(swallowed(&[zh("su3cl3. "), zh("su3")]), 0, "你好歐你");
+        // `e.␣` 是ㄍㄡ（溝）：`.` 是前一個音節的韻母，不是自成音節的ㄡ
+        assert_eq!(swallowed(&[zh("su3e. "), en("come")]), 0, "你溝come");
+
+        assert_eq!(first("su3cl3. come"), "注:su3cl3 | 英:. | 英:␣ | 英:come");
+    }
+
+    /// **注音段裡自成音節的 `,␣` 是逗號，不是ㄝ一聲**（②）。
+    ///
+    /// ㄝ一聲唯一的候選是注音符號「ㄝ」本身——`has_chars` 查得到，所以
+    /// `fewer_unreadable` 抓不到它；不罰的話 `注:su3cl3,␣` 段數少、會贏，
+    /// 畫面上就是「你好ㄝhello」（2026-09-23 之前的 master 正是如此）。
+    #[test]
+    fn 軟標點_自成音節的逗號不當成ㄝ() {
+        if !load() {
+            return;
+        }
+        assert!(
+            crate::dict::has_chars(", "),
+            "前提：ㄝ一聲查得到（候選是「ㄝ」本身），不能靠 fewer_unreadable"
+        );
+        assert_eq!(swallowed(&[zh("su3cl3, ")]), 1, "你好ㄝ");
+        assert_eq!(swallowed(&[zh("su3, cl3")]), 1, "你ㄝ好");
+        // `u,␣` 是ㄧㄝ（耶）：`,` 是韻母，不是自成音節
+        assert_eq!(swallowed(&[zh("u, ")]), 0, "耶");
+
+        assert_eq!(first("su3cl3, hello"), "注:su3cl3 | 英:, | 英:␣ | 英:hello");
+        assert_eq!(first("su3cl3, "), "注:su3cl3 | 英:, | 英:␣");
+        assert_eq!(first("u, "), "注:u,␣", "耶");
+    }
+
+    /// **`.␣` 被多音節詞認領時不罰**——歐洲、北歐 旁邊接英文不會變句點。
+    ///
+    /// ① 與 ③ 第一版不看詞，測資外「歐」開頭或結尾、旁邊接英文的詞幾乎全被
+    /// 改成句點（trip歐洲→trip. 洲、北歐style→北。 style），而整份測資一個
+    /// 「歐」字都沒有。這條跟上面兩條是同一道門的兩面：拿掉門的話這條紅，
+    /// 門開太大的話上面兩條紅。
+    #[test]
+    fn 軟標點_被詞認領的歐不改成句點() {
+        if !load() {
+            return;
+        }
+        assert!(bopomofo_facts(". 5. ").first_in_word, "前提：歐洲 是詞");
+        assert!(bopomofo_facts("1o3. ").last_in_word, "前提：北歐 是詞");
+        assert_eq!(swallowed(&[en("trip"), zh(". 5. ")]), 0, "trip歐洲");
+        assert_eq!(swallowed(&[zh("1o3. "), en("style")]), 0, "北歐style");
+
+        assert_eq!(first("trip. 5. "), "英:trip | 注:.␣5.␣");
+        assert_eq!(first("ji3fm4. 5. trip"), "注:ji3fm4.␣5.␣ | 英:trip");
+        assert_eq!(first("1o3. style"), "注:1o3.␣ | 英:style");
+        assert_eq!(first("s06. style"), "注:s06.␣ | 英:style", "南歐style");
+        assert_eq!(
+            first("ji3vu3cj0 1o3. design"),
+            "注:ji3vu3cj0␣1o3.␣ | 英:design",
+            "我喜歡北歐design"
+        );
+        // 另一面：沒被詞認領的照樣是句點
+        assert_eq!(first("hello. world"), "英:hello | 英:. | 英:␣ | 英:world");
+    }
+
+    /// **F-H1c 不採用：數字鍵＋一聲空白接外文不當成吞字**
+    /// （使用者裁決 2026-09-25）。
+    ///
+    /// 曾經試過把「注音段最後一個音節全是數字鍵＋一聲、沒被詞認領、
+    /// 後面接外文詞」記一次 `fewer_swallowed`，理由是主鍵盤數字鍵同時是
+    /// 注音鍵（`5`＝ㄓ、`0`＝ㄢ、`28`＝ㄉㄚ），原樣輸出的數字只算
+    /// `passthrough`、湊成中文字反而完全免費，於是「5 items」「100
+    /// percent」全被打成中文。加了這條罰則確實修好那 4 句（number 節），
+    /// 但數字鍵本身**同時也是中文字**——「搭uber」（`28␣uber`）、
+    /// 「班line」「單excel」「之app」全被拆成數字＋英文，比原本更糟。
+    /// 規則分不出使用者要的是數字還是字，兩敗俱傷，已否決。現在的正確
+    /// 行為是**兩者都原樣照打**：`28␣uber` 排序時中文字「搭」＋英文詞
+    /// 要贏過數字＋英文（跟 master 一致）。
+    #[test]
+    fn 數字鍵是中文字時不當成數字() {
+        if !load() {
+            return;
+        }
+        // 前提：這些音節本來就合法查得到字，不靠這裡的規則就有候選
+        assert!(crate::dict::has_chars("28 "), "前提：28␣＝搭");
+        assert!(crate::dict::has_chars("20 "), "前提：20␣＝單");
+        assert!(crate::dict::has_chars("5 "), "前提：5␣＝之");
+
+        // 排序層：搭uber、單excel、之app 首選要是中文字＋英文，
+        // 不能被判成「數字＋分隔符＋英文」
+        assert_eq!(first("28 uber"), "注:28␣ | 英:uber", "搭uber");
+        assert_eq!(first("20 excel"), "注:20␣ | 英:excel", "單excel");
+        assert_eq!(first("5 app"), "注:5␣ | 英:app", "之app");
+
+        // 計分層：數字鍵＋一聲接外文詞不再額外記一次 fewer_swallowed
+        assert_eq!(swallowed(&[zh("28 "), en("uber")]), 0, "搭uber 不罰");
+        assert_eq!(swallowed(&[zh("5 "), en("items")]), 0, "5 items 不罰");
+
+        // number 節那 4 句（5 items、100 percent 等）付出的代價：
+        // 數字原樣輸出不再贏過中文字，這是使用者裁決接受的取捨
+        assert_eq!(
+            first("5 items"),
+            "注:5␣ | 英:items",
+            "代價：這句原本靠 F-H1c 判成數字，現在變回中文字"
+        );
+    }
+
+    /// **F-H3：最後一個音節顯示不出來也要罰，不再豁免整句最後一段**。
+    ///
+    /// `au/6`（合う/ㄥˊ）裡 `/6` 是合法音節但沒有字念這個音。舊規則只罰
+    /// 「最後一段以外」的顯示不出來，這裡改成一律罰。
+    /// 還原方式：把 `bopomofo_facts` 的 `last_bad` 判斷拿掉（`unreadable`
+    /// 只算 `head_bad`），這條測試會紅。
+    #[test]
+    fn 最後一個音節顯示不出來也要罰() {
+        if !load() {
+            return;
+        }
+        assert!(!crate::dict::has_chars("/6"), "前提：ㄥˊ 沒有字念這個音");
+        let f = bopomofo_facts("/6");
+        assert_eq!(f.unreadable, 1, "整段只有一個音節、又是最後一個，也要罰");
+        // 對照組：前面音節顯示不出來、最後一個沒問題——一樣罰 1（跟以前一致）
+        let f2 = bopomofo_facts("/6su3");
+        assert_eq!(f2.unreadable, 1, "頭音節顯示不出來，跟豁免拿掉前的行為一致");
+
+        // score_with 層級：舊規則是「整串最後一段」豁免（按段落位置，不是
+        // 按音節），還原方式是把這個位置的豁免加回來，下面的斷言會紅
+        let unreadable = |segs: &[Segment]| score(segs).fewer_unreadable.0;
+        assert_eq!(
+            unreadable(&[zh("su3"), zh("/6")]),
+            1,
+            "/6 是整句最後一段，舊規則會豁免成 0"
+        );
+        assert_eq!(
+            unreadable(&[zh("/6"), zh("su3")]),
+            1,
+            "/6 不是最後一段，新舊規則都罰"
+        );
     }
 }

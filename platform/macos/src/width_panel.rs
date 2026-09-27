@@ -33,8 +33,8 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSBackingStoreType, NSBezierPath, NSColor, NSPanel, NSPopUpMenuWindowLevel, NSScreen,
-    NSStringDrawing, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSBackingStoreType, NSBezierPath, NSColor, NSPanel, NSPopUpMenuWindowLevel, NSStringDrawing,
+    NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSTimer};
 
@@ -275,8 +275,9 @@ fn make_panel(mtm: MainThreadMarker, theme: Theme) -> Panel {
         NSBackingStoreType::Buffered,
         false,
     );
-    panel.setLevel(NSPopUpMenuWindowLevel);
+    // 順序不能反：`setFloatingPanel` 會把層級改回 3，理由見候選面板那邊
     panel.setFloatingPanel(true);
+    panel.setLevel(NSPopUpMenuWindowLevel);
     panel.setBecomesKeyOnlyIfNeeded(true);
     panel.setHidesOnDeactivate(false);
     panel.setCollectionBehavior(
@@ -340,44 +341,41 @@ fn show_bar(labels: Vec<&'static str>, from: usize, to: usize, sender: &AnyObjec
 
     PANEL.with(|cell| {
         let mut slot = cell.borrow_mut();
-        let p = slot.get_or_insert_with(|| make_panel(mtm, crate::settings::theme()));
-        *p.view.ivars().theme.borrow_mut() = crate::settings::theme();
-        *p.view.ivars().labels.borrow_mut() = labels;
-        p.view.start(from, to);
+        // 被系統降級就丟掉重建，跟候選面板同一個病、同一個修法
+        // （`candidate_panel::stranded`）。這條提示更容易中：它**幾乎永遠
+        // 是收著的**，只在切全半形的那一秒出現。
+        for attempt in 0..2 {
+            let p = slot.get_or_insert_with(|| make_panel(mtm, crate::settings::theme()));
+            let was_hidden = !p.panel.isVisible();
+            *p.view.ivars().theme.borrow_mut() = crate::settings::theme();
+            *p.view.ivars().labels.borrow_mut() = labels.clone();
+            p.view.start(from, to);
 
-        let size = p.view.size();
-        // ★ 放在游標那一行的**上方** ★
-        //
-        // 候選面板在下方（`candidate_panel::show`），兩個一上一下就不會
-        // 疊在一起。螢幕座標是左下角原點，所以「上方」是加。
-        let mut x = caret.origin.x;
-        let mut y = caret.origin.y + caret.size.height + GAP;
-        if let Some(screen) = NSScreen::screens(mtm)
-            .iter()
-            .find(|s| {
-                let f = s.frame();
-                caret.origin.x >= f.origin.x
-                    && caret.origin.x <= f.origin.x + f.size.width
-                    && caret.origin.y >= f.origin.y
-                    && caret.origin.y <= f.origin.y + f.size.height
-            })
-            .or_else(|| NSScreen::mainScreen(mtm))
-        {
-            let f = screen.visibleFrame();
-            // 頂到螢幕上緣就翻到行的下方
-            if y + size.height > f.origin.y + f.size.height {
-                y = caret.origin.y - size.height - GAP;
+            let size = p.view.size();
+            // ★ 放在游標那一行的**上方** ★
+            //
+            // 候選面板在下方（`candidate_panel::show`），兩個一上一下就不會
+            // 疊在一起。上下翻面、夾回螢幕內的規則跟候選面板**共用同一支
+            // `place`**——這兩處原本各寫一份，兩份都漏了同一個邊界。
+            let pos = match crate::candidate_panel::screen_at(mtm, caret.origin) {
+                Some(f) => crate::candidate_panel::place(caret, size.width, size.height, f, true),
+                // 連一台螢幕都問不到（幾乎不可能）：至少擺在游標上方
+                None => NSPoint::new(caret.origin.x, caret.origin.y + caret.size.height + GAP),
+            };
+            p.panel.setFrame_display(NSRect::new(pos, size), true);
+            p.panel.orderFront(None);
+
+            if attempt == 0
+                && crate::candidate_panel::stranded(&p.panel, was_hidden, sender, "全半形提示")
+            {
+                // 計時器 retain 著 view，不停掉的話舊的 view 會活下來繼續每秒醒 60 次
+                p.view.stop();
+                p.panel.orderOut(None);
+                *slot = None;
+                continue;
             }
-            if x + size.width > f.origin.x + f.size.width {
-                x = f.origin.x + f.size.width - size.width;
-            }
-            if x < f.origin.x {
-                x = f.origin.x;
-            }
+            break;
         }
-        p.panel
-            .setFrame_display(NSRect::new(NSPoint::new(x, y), size), true);
-        p.panel.orderFront(None);
     });
 }
 

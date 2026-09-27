@@ -13,7 +13,7 @@
 //!
 //! | 語言 | 資料源 | 產法 |
 //! |---|---|---|
-//! | 中文 | `BPMFMappings.txt`（詞）＋ `BPMFBase.txt`（單字） | 查注音 → 音節換按鍵；一詞多讀音全試 |
+//! | 中文 | `BPMFMappings.txt`（詞）＋ `BPMFBase.txt`（單字）＋ `char_freq_by_reading.txt`（多音字佔比） | 查注音 → 音節換按鍵；一詞多讀音全試；整段查不到就最長比對切詞、再逐字 |
 //! | 日文 | mozc `dictionary0*.txt` | 表記反查平假名 → 假名換羅馬字 |
 //! | 英文 | 無 | passthrough，打什麼是什麼，不需要工具 |
 //!
@@ -102,16 +102,79 @@ fn build_syllable_map(dir: &std::path::Path) -> HashMap<String, String> {
     out
 }
 
-/// 單字 → 按鍵。同樣從 `BPMFBase.txt` 建，取第 1、4 欄。
+/// 讀音佔比表：字 → 注音 → 千分比。從 `char_freq_by_reading.txt` 建
+/// （`gen_reading_freq` 產生，格式 `字 注音 千分比`）。
+///
+/// `dict.rs` 有一份同樣的讀法，但那是選字排序內部用的、key 串成一條
+/// 字串；這裡要的是「一個字底下所有讀音」，形狀不同，各讀各的。
+fn build_share_map(dir: &std::path::Path) -> HashMap<String, HashMap<String, u32>> {
+    let mut out: HashMap<String, HashMap<String, u32>> = HashMap::new();
+    let path = dir.join("bopomofo").join("char_freq_by_reading.txt");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        eprintln!("找不到 char_freq_by_reading.txt，多音字退回取第一個讀音");
+        return out;
+    };
+    for line in content.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        let mut it = line.split_whitespace();
+        let (Some(c), Some(r), Some(n)) = (it.next(), it.next(), it.next()) else {
+            continue;
+        };
+        let Ok(n) = n.parse::<u32>() else {
+            continue;
+        };
+        out.entry(c.to_string())
+            .or_default()
+            .insert(r.to_string(), n);
+    }
+    out
+}
+
+/// 這個字念這個音的佔比（千分比）。
+///
+/// - 字**沒列在表裡**（詞條沒覆蓋到，多半是罕用字）→ `None`，不知道
+/// - 字有列、這個讀音沒列 → `0`：表裡列出的讀音加起來就是整個字的
+///   詞頻，沒列的等於沒有詞條用這個音
+fn share_of(shares: &HashMap<String, HashMap<String, u32>>, ch: &str, syl: &str) -> Option<u32> {
+    shares.get(ch).map(|rs| rs.get(syl).copied().unwrap_or(0))
+}
+
+/// 逐字拼時選中的單字讀音。
+struct CharPick {
+    keys: String,
+    syl: String,
+    /// 選中讀音的佔比；`None` = 這個字不在佔比表裡
+    share: Option<u32>,
+    /// 這個字在 `BPMFBase` 裡有幾種讀音
+    n_readings: usize,
+}
+
+/// 單字 → 選中的讀音。從 `BPMFBase.txt` 建，取第 1、2、4 欄。
 ///
 /// **詞表只收「詞」**——`個`／`年`／`點` 這些常用單字在 `BPMFMappings`
 /// 裡查不到（`銀行` 有、單獨的 `行` 沒有），逐字拼的時候一定要有這份
-/// 退路。多音字取檔案裡的第一個讀音。
-fn build_char_map(dir: &std::path::Path) -> HashMap<String, String> {
+/// 退路。
+///
+/// # 多音字挑佔比最高的讀音
+///
+/// `BPMFBase` 的行序不代表常用度。`吃` 的 ㄐㄧˊ（口吃，佔 2‰）排在
+/// ㄔ（997‰）前面，舊版取第一個，產出 `ru6`——引擎打成「及」，而且
+/// 沒有任何警告，錯的按鍵就這樣進測資。跟日文 `build_ja_map` 按 mozc
+/// cost 排是同一個病、同一種修法。
+///
+/// 字不在佔比表裡（罕用字）才維持舊行為：取檔案裡第一個。
+fn build_char_map(
+    dir: &std::path::Path,
+    shares: &HashMap<String, HashMap<String, u32>>,
+) -> HashMap<String, CharPick> {
     let mut out = HashMap::new();
     let Ok(content) = std::fs::read_to_string(dir.join("bopomofo").join("BPMFBase.txt")) else {
         return out;
     };
+    // 先按檔案順序收齊每個字的所有讀音（同讀音多行只留一筆）
+    let mut all: HashMap<String, Vec<(String, String)>> = HashMap::new();
     for line in content.lines() {
         let f: Vec<&str> = line.split_whitespace().collect();
         if f.len() == 5 {
@@ -121,8 +184,32 @@ fn build_char_map(dir: &std::path::Path) -> HashMap<String, String> {
                 // 一聲要補結尾空白，跟 `syllable_keys` 同一條規則
                 format!("{} ", f[3])
             };
-            out.entry(f[0].to_string()).or_insert(key);
+            let e = all.entry(f[0].to_string()).or_default();
+            if !e.iter().any(|(s, _)| s == f[1]) {
+                e.push((f[1].to_string(), key));
+            }
         }
+    }
+    for (ch, rs) in all {
+        // 嚴格大於才換：同分（含整個字不在表裡、全是 None）保留檔案順序的第一個
+        let mut best = 0;
+        for i in 1..rs.len() {
+            if share_of(shares, &ch, &rs[i].0) > share_of(shares, &ch, &rs[best].0) {
+                best = i;
+            }
+        }
+        let n_readings = rs.len();
+        let share = share_of(shares, &ch, &rs[best].0);
+        let (syl, keys) = rs.into_iter().nth(best).expect("best 在範圍內");
+        out.insert(
+            ch,
+            CharPick {
+                keys,
+                syl,
+                share,
+                n_readings,
+            },
+        );
     }
     out
 }
@@ -169,46 +256,102 @@ fn syllable_keys(syls: &[String], map: &HashMap<String, String>) -> Option<Strin
     Some(out)
 }
 
-/// 中文詞的所有候選按鍵串（一讀音一串）。查不到回空。
-fn zh_keys(
-    word: &str,
-    words: &HashMap<String, Vec<Vec<String>>>,
-    syl: &HashMap<String, String>,
-    chars: &HashMap<String, String>,
-) -> Vec<String> {
-    // 先查整詞
-    if let Some(readings) = words.get(word) {
-        let v: Vec<String> = readings
-            .iter()
-            .filter_map(|r| syllable_keys(r, syl))
-            .collect();
-        if !v.is_empty() {
-            return v;
+/// 中文產鍵要用的三份表，綁在一起傳。
+#[derive(Default)]
+struct ZhData {
+    /// 詞 → 所有讀音（`build_word_map`）
+    words: HashMap<String, Vec<Vec<String>>>,
+    /// 注音音節 → 按鍵（`build_syllable_map`）
+    syl: HashMap<String, String>,
+    /// 單字 → 選中的讀音（`build_char_map`，佔比表只在建表時用）
+    chars: HashMap<String, CharPick>,
+}
+
+impl ZhData {
+    fn load(dir: &std::path::Path) -> Self {
+        ZhData {
+            words: build_word_map(dir),
+            syl: build_syllable_map(dir),
+            chars: build_char_map(dir, &build_share_map(dir)),
         }
     }
-    // 整詞查不到就逐字拼。
+}
+
+/// 逐字拼時，佔比低於這個（千分比）的多音字要提醒人工看一眼。
+///
+/// 挑了最高佔比也可能錯——`行` 單獨拼會挑 ㄒㄧㄥˊ（874‰），但它在
+/// 「銀行」裡念 ㄏㄤˊ。**而且引擎打得回原字**（兩個讀音都出「行」），
+/// 驗證判 OK，錯的按鍵照樣進測資。這種錯只有人看得出來。
+const SHARE_WARN: u32 = 950;
+
+/// 中文詞的所有候選按鍵串（一讀音一串），加上要人工看的提醒。查不到回空。
+fn zh_keys(word: &str, zh: &ZhData) -> (Vec<String>, Vec<String>) {
+    // 先查整詞
+    if let Some(readings) = zh.words.get(word) {
+        let v: Vec<String> = readings
+            .iter()
+            .filter_map(|r| syllable_keys(r, &zh.syl))
+            .collect();
+        if !v.is_empty() {
+            return (v, Vec::new());
+        }
+    }
+    // 整詞查不到就拆開拼：**先拿詞表做最長比對，剩下的才逐字**。
+    //
+    // 逐字拼不看前後文，多音字只能賭最常用的讀音——`重新開始` 整段
+    // 逐字拼，`重` 會挑 ㄓㄨㄥˋ（757‰）打成「重心」；`銀行` 的 `行`
+    // 會挑 ㄒㄧㄥˊ。這幾個詞其實都在詞表裡，只是整段查不到才退下來，
+    // 先切出詞就用得上詞表的讀音。貪婪由左往右取最長，從剩餘長度試到
+    // 2 字（詞表沒有單字條目，單字一律走 `chars`）。
+    //
+    // 切出來的詞有多種讀音時**取檔案第一個**，跟上面整詞查得到時的順序
+    // 一致。試過「各字佔比加總最高」：拿 328 句純中文測資比對，它把
+    // `更新` 挑成 ㄍㄥˋ（`更` 單字的佔比是「更加」撐起來的），
+    // 比取第一個少對 4 句——單字佔比不適合拿來判斷詞裡的讀音。
     //
     // **單字要查 `BPMFBase`（`chars`）而不是詞表**——詞表只收「詞」，
-    // 「個」「年」「點」這些常用單字在裡面根本查不到（`行` 也是：
-    // `銀行` 有、單獨的 `行` 沒有）。第一版就是漏了這條，句型模式一測
-    // 就全滅。多音字取第一個讀音，要別的讀音就整詞寫進句型裡。
-    let mut acc: Vec<String> = Vec::new();
-    for ch in word.chars() {
-        let s = ch.to_string();
-        let k = words
-            .get(&s)
-            .and_then(|r| r.first())
-            .and_then(|r| syllable_keys(r, syl))
-            .or_else(|| chars.get(&s).cloned());
-        let Some(k) = k else {
-            return Vec::new();
+    // 「個」「年」「點」這些常用單字在裡面根本查不到。第一版就是漏了
+    // 這條，句型模式一測就全滅。
+    let cs: Vec<char> = word.chars().collect();
+    let mut acc = String::new();
+    let mut notes = Vec::new();
+    let mut i = 0;
+    while i < cs.len() {
+        let hit = (2..=cs.len() - i).rev().find_map(|n| {
+            let w: String = cs[i..i + n].iter().collect();
+            let rs = zh.words.get(&w)?;
+            let k = syllable_keys(rs.first()?, &zh.syl)?;
+            Some((n, k))
+        });
+        if let Some((n, k)) = hit {
+            acc.push_str(&k);
+            i += n;
+            continue;
+        }
+        let s = cs[i].to_string();
+        let Some(p) = zh.chars.get(&s) else {
+            return (Vec::new(), Vec::new());
         };
-        acc.push(k);
+        if p.n_readings > 1 && p.share.is_none_or(|v| v < SHARE_WARN) {
+            let share = p.share.map_or("佔比不明".to_string(), |v| format!("{v}‰"));
+            notes.push(format!("{s}({} {share})", p.syl));
+        }
+        acc.push_str(&p.keys);
+        i += 1;
     }
     if acc.is_empty() {
-        Vec::new()
+        (Vec::new(), Vec::new())
     } else {
-        vec![acc.concat()]
+        (vec![acc], notes)
+    }
+}
+
+/// 提醒的印法：接在該行後面。
+fn notes_suffix(notes: &[String]) -> String {
+    if notes.is_empty() {
+        String::new()
+    } else {
+        format!("  【逐字拼的多音字，請確認：{}】", notes.join("、"))
     }
 }
 
@@ -450,29 +593,34 @@ fn pick_readable(cands: Vec<String>, want: &str) -> Option<String> {
         .cloned()
 }
 
-/// 一段的按鍵。`lang` 已知就照它產。
+/// 一段的按鍵，加上要人工看的提醒（只有中文逐字拼會有）。`lang` 已知就照它產。
 fn seg_keys(
     seg: &str,
     lang: Lang,
-    zh_words: &HashMap<String, Vec<Vec<String>>>,
-    syl: &HashMap<String, String>,
-    zh_chars: &HashMap<String, String>,
+    zh: &ZhData,
     ja_map: &HashMap<String, Vec<String>>,
-) -> Option<String> {
+) -> Option<(String, Vec<String>)> {
+    let none = Vec::new;
     match lang {
         // 分隔符空白自成一段；其他標點原樣（按鍵欄一律半形）
-        Lang::Mark => Some(if seg == "_" {
-            " ".to_string()
-        } else {
-            seg.to_string()
-        }),
+        Lang::Mark => Some((
+            if seg == "_" {
+                " ".to_string()
+            } else {
+                seg.to_string()
+            },
+            none(),
+        )),
         // 英文與數字是 passthrough：打什麼出什麼
-        Lang::En => Some(seg.to_string()),
+        Lang::En => Some((seg.to_string(), none())),
         // **多讀音要挑打得出原詞的那個**，不能取第一個。mozc 的讀音沒有
         // 排序，`番` 的第一個是 `tugai`（つがい）而不是 `bann`——取第一個
         // 會產出打不出原詞的按鍵，正是這支工具要防的事。
-        Lang::Zh => pick_readable(zh_keys(seg, zh_words, syl, zh_chars), seg),
-        Lang::Ja => pick_readable(ja_keys(seg, ja_map), seg),
+        Lang::Zh => {
+            let (cands, notes) = zh_keys(seg, zh);
+            pick_readable(cands, seg).map(|k| (k, notes))
+        }
+        Lang::Ja => pick_readable(ja_keys(seg, ja_map), seg).map(|k| (k, none())),
     }
 }
 
@@ -491,18 +639,12 @@ fn seg_keys(
 /// 需求不是現況。
 ///
 /// 產完仍然會跑一次引擎印出**現在**打出什麼，只是那結果不進第二欄。
-fn sentence_mode(
-    lines: &[String],
-    zh_words: &HashMap<String, Vec<Vec<String>>>,
-    syl: &HashMap<String, String>,
-    zh_chars: &HashMap<String, String>,
-    ja_map: &HashMap<String, Vec<String>>,
-    tsv: bool,
-) {
+fn sentence_mode(lines: &[String], zh: &ZhData, ja_map: &HashMap<String, Vec<String>>, tsv: bool) {
     let mut ok = 0usize;
     for line in lines {
         let mut text_segs: Vec<String> = Vec::new();
         let mut key_segs: Vec<String> = Vec::new();
+        let mut notes: Vec<String> = Vec::new();
         let mut bad: Option<String> = None;
 
         for raw in line.split('|') {
@@ -520,10 +662,11 @@ fn sentence_mode(
                 bad = Some(format!("「{seg}」是中文還日文？請標 zh: 或 ja:"));
                 break;
             };
-            match seg_keys(seg, lang, zh_words, syl, zh_chars, ja_map) {
-                Some(k) => {
+            match seg_keys(seg, lang, zh, ja_map) {
+                Some((k, n)) => {
                     text_segs.push(seg.to_string());
                     key_segs.push(k);
+                    notes.extend(n);
                 }
                 None => {
                     bad = Some(format!("「{seg}」查無讀音"));
@@ -548,8 +691,13 @@ fn sentence_mode(
         if matched {
             ok += 1;
         }
+        let warn = notes_suffix(&notes);
         if tsv {
             println!("{want}\t{key_expect}\t{keys}");
+            // 提醒走 stderr，不混進要貼進測資的輸出
+            if !warn.is_empty() {
+                eprintln!("{want}{warn}");
+            }
         } else {
             let mark = if matched { "OK" } else { "✗" };
             let note = if matched {
@@ -557,7 +705,7 @@ fn sentence_mode(
             } else {
                 format!("  現在打出「{got}」")
             };
-            println!("{mark}\t{want}\t{key_expect}\t{keys}{note}");
+            println!("{mark}\t{want}\t{key_expect}\t{keys}{note}{warn}");
         }
     }
     if !tsv {
@@ -663,20 +811,10 @@ fn main() {
     // 句型模式一句裡三種語言都可能出現，三份資料都要載
     let need_zh = sent || !ja;
     let need_ja = sent || ja;
-    let syl = if need_zh {
-        build_syllable_map(&dir)
+    let zh = if need_zh {
+        ZhData::load(&dir)
     } else {
-        HashMap::new()
-    };
-    let zh_words = if need_zh {
-        build_word_map(&dir)
-    } else {
-        HashMap::new()
-    };
-    let zh_chars = if need_zh {
-        build_char_map(&dir)
-    } else {
-        HashMap::new()
+        ZhData::default()
     };
     let ja_map = if need_ja {
         build_ja_map(&dir)
@@ -685,18 +823,19 @@ fn main() {
     };
 
     if sent {
-        sentence_mode(&words, &zh_words, &syl, &zh_chars, &ja_map, tsv);
+        sentence_mode(&words, &zh, &ja_map, tsv);
         return;
     }
 
     let mut ok_count = 0usize;
     let mut sound_count = 0usize;
     for want in &words {
-        let cands = if ja {
-            ja_keys(want, &ja_map)
+        let (cands, notes) = if ja {
+            (ja_keys(want, &ja_map), Vec::new())
         } else {
-            zh_keys(want, &zh_words, &syl, &zh_chars)
+            zh_keys(want, &zh)
         };
+        let warn = notes_suffix(&notes);
         if cands.is_empty() {
             println!("?\t{want}\t【查無讀音，需人工處理】");
             continue;
@@ -721,6 +860,10 @@ fn main() {
             if sound {
                 let segs: Vec<String> = top_cut(keys).into_iter().map(|s| s.keys).collect();
                 println!("{want}\t{}\t{keys}", segs.join("|"));
+                // 提醒走 stderr，不混進要貼進測資的輸出
+                if !warn.is_empty() {
+                    eprintln!("{want}{warn}");
+                }
             }
         } else {
             let mark = match (matched, sound) {
@@ -742,7 +885,7 @@ fn main() {
             } else {
                 String::new()
             };
-            println!("{mark}\t{want}\t{keys}{note}{alt}");
+            println!("{mark}\t{want}\t{keys}{note}{alt}{warn}");
         }
     }
     if !tsv {
@@ -751,5 +894,81 @@ fn main() {
             words.len(),
             words.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::OnceLock;
+
+    /// 三份表載一次就好——`BPMFMappings` 有 5MB，每條測試各讀一次太慢，
+    /// 而且 `cargo test` 是並行的
+    fn zh() -> &'static ZhData {
+        static ZH: OnceLock<ZhData> = OnceLock::new();
+        ZH.get_or_init(|| ZhData::load(&data_dir()))
+    }
+
+    fn keys(word: &str) -> String {
+        let (v, _) = zh_keys(word, zh());
+        assert_eq!(v.len(), 1, "「{word}」應該恰好一串按鍵：{v:?}");
+        v[0].clone()
+    }
+
+    fn notes(word: &str) -> Vec<String> {
+        zh_keys(word, zh()).1
+    }
+
+    /// 詞表（`BPMFMappings`）不進版控，沒下載就跳過要切詞的那幾條
+    fn has_words() -> bool {
+        if zh().words.is_empty() {
+            eprintln!("詞庫未下載，跳過（跑 data/download.ps1）");
+            return false;
+        }
+        true
+    }
+
+    /// 實測回報的那個：`BPMFBase` 裡 ㄐㄧˊ（口吃，2‰）排在 ㄔ（997‰）
+    /// 前面，舊版取第一個產出 `ru6`，引擎打成「及」
+    #[test]
+    fn 多音字單字挑佔比最高的讀音() {
+        assert_eq!(keys("吃"), "t ");
+        assert_eq!(keys("家"), "ru8 ", "ㄐㄧㄚ 不是 ㄍㄨ");
+        assert_eq!(keys("要"), "ul4", "ㄧㄠˋ 不是 ㄧㄠ");
+    }
+
+    /// 字不在佔比表裡就沒有依據可挑，維持舊行為：檔案裡第一個
+    #[test]
+    fn 不在佔比表的字取檔案第一個讀音() {
+        let p = &zh().chars["誒"];
+        assert_eq!(p.share, None, "測資前提：誒 不在佔比表裡");
+        assert_eq!(p.syl, "ㄝˋ");
+    }
+
+    /// 整段查不到時先拿詞表最長比對。逐字拼的話 `重` 會挑 ㄓㄨㄥˋ
+    /// 打成「重心」、`行` 會挑 ㄒㄧㄥˊ——後者引擎照樣打得回「行」，
+    /// 驗證抓不到
+    #[test]
+    fn 整段查不到先切詞再逐字() {
+        if !has_words() {
+            return;
+        }
+        assert_eq!(keys("銀行在哪裡"), "up6c;6y94s83xu3");
+        assert_eq!(keys("重新開始"), "tj/6vup d9 g3");
+        // 詞與單字混著：週末 是詞、去 吃 逐字
+        assert_eq!(keys("週末去吃"), "5. ai4fm4t ");
+    }
+
+    /// 逐字拼、佔比不夠高的多音字要提醒；夠高的、走詞表的都不吵
+    #[test]
+    fn 逐字拼的冷門多音字要提醒() {
+        let n = notes("行");
+        assert_eq!(n.len(), 1, "{n:?}");
+        assert!(n[0].starts_with("行(ㄒㄧㄥˊ"), "{n:?}");
+        assert!(notes("吃").is_empty(), "997‰ 不必提醒");
+        assert!(notes("他").is_empty(), "單一讀音不必提醒");
+        if has_words() {
+            assert!(notes("銀行在哪裡").is_empty(), "行 走詞表，不是逐字拼");
+        }
     }
 }

@@ -511,21 +511,13 @@ impl Incremental {
         if cut == 0 {
             return;
         }
-        let head: String = self.chars[..cut].iter().collect();
-        let mut sub = Self::new();
-        for c in head.chars() {
-            sub.push(c);
-        }
-        let Some(best) = crate::cutpoint::rank::sort(sub.cuttings())
-            .into_iter()
-            .next()
-        else {
+        let Some(frozen_part) = frozen_head(&self.chars[..cut], self.engines) else {
             return;
         };
         // **前區存 normalize 之後的分段**——那是「這一段最終長什麼樣」
         // 的定案。不能存原始切法：同語言內部的切點不影響輸出，留著只是
         // 讓後面的比對多一堆等價形狀。
-        self.frozen.extend(crate::cutpoint::normalize(&best));
+        self.frozen.extend(frozen_part);
         // 後區從頭重新累加。**遞迴是安全的**——`alive` 從 1 開始，
         // 重放這幾個字元到不了 `FREEZE_TRIGGER`，不會再凍一次。
         let rest: Vec<char> = self.chars[cut..].to_vec();
@@ -536,7 +528,8 @@ impl Incremental {
         // `all_keys` 要保住整串（對外的語意），`keys` 則跟著後區重來
         // ——它必須跟 `chars` 逐字元對齊，見那個欄位的說明。
         let all = std::mem::take(&mut self.all_keys);
-        *self = Self::new();
+        // 語言開關要跟著留下來（理由同 `frozen_head`）
+        *self = Self::with_engines(self.engines);
         self.frozen = frozen;
         // 重放只補後區，`all_keys` 先扣掉將要被 `push` 加回去的部分
         self.all_keys = all.chars().take(all.chars().count() - rest.len()).collect();
@@ -642,7 +635,7 @@ impl Incremental {
                 //
                 // 重算的範圍因此只有幾個鍵，不是整個後區。
                 Some(tail) => {
-                    let mut sub = Self::new();
+                    let mut sub = Self::with_engines(self.engines);
                     for c in tail.chars() {
                         sub.push(c);
                     }
@@ -745,8 +738,13 @@ impl Incremental {
                 }
             }
             .unwrap_or(Language::English);
+            // **軟標點**（`hello.␣` 的 `.`）自成一段時也算標點——跟「注:.␣」
+            // 那種解讀並存，交給排序，見 `punct::is_soft_punct`。
+            //
+            // 這裡每條切法的每個單字元段都要問一次（每鍵上萬次），用不配置
+            // 的切片版，理由見 `punct::is_mark_at`
             let is_mark =
-                seg == SEPARATOR || (end == begin + 1 && punct::is_punct(&self.keys, begin));
+                seg == SEPARATOR || (end == begin + 1 && punct::is_mark_at(&self.chars, begin));
             out.push(Segment {
                 keys: seg,
                 is_mark,
@@ -756,6 +754,83 @@ impl Incremental {
         }
         out
     }
+}
+
+/// 凍結時前區要定成什麼：`head`（最後一個字元是凍結點的邊界）**單獨**
+/// 算的第一名，`normalize` 過。
+///
+/// **不從活著的切法裡挑**：那個池子被 `ALIVE_LIMIT` 截斷過，從裡面挑
+/// 會繼承截斷的損失，單獨重算反而會把被砍掉的讀法補回來。2026-09-23
+/// 試過改從池子裡挑（取在凍結點切開的第一名），淨效益比單獨算差。
+///
+/// 要照使用者的語言開關算——用 `Incremental::new()`（全開）的話，停用的
+/// 語言照樣會被凍進前區，而前區在每一條切法裡都有，出口的語言過濾
+/// （`input.rs`）就把整批切法丟光、退回「整句英文」。
+///
+/// # 邊界字元自成一段時，前區先拿掉它再排
+///
+/// 標點或分隔符一接上去，前面那個詞就從「還在打的最後一段」變成「已
+/// 完成的段」，排序與丟棄規則對它的待遇跟著變：
+///
+/// ```text
+/// amarinorikijanai    → あまり乗り気じゃない   ✓（使用者打完這串時看到的）
+/// amarinorikijanai.   → amあり乗り気じゃない。 ✗（活用句不在詞典裡，
+///                                              has_dict 輸給英文碎片 am）
+/// ```
+///
+/// 不凍的話這只是排序問題（整串排完還有機會），**凍下去就定死了**——
+/// long 節有 4 句切不出來是這樣來的（日文長片語後面接句點或空白：
+/// あまり乗り気じゃない、単位を落とされてしまう、何度も直されても）。
+///
+/// 所以第一名把邊界當成獨立一段時，改用「不含邊界」的那串重排，再把
+/// 邊界接回去——也就是使用者打完那個詞、還沒按標點時看到的第一名。
+/// 邊界本身是字面標點或確定不是聲調的空白（`can_freeze_here`），拆出來
+/// 單獨排不會改變它的身分。第一名把邊界吃進別的段（例如空白當成聲調，
+/// `mergewu0␣`＝merge天）時維持原樣。
+///
+/// # 只累加一次
+///
+/// 先累加到邊界之前、複製一份再補上邊界，不要兩次都從頭推：「不含邊界」
+/// 那次重排要的正是邊界之前的狀態。累加是逐鍵的純函式（快取只是記憶），
+/// 複製出來再推邊界跟從頭推整串一模一樣，由測試
+/// `凍結的前區只累加一次_結果跟從頭推一樣` 守著。從頭各推一次的話，第二次
+/// 要把前區整個重推一遍：long 節平均每次凍結多花約 0.13ms，而長句模式每
+/// 遇到邊界就凍（九成五的凍結都會走到第二次重排）。複製實測平均 1.5µs。
+/// 兩次**排序**省不掉——最後一段是不是「還在打」，排序的待遇不同，那正是
+/// 要重排的理由。
+fn frozen_head(head: &[char], engines: crate::config::Engines) -> Option<Vec<Segment>> {
+    let (&boundary, before) = head.split_last()?;
+    let mut body = Incremental::with_engines(engines);
+    for &c in before {
+        body.push(c);
+    }
+    let mut whole = body.clone();
+    whole.push(boundary);
+    let best = first_cutting(&whole)?;
+    Some(match best.last() {
+        Some(last)
+            if !before.is_empty()
+                && last.is_mark
+                && last.keys.chars().eq(std::iter::once(boundary)) =>
+        {
+            match first_cutting(&body) {
+                Some(b) => {
+                    let mut v = crate::cutpoint::normalize(&b);
+                    v.push(last.clone());
+                    v
+                }
+                None => crate::cutpoint::normalize(&best),
+            }
+        }
+        _ => crate::cutpoint::normalize(&best),
+    })
+}
+
+/// 排序之後的第一名切法（凍結用：前區單獨算、不看後文）。
+fn first_cutting(inc: &Incremental) -> Option<Vec<Segment>> {
+    crate::cutpoint::rank::sort(inc.cuttings())
+        .into_iter()
+        .next()
 }
 
 /// 這一段歸哪個引擎？依瀑布順序：注音 → 日文 → 英文。
@@ -796,6 +871,29 @@ fn lang_of(seg: &str, engines: crate::config::Engines) -> Option<Language> {
         if crate::english::is_top_word(seg) {
             return Some(Language::English);
         }
+        // **常用英文詞，日文那邊卻只有冷僻詞條時，也判英文**。
+        //
+        // `api`（アピ）、`mode`（モデ）、`youtube`（ヨウツベ）排不進前
+        // 5000 名，上一條救不到，於是整段判成日文；英文那個讀法只能以
+        // `ap|i` 這種碎片活著，碎片又被扣分。分界改看**日文那一邊有沒有
+        // 把握**（`is_confident_japanese`），不動英文的排名門檻——拉高
+        // 那個門檻的路是死的（`sushi` 第 7210 名、`karaoke` 第 9015 名會
+        // 被英文搶走），而這兩個的日文讀音有把握（寿司、カラオケ），照樣
+        // 是日文。
+        //
+        // - **活用形不算**：`kite`（来て）、`mite`（見て）是英文詞，日文
+        //   那邊不是辭書形、沒有「首選」可言，但它們是動詞活用，不是冷僻詞
+        // - **兩個字母的不算**，那些交給上面的排名門檻
+        //
+        // 日文讀法仍然選得到：日文詞典也收的英文段會開放選字、補上日文
+        // 候選（`compose` 的英文格，`ii`→いい 那條）。
+        if seg.chars().count() >= 3
+            && crate::english::is_common_word(seg)
+            && !crate::dict::is_confident_japanese(seg)
+            && !crate::romaji::inflect::is_inflected(seg)
+        {
+            return Some(Language::English);
+        }
         return Some(Language::Romaji);
     }
     // 英文是最後一站（passthrough）。
@@ -813,6 +911,44 @@ fn lang_of(seg: &str, engines: crate::config::Engines) -> Option<Language> {
 
 #[cfg(test)]
 mod tests {
+    /// **凍結之後語言開關不可以失效**。
+    ///
+    /// 凍結會重開後區（`*self = Self::new()`）、前區也另開一個引擎排序，
+    /// 兩處原本都用預設的「全開」，於是關掉日文的人打長句時日文段被凍進
+    /// 前區，出口過濾把整批切法丟光。
+    #[test]
+    fn 凍結後語言開關仍然有效() {
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("data");
+        crate::preload(&data, crate::config::Engines::default());
+        // 沒有日文詞庫就湊不出日文段，這條測不到東西（理由同下一條）
+        if !crate::dict::all_loaded() {
+            eprintln!("詞庫未下載，跳過（跑 data/download.ps1）");
+            return;
+        }
+        let no_ja = crate::config::Engines {
+            bopomofo: true,
+            romaji: false,
+        };
+        // 夠長、有標點，一定會凍好幾刀
+        let keys = "ru,6mp4.webhook ao6tj4z8  cj06ru/4 s84ek7 job g 194.viewere93 formatfm4 5j3ej03 commite93,migratem/4.emaila93.";
+        let inc = super::Incremental::from_keys_with(keys, no_ja);
+        assert!(!inc.frozen_segments().is_empty(), "這句應該有凍結");
+        assert!(
+            inc.frozen_segments()
+                .iter()
+                .all(|s| s.lang != Language::Romaji),
+            "關掉日文卻凍進了日文段：{:?}",
+            inc.frozen_segments()
+        );
+        assert!(inc
+            .cuttings()
+            .iter()
+            .all(|c| c.iter().all(|s| s.lang != Language::Romaji)));
+    }
+
     /// **停用的語言在切點引擎裡就不該出現**，不是等到出口才濾掉。
     ///
     /// 語言開關本來只在 `input.rs` 的出口生效
@@ -908,6 +1044,66 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **凍結算前區時只累加一次，結果要跟從頭推一樣**。
+    ///
+    /// `frozen_head` 先推到邊界之前、複製一份再推邊界；「不含邊界」那次
+    /// 重排直接用複製前的狀態，不再從頭推一遍前區。兩件事守著它：
+    ///
+    /// 1. **複製再推一鍵 ≡ 從頭推**，而且推複製品不會動到原本那份——那個
+    ///    省法成立的前提（累加是逐鍵的純函式、`Clone` 是深複製）。哪天有人
+    ///    加了會跟著累加改變行為的共用狀態，這裡先紅
+    /// 2. **每一條切法（含凍結區）接起來剛好是整串按鍵**——兩份狀態用錯
+    ///    （例如把邊界推進了原本那份，再拿它當「不含邊界」的那串重排），
+    ///    邊界會在前區出現兩次。這種錯只有長句看得到
+    #[test]
+    fn 凍結的前區只累加一次_結果跟從頭推一樣() {
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("data");
+        crate::preload(&data, crate::config::Engines::default());
+        // 取自測資 long「then|去|，|漫画|…」的前 72 鍵：第 24 鍵起就凍過了，
+        // 凍結區的複製也測得到。凍結點只會落在空白與標點上，就在那些位置試
+        let keys = "thenfm4,mannga cp3cl3d04.good notebook runnere93 whatt/6,update rup42j4 ";
+        let chars: Vec<char> = keys.chars().collect();
+        let whole = |inc: &Incremental| {
+            for c in inc.cuttings() {
+                let joined: String = c.iter().map(|s| s.keys.as_str()).collect();
+                assert_eq!(joined, inc.keys(), "切法接起來不是整串按鍵：{c:?}");
+            }
+        };
+        let mut tried = 0;
+        let mut frozen_seen = false;
+        for p in 1..chars.len() {
+            if !matches!(chars[p], ' ' | ',' | '.') {
+                continue;
+            }
+            let body_keys: String = chars[..p].iter().collect();
+            let head_keys: String = chars[..=p].iter().collect();
+            let body = Incremental::from_keys(&body_keys);
+            let mut head = body.clone();
+            head.push(chars[p]);
+            let fresh = Incremental::from_keys(&head_keys);
+            assert_eq!(head.cuttings(), fresh.cuttings(), "{head_keys:?}");
+            assert_eq!(head.frozen_segments(), fresh.frozen_segments());
+            assert_eq!(head.keys(), fresh.keys());
+            assert_eq!(
+                body.cuttings(),
+                Incremental::from_keys(&body_keys).cuttings(),
+                "推複製品動到了原本那份：{body_keys:?}"
+            );
+            whole(&body);
+            whole(&fresh);
+            tried += 1;
+            frozen_seen |= !body.frozen_segments().is_empty();
+        }
+        assert!(tried >= 8, "試的位置太少：{tried}");
+        assert!(
+            frozen_seen,
+            "要試到「前面已經凍過」的狀態，不然凍結區沒測到"
+        );
     }
 
     /// 逐鍵打出來的結果，要跟一次整串建出來的一模一樣。
@@ -1033,5 +1229,137 @@ mod tests {
     fn 標點自成一段() {
         let inc = Incremental::from_keys("su3cl3,");
         assert!(has(&inc, "注:su3cl3 | 英:,"), "你好，");
+    }
+
+    /// **常用英文詞、日文那邊只有冷僻詞條 → 判英文**（`lang_of`）。
+    #[test]
+    fn 常用英文詞遇上冷僻的日文讀音判英文() {
+        if !crate::compose::tests::load() || !crate::dict::all_loaded() {
+            return;
+        }
+        let on = crate::config::Engines::default();
+        // 取自測資 holdout「api|_|回傳錯誤」、ja_en「仕事|mode」
+        for w in ["api", "mode"] {
+            assert!(
+                crate::dict::is_japanese_word(w)
+                    && !crate::dict::is_confident_japanese(w)
+                    && !crate::english::is_top_word(w),
+                "前提：{w} 日文詞典收了但冷僻、英文排不進前 5000 名"
+            );
+            assert_eq!(lang_of(w, on), Some(Language::English), "{w}");
+        }
+        // 日文讀音有把握的照樣是日文——拉高英文排名門檻會搶走的就是這幾個
+        for w in ["sushi", "karaoke", "anime", "kimono"] {
+            assert_eq!(lang_of(w, on), Some(Language::Romaji), "{w}");
+        }
+        // 活用形不算冷僻詞條：来て、見て 沒有「首選」，但它們是動詞活用
+        for w in ["kite", "mite"] {
+            assert!(
+                crate::english::is_common_word(w) && !crate::dict::is_confident_japanese(w),
+                "前提：{w} 是英文詞、日文那邊沒把握"
+            );
+            assert_eq!(lang_of(w, on), Some(Language::Romaji), "{w}");
+        }
+        let first = |keys: &str| {
+            let cands = crate::cutpoint::rank::sort(Incremental::from_keys(keys).cuttings());
+            show(&crate::cutpoint::normalize(&cands[0]))
+        };
+        assert_eq!(
+            first("api cjo6tj06hji4j4"),
+            "英:api | 英:␣ | 注:cjo6tj06hji4j4"
+        );
+    }
+
+    /// **軟標點生得出「標點＋分隔符」那條切法**，而且那個標點標成 `is_mark`。
+    ///
+    /// `hello.␣` 的 `.␣` 是合法的ㄡ一聲，`is_punct` 判它是注音，於是原本
+    /// 只切得出 `英:hello | 注:.␣`（hello歐）——句點那個讀法根本不在候選裡，
+    /// 排序再怎麼調都救不回來。兩處要一起放行：`prune::keep` 不殺那個
+    /// 單字元段、`to_segments` 把它標成標點（不標的話它是一段叫 `.` 的英文，
+    /// 排序會把它當殘渣）。
+    #[test]
+    fn 軟標點_句點加空白的切法生得出來() {
+        // 要三本詞庫都在：`come` 判英文還是日文（こめ）看日文詞典載了沒
+        if !(crate::compose::tests::load() && crate::dict::all_loaded()) {
+            return;
+        }
+        for (keys, want) in [
+            ("hello. world", "英:hello | 英:. | 英:␣ | 英:world"),
+            ("su3cl3. come", "注:su3cl3 | 英:. | 英:␣ | 英:come"),
+            ("ok; ", "英:ok | 英:; | 英:␣"),
+        ] {
+            let inc = Incremental::from_keys(keys);
+            let cands = inc.cuttings();
+            let c = cands
+                .iter()
+                .find(|c| show(c) == want)
+                .unwrap_or_else(|| panic!("{keys}：句點讀法要生得出來"));
+            assert!(
+                c.iter().filter(|s| s.keys.len() == 1).all(|s| s.is_mark),
+                "{keys}：標點與分隔符都要標成 is_mark：{c:?}"
+            );
+        }
+        // 注音那一種也還在——兩種解讀並存，交給排序
+        assert!(has(
+            &Incremental::from_keys("hello. world"),
+            "英:hello | 注:.␣ | 英:world"
+        ));
+        // `is_punct` 本身不變（凍結點、單字母規則看的是它）
+        assert!(!punct::is_punct("hello. world", 5));
+    }
+
+    /// **凍結前區時，邊界字元自成一段的話先拿掉它再排**（`frozen_head`）。
+    ///
+    /// 日文長片語後面接句點或空白，單獨排的第一名會變成「英文碎片＋日文」
+    /// ——片語從「還在打的最後一段」變成「已完成的段」，拿不到詞典分，
+    /// 輸給 `am`。不凍的話只是排序問題，凍下去就定死了。
+    /// `amarinorikijanai` 取自測資 long（あまり乗り気じゃない）。
+    #[test]
+    fn 凍結前區_邊界字元先拿掉再排() {
+        if !(crate::compose::tests::load() && crate::dict::all_loaded()) {
+            return;
+        }
+        for (keys, boundary) in [("amarinorikijanai.", "."), ("amarinorikijanai ", "␣")] {
+            // 前提：整串一起排的話，第一名是英文碎片 am＋日文
+            let whole = first_cutting(&Incremental::from_keys(keys)).expect("有切法");
+            assert_eq!(
+                show(&crate::cutpoint::normalize(&whole)),
+                format!("英:am | 日:arinorikijanai | 英:{boundary}"),
+                "前提變了：整串一起排已經對了的話，這條測不到東西，要換例子"
+            );
+            let chars: Vec<char> = keys.chars().collect();
+            let got = frozen_head(&chars, crate::config::Engines::default()).expect("有切法");
+            assert_eq!(
+                show(&got),
+                format!("日:amarinorikijanai | 英:{boundary}"),
+                "{keys:?}"
+            );
+            assert!(
+                got.last().is_some_and(|s| s.is_mark),
+                "邊界接回去仍是標記段"
+            );
+        }
+    }
+
+    /// 上面那條走的是 `frozen_head` 本身；這條走**產品真正的路**：打一整句
+    /// 會凍好幾刀的長句，看凍結區裡那個片語有沒有被切開。
+    ///
+    /// 按鍵取自測資 long「memory|_|不太夠|…|あまり乗り気じゃない|_|each…」，
+    /// 那個片語後面的空白是凍結點。
+    #[test]
+    fn 凍結前區_長句裡的日文片語不被英文碎片切開() {
+        if !(crate::compose::tests::load() && crate::dict::all_loaded()) {
+            return;
+        }
+        let keys = "memory 1j4w94e.4.meetingsushiu vu84,theycl3 arigatougozaimasu amarinorikijanai eachsu06 excel 2831j4d9 ";
+        let inc = Incremental::from_keys(keys);
+        let frozen = inc.frozen_segments();
+        assert!(
+            frozen
+                .iter()
+                .any(|s| s.lang == Language::Romaji && s.keys == "amarinorikijanai"),
+            "あまり乗り気じゃない 被凍成別的樣子：{}",
+            show(frozen)
+        );
     }
 }

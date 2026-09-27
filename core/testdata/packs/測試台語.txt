@@ -1,0 +1,15 @@
+# name: 測試用_台語
+# description: 段選單的台語測試共用這一份（原本寫在 segmenu.rs 的 write_test_pack）。
+
+# 搬進 testdata 的理由：`pack::load` 換的是**全域**索引，測試各自載
+# 自己的包會互相取代——台語那組載完，需要 `zh_long` 的測試就查不到了
+# （症狀：單獨跑過、整批跑掛）。索引只有一份，所以測試包也該只有一份。
+#
+# 鍵是**華語國字**不是注音，見 `pack::Index::tw`。
+tw	謝謝	感恩
+tw	謝謝	seh-seh
+tw	謝謝	多謝
+tw	我	阮
+tw	我們	阮
+tw	我們	咱
+tw	沙發	膨椅

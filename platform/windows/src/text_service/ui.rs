@@ -334,7 +334,7 @@ pub(crate) fn on_candidate_picked(shared: &std::sync::Arc<std::sync::Mutex<State
             let advance = state.config.behavior.enter_in_select == EnterInSelect::Next;
             let left_select = state.session.confirm_cand_with(advance);
             if left_select && state.config.behavior.commit_on_last {
-                let text = state.session.text();
+                let text = state.session.commit_text();
                 let _ = end_composition(&context, &mut state, EndKind::Commit(&text));
             } else {
                 let _ = rewrite_composition(&context, &mut state);

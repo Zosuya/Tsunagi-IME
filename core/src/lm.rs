@@ -217,6 +217,10 @@ pub struct Lm {
 
 static LM: OnceLock<Option<Lm>> = OnceLock::new();
 
+/// 關聯強度的分母至少當這個字頻算——罕見字不讓分數飆高，理由見
+/// `Lm::score`。
+const MIN_FREQ: f32 = 50.0;
+
 impl Lm {
     /// 從 `.gram` 的位元組建模型。認不得版面就回 `None`（退回不用模型）。
     fn new(bytes: &'static [u8], freq: HashMap<char, u32>) -> Option<Lm> {
@@ -286,6 +290,18 @@ impl Lm {
     ///
     /// 改成扣命中字形的字頻之後，借來的次數也還回對應的分母，四句
     /// `妳` 全部修好。
+    ///
+    /// # 分母有下限（`MIN_FREQ`）
+    ///
+    /// 同一個病的另一支：**罕見字的字頻本身就小**，扣完之後分數一樣
+    /// 會飆高。`苯` 在教育部字頻表裡幾乎沒出現，`三苯`（化學名詞）的
+    /// 關聯強度因此比 `三本` 還高；`你嘞` 同理。語言模型權重還是 0.5
+    /// 時被字頻先驗壓得住，調到 0.75 就冒出來（`買了三本`→`買了三苯`，
+    /// 弄壞 3 句）。
+    ///
+    /// 所以分母不低於 `ln(MIN_FREQ)`：字頻不到 50 次的字一律當 50 次。
+    /// 下限不能太高——100 會讓異體字那組（`綫` 借 `線` 的次數）的分數
+    /// 失真，`上線` 變成 `上限`。掃描見 `compose::LM_W_BIGRAM`。
     pub fn score(&self, a: char, b: char) -> Option<f32> {
         let mut buf = Vec::with_capacity(4);
         let mut best: Option<f32> = None;
@@ -296,7 +312,7 @@ impl Lm {
                 }
                 encode_into(&[fa, fb], &mut buf);
                 if let Some(v) = self.darts.exact(&buf) {
-                    let s = v as f32 / 10000.0 - self.log_freq(fb);
+                    let s = v as f32 / 10000.0 - self.log_freq(fb).max(MIN_FREQ.ln());
                     if best.is_none_or(|x| s > x) {
                         best = Some(s);
                     }

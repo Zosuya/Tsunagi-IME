@@ -169,11 +169,48 @@ pub fn build(words: Vec<(String, String)>, chars: Vec<(String, Vec<(String, u32)
     out
 }
 
+/// 這份 bytes 是不是**這一版程式認得的**注音版面。
+///
+/// 給 `gen_dict_zh --if-stale`／`--check` 用。判準跟 `ZhDict::new` 是
+/// **同一支 `parse`**——不在別處另抄一份檔頭格式，免得出現「腳本說是
+/// 最新、執行期卻認不得」。道理見 `dict_bin::is_current`。
+pub fn is_current(bytes: &[u8]) -> bool {
+    parse(bytes).is_some()
+}
+
+/// 認檔頭並切出兩張索引。回傳（詞表、同音字表、字陣列位移、文字位移）。
+///
+/// 對借來的任何 bytes 都能跑，`is_current` 就是靠這點不必 `'static`。
+fn parse(bytes: &[u8]) -> Option<(IndexRef<'_>, IndexRef<'_>, usize, usize)> {
+    if bytes.len() < HEADER || &bytes[..8] != MAGIC || get_u16(bytes, 8) != VERSION {
+        return None;
+    }
+    let n_word = get_u32(bytes, 12) as usize;
+    let n_ckey = get_u32(bytes, 16) as usize;
+    let n_char = get_u32(bytes, 20) as usize;
+    let off_widx = get_u32(bytes, 24) as usize;
+    let wkeys_len = get_u32(bytes, 28) as usize;
+    let off_cidx = get_u32(bytes, 32) as usize;
+    let ckeys_len = get_u32(bytes, 36) as usize;
+    let off_chars = get_u32(bytes, 40) as usize;
+    let off_text = get_u32(bytes, 44) as usize;
+    // 字陣列的長度必須跟宣告的數量對得上，否則就是壞檔
+    if off_chars + n_char * CHAR_SIZE != off_text || off_text > bytes.len() {
+        return None;
+    }
+    Some((
+        IndexRef::new(bytes, off_widx, n_word, wkeys_len)?,
+        IndexRef::new(bytes, off_cidx, n_ckey, ckeys_len)?,
+        off_chars,
+        off_text,
+    ))
+}
+
 /// 查詢用的門面。**只借用那塊 bytes，自己不持有任何字串。**
 pub struct ZhDict {
     bytes: &'static [u8],
-    words: IndexRef,
-    chars: IndexRef,
+    words: IndexRef<'static>,
+    chars: IndexRef<'static>,
     off_chars: usize,
     off_text: usize,
 }
@@ -181,26 +218,11 @@ pub struct ZhDict {
 impl ZhDict {
     /// 認檔頭。版面對不上就回 `None`——呼叫端會退回從文字重建。
     pub fn new(bytes: &'static [u8]) -> Option<Self> {
-        if bytes.len() < HEADER || &bytes[..8] != MAGIC || get_u16(bytes, 8) != VERSION {
-            return None;
-        }
-        let n_word = get_u32(bytes, 12) as usize;
-        let n_ckey = get_u32(bytes, 16) as usize;
-        let n_char = get_u32(bytes, 20) as usize;
-        let off_widx = get_u32(bytes, 24) as usize;
-        let wkeys_len = get_u32(bytes, 28) as usize;
-        let off_cidx = get_u32(bytes, 32) as usize;
-        let ckeys_len = get_u32(bytes, 36) as usize;
-        let off_chars = get_u32(bytes, 40) as usize;
-        let off_text = get_u32(bytes, 44) as usize;
-        // 字陣列的長度必須跟宣告的數量對得上，否則就是壞檔
-        if off_chars + n_char * CHAR_SIZE != off_text || off_text > bytes.len() {
-            return None;
-        }
+        let (words, chars, off_chars, off_text) = parse(bytes)?;
         Some(ZhDict {
             bytes,
-            words: IndexRef::new(bytes, off_widx, n_word, wkeys_len)?,
-            chars: IndexRef::new(bytes, off_cidx, n_ckey, ckeys_len)?,
+            words,
+            chars,
             off_chars,
             off_text,
         })
@@ -381,6 +403,23 @@ mod tests {
         }
         let d = ZhDict::new(Box::leak(bad.into_boxed_slice())).unwrap();
         assert!(d.word("nothing").is_none(), "查不到就是查不到，不能轉不停");
+    }
+
+    /// `gen_dict_zh --if-stale`／`--check` 的判準跟執行期認檔是同一套。
+    /// 道理見 `dict_bin` 的同名測試。
+    #[test]
+    fn 目前版面才算最新_跟執行期同一套() {
+        let good = built();
+        assert!(is_current(good));
+        let mut old = good.to_vec();
+        old[8..10].copy_from_slice(&(VERSION - 1).to_le_bytes());
+        assert!(!is_current(&old), "舊版面不能算最新");
+        let cut = &good[..HEADER + 4];
+        assert!(!is_current(cut), "截斷的檔不能算最新");
+        for b in [good.to_vec(), old, cut.to_vec(), b"TSNGZH01".to_vec()] {
+            let runtime = ZhDict::new(Box::leak(b.clone().into_boxed_slice())).is_some();
+            assert_eq!(is_current(&b), runtime, "腳本與執行期的判斷不一致");
+        }
     }
 
     #[test]

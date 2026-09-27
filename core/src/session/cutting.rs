@@ -14,6 +14,30 @@ impl Session {
         compose::text_of(&self.slots)
     }
 
+    /// **真正送出（Enter／空白確認／切換語言／失焦……）時該送的文字**。
+    ///
+    /// 跟 `text()` 的差別只在鎖定日文、且還有半個 mora 卡在 `pending`
+    /// 時：`sush` 按 Enter，`su` 已經湊成「す」進 `keys`（`text()` 就有），
+    /// 但 `sh` 卡在 `pending`——`text()` 看不到它，導致使用者打過的字元
+    /// 無聲消失（見開發文件「鎖定日文打半個 mora 直接送出」）。
+    ///
+    /// **裁決（2026-09-27）**：已成字的照常轉假名，沒成字的尾巴照原樣
+    /// **字母**送出——`sush` + Enter → `すsh`，不是憑空消失，也不是硬湊
+    /// 一個不完整的假名。
+    ///
+    /// 鎖定注音刻意不比照辦理：那條路已經有明確的相反規則（`input.rs`
+    /// 的 `drain_keys` 註解、2026-09-20 的修法）——半個注音符號不成字，
+    /// 送出時就是要丟掉，不是這個 bug 的範圍。自動模式與鎖定英文的
+    /// `pending()` 本來就是空字串（見 `Input::pending`），呼叫這支等於
+    /// `text()`，不受影響。
+    pub fn commit_text(&self) -> String {
+        let mut t = self.text();
+        if self.lock == Some(crate::language::Language::Romaji) {
+            t.push_str(&self.input.pending());
+        }
+        t
+    }
+
     /// 目前的選字格。
     pub fn slots(&self) -> &[Slot] {
         &self.slots

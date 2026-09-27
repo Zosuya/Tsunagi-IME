@@ -34,21 +34,44 @@ if (-not $Version) {
 }
 Write-Host "版本 $Version" -ForegroundColor Cyan
 
+# -SkipBuild 也要 cargo：第 2 步一定要跑詞庫產生器
+$cargo = if (Get-Command cargo -ErrorAction SilentlyContinue) { 'cargo' }
+         else { Join-Path (Join-Path (Join-Path $env:USERPROFILE '.cargo') 'bin') 'cargo.exe' }
+if (-not (Test-Path $cargo) -and $cargo -ne 'cargo') { Fail "找不到 cargo" }
+$manifest = Join-Path $root 'Cargo.toml'
+
 # --- 1. 建置 ---
 if (-not $SkipBuild) {
-    $cargo = if (Get-Command cargo -ErrorAction SilentlyContinue) { 'cargo' }
-             else { Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
-    if (-not (Test-Path $cargo) -and $cargo -ne 'cargo') { Fail "找不到 cargo" }
-
-    Write-Host "`n[1/3] cargo build --release" -ForegroundColor Cyan
-    & $cargo build --release --manifest-path (Join-Path $root 'Cargo.toml')
+    Write-Host "`n[1/4] cargo build --release" -ForegroundColor Cyan
+    & $cargo build --release --manifest-path $manifest
     if ($LASTEXITCODE -ne 0) { Fail "cargo build 失敗" }
 } else {
-    Write-Host "`n[1/3] 跳過建置" -ForegroundColor DarkGray
+    Write-Host "`n[1/4] 跳過建置" -ForegroundColor DarkGray
 }
 
-# --- 2. 檢查要打包的檔案 ---
-Write-Host "`n[2/3] 檢查打包清單" -ForegroundColor Cyan
+# --- 2. 二進位詞庫：舊版面就重產，再確認是這一版程式認得的 ---
+#
+# **安裝版只帶 `.bin`、不帶文字詞典**（見 tsunagi.iss 的 [Files]）。包進去
+# 的 `.bin` 程式認不得的話沒有任何退路：日文詞典整個消失，而且不會有錯誤
+# 訊息。下一步的清單只檢查「在不在」，擋不住「在、但舊了」——dict_ja.bin
+# 的 VERSION 2→3 就差點這樣包出去（開發機上那份還是 v2）。
+#
+# 所以先 `--if-stale`（認得就跳過、認不得或不存在就重產），再 `--check`
+# 守門。判準在 core（`dict_bin::is_current` 那幾支），跟執行期認檔同一套，
+# 不只看檔頭。**`-SkipBuild` 也照跑**——它跳過的是編譯，不是這道檢查。
+Write-Host "`n[2/4] 二進位詞庫的版面" -ForegroundColor Cyan
+$gens = @('gen_dict_zh', 'gen_dict_ja', 'gen_connection')
+foreach ($g in $gens) {
+    & $cargo run --release -q --manifest-path $manifest -p ime-core --bin $g -- --if-stale
+    if ($LASTEXITCODE -ne 0) { Fail "$g 重產失敗（原料不齊的話先跑 .\data\download.ps1）" }
+}
+foreach ($g in $gens) {
+    & $cargo run --release -q --manifest-path $manifest -p ime-core --bin $g -- --check
+    if ($LASTEXITCODE -ne 0) { Fail "$g：要包進去的 .bin 不是這一版程式認得的版面" }
+}
+
+# --- 3. 檢查要打包的檔案 ---
+Write-Host "`n[3/4] 檢查打包清單" -ForegroundColor Cyan
 # **這份清單要跟 tsunagi.iss 的 [Files] 一致**——它是「缺檔就早點失敗」的
 # 守門員，漏列的檔案在這裡不會被抓到，要等 ISCC 編譯才報錯（或更糟：
 # 靜靜地少裝一個檔）。加減 iss 的檔案時記得同步這裡。
@@ -90,8 +113,8 @@ if ($missing) {
 }
 Write-Host ("  合計 {0:N1} MB" -f ($total / 1MB)) -ForegroundColor DarkGray
 
-# --- 3. 打包 ---
-Write-Host "`n[3/3] 編譯安裝程式" -ForegroundColor Cyan
+# --- 4. 打包 ---
+Write-Host "`n[4/4] 編譯安裝程式" -ForegroundColor Cyan
 $iscc = @(
     "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",

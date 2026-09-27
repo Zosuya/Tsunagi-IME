@@ -277,6 +277,10 @@ impl Session {
     /// 「選了『你』，『郝』就自己變成『好』」。
     pub fn pick_char(&mut self, choice: &str) {
         let Some(i) = self.select_idx else { return };
+        // **選回原樣的長輸出格要拆回多格**，不然逐字選字做不到
+        if self.unmerge_long(i, choice) {
+            return;
+        }
         // 在這個切法底下選了字，等於認可了這個分段——
         // 之後重算要找回它，不能跳回第一名
         self.remember_cut();
@@ -293,7 +297,50 @@ impl Session {
             keys,
             text: choice.to_string(),
         });
+        // 手動選字蓋過模糊音凍結——`compose::pick` 已經把那一格的
+        // `fuzzy_fixed` 清掉，這裡把跨按鍵記著的凍結也一併作廢，
+        // 不然下次 `reapply_fuzzy_fixes` 又把它標回去
+        self.fuzzy_fixes.retain(|p| p.at != at);
         compose::pick(&mut self.slots, i, choice);
+    }
+
+    /// **選回原樣的長輸出格 → 拆回多格。** 拆了回 `true`。
+    ///
+    /// # 為什麼需要
+    ///
+    /// 長輸出是多格併一格的（`ㄋㄧˇㄏㄠˇ` → 今天天氣好），併完之後
+    /// 那一格的按鍵是整串、文字是整串，**逐字選字做不到**——想把
+    /// 「你」改成「妳」沒有格子可以移過去。
+    ///
+    /// 候選裡本來就有「原樣」那一條（`merge_pack_long` 算好的退路），
+    /// 選了它就代表「我不要這個長輸出」。這一支把那串按鍵記進
+    /// `no_expand` 再重算，`merge_pack_long` 就會跳過它，格子自然
+    /// 拆回原本的多格。
+    ///
+    /// # 判準是「選的不是包給的任何一筆」
+    ///
+    /// 不是比對文字內容——包裡可能有一筆剛好等於原樣（去重之後只留
+    /// 一份，見 `merge_pack_long`）。問包「這串按鍵有哪些長輸出」，
+    /// 選的東西不在裡面就是原樣。
+    fn unmerge_long(&mut self, i: usize, choice: &str) -> bool {
+        // 一般的格子（一格一個字）不會有這個問題，快速跳過
+        if self.slots[i].keys.chars().count() < 2 {
+            return false;
+        }
+        let keys = self.slots[i].keys.clone();
+        let longs = crate::pack::zh_long_all(&keys);
+        if longs.is_empty() || longs.iter().any(|l| l == choice) {
+            // 不是長輸出格，或選的就是包給的某一筆——照原路走
+            return false;
+        }
+        if self.no_expand.contains(&keys) {
+            return false;
+        }
+        self.no_expand.push(keys);
+        // **反白框收掉**：格數要變了，原本的位置指不到對的地方
+        self.exit_select();
+        self.rebuild_slots();
+        true
     }
 
     /// 選完字之後離開選字模式。

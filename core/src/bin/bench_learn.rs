@@ -172,6 +172,7 @@ fn main() {
                     is_mark: false,
                     cands: None,
                     picked: changed && sl.selectable,
+                    fuzzy_fixed: false,
                 });
             }
             learned += ime_core::learn::record(&fixed);
@@ -248,6 +249,7 @@ fn 選一次(keys: &str, ch: &str) {
         is_mark: false,
         cands: None,
         picked: true,
+        fuzzy_fixed: false,
     };
     ime_core::learn::record(&[slot]);
 }

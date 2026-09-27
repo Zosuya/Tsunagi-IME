@@ -173,6 +173,7 @@ pub fn apply_to(session: &mut ime_core::session::Session) {
             lock_punct,
             ctrl_punct,
             fuzzy_tone,
+            auto_expand_long,
         } = &l.config.behavior;
 
         // 全半形的開機預設。使用者按 Shift+空白切過之後以那個為準，
@@ -188,6 +189,8 @@ pub fn apply_to(session: &mut ime_core::session::Session) {
         // 狀態**——`compose` 是純函式、四個入口都不收設定，而這個開關
         // 一個行程一份，語意跟 `learn::any()` 一樣。
         ime_core::compose::set_fuzzy_tone(*fuzzy_tone);
+        // 擴充包的長輸出要不要打完就展開。跟 `fuzzy_tone` 同一個模式。
+        ime_core::compose::set_auto_expand_long(*auto_expand_long);
 
         // ── 以下不在這裡套用，但**必須交代** ──
         //

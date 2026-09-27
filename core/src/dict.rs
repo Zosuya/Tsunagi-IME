@@ -103,16 +103,151 @@ fn map_file(path: &Path) -> Option<&'static [u8]> {
 /// 原子的、會換成新的 inode，舊的映射原封不動活到那些行程結束。
 ///
 /// 附帶一個好處：中途失敗（磁碟滿、斷電）不會留下半個檔，要嘛是舊的
-/// 完整版、要嘛是新的完整版。
+/// 完整版、要嘛是新的完整版。失敗時也不留 `.tmp`。
 ///
 /// 暫存檔跟目標**放在同一個目錄**——跨檔案系統改不了名。
+///
+/// # Windows：目標正被映射時，要看檔案系統
+///
+/// 詞庫是**每個宿主行程都映射著**的（認不得的舊版面也一樣——`map_file`
+/// 映射完才驗檔頭，驗不過的那份映射照樣留到行程結束），所以「輸入法用著
+/// 的時候重產詞庫」是常態，不是邊角。2026-09-23 實測（臨時探針：另一個
+/// 行程用 `map_file` 映射著目標，這邊呼叫舊版的這支）：
+///
+/// | 目標所在 | 直接改名蓋過去 | 把舊檔改名讓開 |
+/// |---|---|---|
+/// | NTFS（C:、D:） | ✅ | ✅ |
+/// | exFAT（隨身碟、外接碟） | ❌ 存取被拒 | ✅ |
+/// | 網路磁碟（`\\localhost\D$`） | ❌ 存取被拒 | ✅ |
+///
+/// NTFS 會過，是因為 std 的 `rename`／`remove_file` 用的是 **POSIX 語意**
+/// ——同一顆 NTFS、同一個被映射的檔，Win32 的 `MoveFileExW`（帶
+/// `MOVEFILE_REPLACE_EXISTING`）照樣被拒，用 `SetFileInformationByHandle`
+/// 走舊式的刪除與改名也被拒。檔案系統不支援 POSIX 語意時 std 只能走舊式，
+/// 而舊式**不准刪、也不准蓋掉被映射的檔，但准改名**。舊版的做法是「先
+/// `remove_file`（失敗就吞掉）再 `rename`」，在 exFAT 上兩步都被拒，
+/// `gen_dict_ja` 就報「寫不進」。所以這不是「Windows 一律不行」，是
+/// **「要看檔案系統與 std 的版本」**——兩件都不歸我們管。
+///
+/// 所以 Windows 上先照常改名蓋過去（NTFS 走這條，原子、沒有空窗）；被拒
+/// 才把舊檔改名成 `<名字>.old-<序號>` 讓出路徑，再把新檔放到位。讓開的
+/// 舊檔還被映射著、刪不掉，留到下一次寫同一個檔時再清。
 pub fn write_data_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, bytes)?;
-    // Windows 的 rename 在目標已存在時會失敗，所以先移開舊的。
-    // `fs::rename` 在 POSIX 上本來就會覆蓋，多這一步不影響。
-    let _ = std::fs::remove_file(path);
-    std::fs::rename(&tmp, path)
+    let r = replace_with(&tmp, path);
+    if r.is_err() {
+        // 放不到位的暫存檔留著沒有用，只會讓人以為產出來了
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
+}
+
+/// POSIX 的 `rename` 本來就原子地蓋掉目標，已經映射的舊 inode 不受影響。
+#[cfg(not(windows))]
+fn replace_with(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    std::fs::rename(tmp, path)
+}
+
+/// 見 `write_data_file` 的「Windows」一節。
+#[cfg(windows)]
+fn replace_with(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    let first = match std::fs::rename(tmp, path) {
+        Ok(()) => {
+            sweep_parked(path);
+            return Ok(());
+        }
+        Err(e) => e,
+    };
+    // 目標根本不在卻還是失敗，就不是「被映射」的問題，讓開也沒用
+    if !path.exists() {
+        return Err(first);
+    }
+    let Some(parked) = park(path) else {
+        return Err(first);
+    };
+    if let Err(e) = std::fs::rename(tmp, path) {
+        // 新的放不進去就把舊的放回去——寧可舊版，也不要什麼都沒有
+        let _ = std::fs::rename(&parked, path);
+        return Err(e);
+    }
+    sweep_parked(path);
+    Ok(())
+}
+
+/// 讓開的舊檔叫什麼：`<檔名>.old-<序號>`。
+#[cfg(windows)]
+fn parked_name(path: &Path, n: u32) -> Option<std::path::PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    Some(path.with_file_name(format!("{name}.old-{n}")))
+}
+
+/// 把 `path` 改名讓開，回傳改成的名字。
+///
+/// **不能拿固定名稱**：上一輪讓開的還被映射著（刪不掉）時，同名改名會
+/// 失敗——`build-ime.ps1` 對付 DLL 時就踩過，所以找第一個沒人用的序號。
+#[cfg(windows)]
+fn park(path: &Path) -> Option<std::path::PathBuf> {
+    (1..1000)
+        .filter_map(|n| parked_name(path, n))
+        .find(|p| !p.exists())
+        .filter(|p| std::fs::rename(path, p).is_ok())
+}
+
+/// 盡力清掉以前讓開的舊檔。還被映射著的刪不掉，留著下次再清。
+#[cfg(windows)]
+fn sweep_parked(path: &Path) {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    // 只給檔名的相對路徑，`parent()` 是空字串，`read_dir("")` 會失敗
+    // ——實測漏清過一次
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    let prefix = format!("{name}.old-");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let f = e.file_name();
+        let Some(f) = f.to_str() else { continue };
+        let is_parked = f
+            .strip_prefix(&prefix)
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if is_parked {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// 一個產出的二進位資料檔，跟**這一版程式**期望的版面比起來是什麼狀態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinState {
+    /// 檔案不存在
+    Missing,
+    /// 在，但這一版程式認不得（版面改過、或是壞檔）
+    Stale,
+    /// 在，而且這一版程式認得
+    Current,
+}
+
+/// 讀 `path`，用 `is_current`（`dict_bin::is_current` 那一類）判斷狀態。
+///
+/// 給 `gen_* --if-stale`／`--check` 用：建置與打包腳本靠它決定要不要重產、
+/// 包出去的是不是能用的檔。**用 `fs::read` 不用 `map_file`**——映射會一直
+/// 留到行程結束，同一個行程接著重產時，自己就成了那個「映射著目標」的人。
+///
+/// 讀不了（權限之類）回 `Err`，不要當成 `Missing`——那會讓腳本以為要重產，
+/// 接著在寫入時才失敗，錯誤訊息指錯地方。
+pub fn bin_state(path: &Path, is_current: fn(&[u8]) -> bool) -> std::io::Result<BinState> {
+    match std::fs::read(path) {
+        Ok(b) if is_current(&b) => Ok(BinState::Current),
+        Ok(_) => Ok(BinState::Stale),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BinState::Missing),
+        Err(e) => Err(e),
+    }
 }
 
 /// 注音版面載好了嗎？拿得到才查。
@@ -966,8 +1101,11 @@ pub fn words_for(keys: &str) -> Vec<Cow<'static, str>> {
         }
     }
     if crate::pack::any() {
-        if let Some(w) = crate::pack::index().zh_get(keys) {
-            push(Cow::Owned(w.to_string()));
+        // **`zh_all` 不是 `zh_get`**：同一串按鍵在包裡可以有多個輸出
+        // （2026-09-20 使用者裁定），選字時要全部列得出來。
+        // `word_for` 那條仍然只取第一個——那是不動選字鍵的預設值。
+        for w in crate::pack::index().zh_all(keys) {
+            push(Cow::Owned(w));
         }
     }
     if let Some(d) = zh() {
@@ -984,7 +1122,13 @@ pub fn words_for_kana(kana: &str) -> Vec<String> {
     let Some(i) = d.find(kana) else {
         return Vec::new();
     };
-    d.cands(i).map(|c| c.surface.to_string()).collect()
+    let mut out: Vec<String> = Vec::new();
+    for c in d.cands(i) {
+        if !out.iter().any(|w| w == c.surface) {
+            out.push(c.surface.to_string());
+        }
+    }
+    out
 }
 
 /// 日文版面載好了嗎？拿得到才查。
@@ -1238,6 +1382,57 @@ const CONFIDENT_COST: u32 = 7400;
 /// 接續矩陣檔頭的長度：magic(4) + ver(2) + n(2)
 const CONNECTION_HEADER: usize = 8;
 
+/// 接續矩陣檔的識別碼與版本。**產檔（`encode_connection`）跟載入
+/// （`connection_side`）只看這兩個常數**，格式只寫在這一處。
+///
+/// 改了格式或內容的產生方式就把版本加一：載入端會拒收舊檔，
+/// `gen_connection --if-stale` 也會因此知道要重產。
+const CONNECTION_MAGIC: &[u8; 4] = b"TSCM";
+const CONNECTION_VERSION: u16 = 1;
+
+/// 把接續矩陣編成 `connection.bin` 的 bytes。
+///
+/// ```text
+/// magic  4 bytes  "TSCM"
+/// ver    u16      1
+/// n      u16      矩陣邊長（id 數）
+/// data   u16 × n×n   little-endian，索引 rid * n + lid
+/// ```
+///
+/// **little-endian 是刻意的**：三個目標平台（Windows／macOS／Linux）
+/// 都是 LE，不必為了理論上的可攜性去付位元組序轉換的成本。
+pub fn encode_connection(n: u16, data: &[u16]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::with_capacity(CONNECTION_HEADER + data.len() * 2);
+    out.extend_from_slice(CONNECTION_MAGIC);
+    out.extend_from_slice(&CONNECTION_VERSION.to_le_bytes());
+    out.extend_from_slice(&n.to_le_bytes());
+    for v in data {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// 認接續矩陣的檔頭，認得而且大小對得上就回傳邊長。
+fn connection_side(bytes: &[u8]) -> Option<usize> {
+    if bytes.len() < CONNECTION_HEADER || &bytes[..4] != CONNECTION_MAGIC {
+        return None;
+    }
+    let ver = u16::from_le_bytes([bytes[4], bytes[5]]);
+    let n = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
+    if ver != CONNECTION_VERSION || n == 0 {
+        return None;
+    }
+    (bytes.len() == CONNECTION_HEADER + n * n * 2).then_some(n)
+}
+
+/// 這份 bytes 是不是**這一版程式認得的** `connection.bin`。
+///
+/// 給 `gen_connection --if-stale`／`--check` 用，判準跟 `load_connection`
+/// 是同一支 `connection_side`。道理見 `dict_bin::is_current`。
+pub fn connection_is_current(bytes: &[u8]) -> bool {
+    connection_side(bytes).is_some()
+}
+
 pub struct Connection {
     n: usize,
     /// 整個檔案的 bytes，**借的不是複製的**。
@@ -1277,16 +1472,8 @@ pub fn load_connection(data_dir: &Path) -> Option<&'static Connection> {
         .get_or_init(|| {
             let path = data_dir.join("japanese").join("connection.bin");
             let bytes = map_file(&path)?;
-            // 檔頭：magic(4) + ver(2) + n(2)
-            if bytes.len() < CONNECTION_HEADER || &bytes[..4] != b"TSCM" {
-                return None;
-            }
-            let ver = u16::from_le_bytes([bytes[4], bytes[5]]);
-            let n = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
-            if ver != 1 || n == 0 {
-                return None;
-            }
-            (bytes.len() == CONNECTION_HEADER + n * n * 2).then_some(Connection { n, bytes })
+            let n = connection_side(bytes)?;
+            Some(Connection { n, bytes })
         })
         .as_ref()
 }
@@ -1364,6 +1551,30 @@ pub fn load_japanese(data_dir: &Path) -> Option<&'static crate::dict_bin::KanaDi
         bump_generation();
     }
     ja()
+}
+
+/// `build_kana_layout` 要讀的原料裡，**缺了哪幾份**（回傳路徑；全在就是空的）。
+///
+/// # 為什麼要問這個
+///
+/// `build_kana_layout` 是執行期的退路，所以缺原料時**刻意不失敗**，默默
+/// 產一份退化的版面：
+///
+/// - 少了 `connection_single_column.txt` → 沒有句首句尾接續，排序只看詞成本
+///   （sushi 變「酸し」）
+/// - 十份詞典少幾份 → 那幾份的詞查不到（只讀三份時 すし、がっこう 都不見）
+///
+/// 執行期這樣退是對的（總比沒有好），但 **`gen_dict_ja` 產的是要被包出去、
+/// 被 `--if-stale` 當成「已是最新」的成品**——退化的檔一旦寫出去，檔頭是
+/// 對的，之後沒有任何關卡會發現。所以產檔端先問這支，缺了就大聲失敗。
+pub fn missing_kana_sources(data_dir: &Path) -> Vec<std::path::PathBuf> {
+    let ja = data_dir.join("japanese");
+    let mut need: Vec<std::path::PathBuf> = (0..10)
+        .map(|i| ja.join(format!("dictionary{i:02}.txt")))
+        .collect();
+    need.push(ja.join("connection_single_column.txt"));
+    need.retain(|p| !p.is_file());
+    need
 }
 
 /// 從 mozc 的十個文字詞典組出二進位版面。
@@ -1473,6 +1684,40 @@ pub fn is_japanese_word(keys: &str) -> bool {
         Some(k) => d.contains(&k),
         None => false,
     }
+}
+
+/// 這串羅馬字**有把握是日文**嗎？——讀音的首選詞條夠常用，是
+/// `best_kana_word` 敢不問使用者就直接寫成漢字的那種（`CONFIDENT_COST`
+/// 那張位圖）。
+///
+/// # 為什麼 `is_japanese_word` 不夠
+///
+/// mozc 74 萬條，冷僻詞條多得是：`api`（アピ）、`mode`（モデ）、
+/// `youtube`（ヨウツベ）、`usere`（失せれ）都「查得到」。只問查不查得到，
+/// 這些英文詞與假名碎片就跟 `sushi`（寿司）、`desu`（です）分不開。
+///
+/// 兩個地方問它，問的都是「這段日文站得住嗎」：
+///
+/// - `incremental::lang_of`：常用英文詞、日文那邊只有冷僻詞條 → 判英文
+/// - `rank::kana_stole_head`：有把握的日文詞（です、雨）不算偷了注音的頭
+///
+/// **`rank::in_dict` 不問它**——曾經改問過（D-H4b），冷僻的日文名詞
+/// （`膝裏`、`部屋中`）因此被拆成英文碎片、助詞緊接數字全壞，已否決
+/// （2026-09-25），見 `in_dict` 上的註解。
+///
+/// # 要先問切詞學習，跟 `is_japanese_word` 一樣
+///
+/// 使用者用段選單教過「這段是日文」（`learn::record_cutting`），`lang_of`
+/// 的判斷卻只問詞典冷不冷僻，學習等於白學：照樣把它改判英文。跟
+/// `is_japanese_word` 一樣先問 `learn::cutting().lang_of(keys)`——
+/// 學過是日文就直接算有把握，不必再看詞典成本。
+pub fn is_confident_japanese(keys: &str) -> bool {
+    if crate::learn::cut_any()
+        && crate::learn::cutting().lang_of(keys) == Some(crate::language::Language::Romaji)
+    {
+        return true;
+    }
+    crate::romaji::kana::to_kana(keys).is_some_and(|k| best_kana_word(&k).is_some())
 }
 
 /// 日文詞典載入了嗎？
@@ -1586,6 +1831,127 @@ mod tests {
         let (bos, eos) = super::load_connection_edges(&base);
         assert!(bos.is_empty() && eos.is_empty());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `connection.bin` 的格式只寫在 core 一處：產出來的檔自己要認得，
+    /// 舊版本與截斷的要認不得（`gen_connection --if-stale` 靠這個判斷）。
+    #[test]
+    fn 接續矩陣_產出來的自己認得_舊的認不得() {
+        let good = super::encode_connection(2, &[1, 2, 3, 4]);
+        assert_eq!(super::connection_side(&good), Some(2));
+        assert!(super::connection_is_current(&good));
+        let mut old = good.clone();
+        old[4..6].copy_from_slice(&(super::CONNECTION_VERSION + 1).to_le_bytes());
+        assert!(!super::connection_is_current(&old), "版本對不上不能算最新");
+        assert!(!super::connection_is_current(&good[..good.len() - 1]));
+    }
+
+    /// `bin_state` 分得出三種狀態——`--if-stale` 靠它決定要不要重產，
+    /// `--check` 靠它決定打包能不能往下走。
+    #[test]
+    fn 資料檔狀態_不存在_舊的_目前的() {
+        use super::{bin_state, BinState};
+        let dir = std::env::temp_dir().join(format!("tsunagi_bin_state_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("connection.bin");
+        let is = super::connection_is_current;
+        assert_eq!(bin_state(&p, is).unwrap(), BinState::Missing);
+        std::fs::write(&p, b"TSCM\x00\x00").unwrap();
+        assert_eq!(bin_state(&p, is).unwrap(), BinState::Stale);
+        super::write_data_file(&p, &super::encode_connection(1, &[7])).unwrap();
+        assert_eq!(bin_state(&p, is).unwrap(), BinState::Current);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `gen_dict_ja` 產檔前的原料檢查：**缺 `connection_single_column.txt`
+    /// 要被點名**。
+    ///
+    /// 執行期缺它會默默退化（沒有句首句尾接續，排序只看詞成本），而產出來
+    /// 的檔檔頭是對的——`--if-stale` 之後永遠當它「已是最新」。所以產檔端
+    /// 一定要在這裡擋下來。
+    #[test]
+    fn 日文原料缺哪份要點名() {
+        let base = std::env::temp_dir().join(format!("tsunagi_kana_src_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let ja = base.join("japanese");
+        std::fs::create_dir_all(&ja).unwrap();
+        for i in 0..10 {
+            std::fs::write(ja.join(format!("dictionary{i:02}.txt")), "").unwrap();
+        }
+        assert_eq!(
+            super::missing_kana_sources(&base),
+            vec![ja.join("connection_single_column.txt")]
+        );
+        std::fs::write(ja.join("connection_single_column.txt"), "").unwrap();
+        std::fs::remove_file(ja.join("dictionary07.txt")).unwrap();
+        assert_eq!(
+            super::missing_kana_sources(&base),
+            vec![ja.join("dictionary07.txt")],
+            "十份詞典少一份也要擋"
+        );
+        std::fs::write(ja.join("dictionary07.txt"), "").unwrap();
+        assert!(super::missing_kana_sources(&base).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **輸入法用著的時候重產詞庫**：目標正被映射，`write_data_file` 也要
+    /// 寫得進去，而且舊映射看到的位元組不能變。
+    ///
+    /// 同一個資料夾走兩條路：本機路徑（NTFS，std 用 POSIX 語意，舊版的
+    /// 寫法也過），以及回送的網路路徑 `\\localhost\C$\…`（SMB 沒有 POSIX
+    /// 語意，std 退回舊式——跟 exFAT 隨身碟同一種，2026-09-23 實測兩者
+    /// 行為相同）。**舊版的寫法只會在後者失敗**，所以拿不到網路路徑時
+    /// 這條只剩半條，會印出來。
+    #[cfg(all(windows, feature = "mmap"))]
+    #[test]
+    fn 映射中的資料檔也換得掉() {
+        let local = std::env::temp_dir().join(format!("tsunagi_wdf_mapped_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&local);
+        std::fs::create_dir_all(&local).unwrap();
+        let mut dirs = vec![local.clone()];
+        match unc_loopback(&local) {
+            Some(u) if u.is_dir() => dirs.push(u),
+            _ => eprintln!(
+                "拿不到 {} 的回送網路路徑（系統管理共用沒開？），舊式語意那半沒測到",
+                local.display()
+            ),
+        }
+        for dir in &dirs {
+            let path = dir.join("x.bin");
+            std::fs::write(&path, b"OLD").unwrap();
+            // 跟 `map_file` 同一種映射（`File::open` 全共享＋`Mmap::map`），
+            // 但要放得掉，才驗得到「映射結束後，下一次寫會清掉讓開的舊檔」
+            let m = unsafe { memmap2::Mmap::map(&std::fs::File::open(&path).unwrap()) }.unwrap();
+            if let Err(e) = super::write_data_file(&path, b"NEW") {
+                panic!("{}：映射中寫不進去：{e}", dir.display());
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), b"NEW", "{}", dir.display());
+            assert_eq!(&m[..], b"OLD", "舊映射看到的位元組不能變");
+            drop(m);
+            super::write_data_file(&path, b"NEWER").unwrap();
+            let left: Vec<String> = std::fs::read_dir(dir)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n != "x.bin")
+                .collect();
+            assert!(
+                left.is_empty(),
+                "{}：讓開的舊檔或暫存檔沒清掉：{left:?}",
+                dir.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&local);
+    }
+
+    /// `C:\Users\…` → `\\localhost\C$\Users\…`（系統管理共用）。
+    #[cfg(all(windows, feature = "mmap"))]
+    fn unc_loopback(p: &std::path::Path) -> Option<std::path::PathBuf> {
+        let s = p.to_str()?;
+        let s = s.strip_prefix(r"\\?\").unwrap_or(s);
+        let (drive, rest) = s.split_once(':')?;
+        (drive.len() == 1).then(|| format!(r"\\localhost\{drive}${rest}").into())
     }
 
     /// 駐留：同一個字串重複要，拿到的必須是**同一塊記憶體**。
@@ -1860,10 +2226,54 @@ mod 學習與偏好表 {
             is_mark: false,
             cands: None,
             picked: true,
+            fuzzy_fixed: false,
         };
         crate::learn::record(&[slot]);
         let 學過之後 = best_char_for("2u4").map(|s| s.to_string());
         crate::learn::clear();
         assert_eq!(乾淨, 學過之後, "學了不相干的字，這個音節的第一名不該變");
+    }
+
+    /// **`is_confident_japanese` 要先問切詞學習**，跟 `is_japanese_word`
+    /// 一樣——不然使用者用段選單教過「這段是日文」，`lang_of`／`in_dict`
+    /// 這兩個問它的地方照樣把那段當冷僻詞條處理，學了等於白學。
+    #[test]
+    fn 有把握的判斷要先問切詞學習() {
+        if !crate::compose::tests::load() || !crate::dict::all_loaded() {
+            return;
+        }
+        crate::learn::clear();
+        // 挑一個真的冷僻、學習之前判定沒把握的日文段
+        let keys = "usere";
+        assert!(
+            is_japanese_word(keys) && !is_confident_japanese(keys),
+            "前提：{keys} 詞典收了、但不算有把握"
+        );
+        let seg = |k: &str, lang: crate::language::Language| crate::cutpoint::Segment {
+            keys: k.into(),
+            is_mark: false,
+            lang,
+        };
+        let default = [seg(keys, crate::language::Language::English)];
+        let chosen = [seg(keys, crate::language::Language::Romaji)];
+        // `build_cutting` 有門檻（`LEARNED_CUT`，預設 3 次）才會生效，
+        // 不是記一次就進 `Cutting` 索引
+        for _ in 0..3 {
+            crate::learn::record_cutting(keys, &chosen, &default);
+        }
+        assert_eq!(
+            crate::learn::cutting().lang_of(keys),
+            Some(crate::language::Language::Romaji),
+            "前提：學到 {keys} 是日文"
+        );
+        assert!(
+            is_confident_japanese(keys),
+            "學過是日文之後，{keys} 該算有把握——不然段選單教過的東西沒有用"
+        );
+        crate::learn::clear();
+        assert!(
+            !is_confident_japanese(keys),
+            "清掉學習之後要恢復原本的判斷，別讓這條測試汙染其他測試"
+        );
     }
 }

@@ -444,6 +444,28 @@ pub fn 漢字候選(keys: &str) -> Vec<String> {
         return Vec::new();
     }
 
+    // **来る 是不規則動詞，語幹會變（き／こ／く）**，`接語尾` 靠「語幹
+    // 不變、只變語尾」的假設接不上——整串就是它的活用形時直接組
+    // （kita → 来た），排最前面（遠比同音的 着る 常用）。
+    let mut 來: Vec<String> = Vec::new();
+    {
+        let low = keys.to_ascii_lowercase();
+        const KURU: &[&str] = &[
+            "kita",
+            "kite",
+            "konai",
+            "kimasu",
+            "kimashita",
+            "kimasita",
+            "koyou",
+            "kureba",
+            "korareru",
+        ];
+        if KURU.contains(&low.as_str()) {
+            let rest: String = 活用假名.chars().skip(1).collect();
+            來.push(format!("来{rest}"));
+        }
+    }
     let 全部 = crate::dict::words_for_kana(&辭書假名);
     // **同一個語幹有沒有更短的送假名寫法**——那是五段的訊號。
     //
@@ -476,7 +498,7 @@ pub fn 漢字候選(keys: &str) -> Vec<String> {
             .collect::<HashSet<_>>()
     };
     // 詞典的順序就是可能性的順序，逐個試組，組得出來的都留著
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<String> = 來;
     for w in &全部 {
         if !是動詞表記(w) {
             continue;
@@ -576,14 +598,25 @@ fn 接語尾(
     // 這道要排在字面判準之前：「交じる」的送假名開頭是「じ」（い段），
     // 字面上跟「起きる」一模一樣，光看表記分不出來。
     let 送假名開頭 = 表記.chars().nth(語幹字數);
-    let 一段 = !有短寫法.contains(&漢字語幹)
-        && 送假名數 > 1
-        && 送假名開頭
-            .is_some_and(|c| "いきしちにひみりぎじぢびぴえけせてねへめれげぜでべぺ".contains(c));
+    // **送假名只有「る」、漢字吃掉整個語幹的一段動詞**（寝る・着る・
+    // 見る）：字面跟五段（帰る・切る・参る）一樣分不出來，改問詞典
+    // 有沒有五段的連用形「〜り」。
+    let 單字一段 =
+        送假名數 == 1 && 表記.ends_with('る') && 單字語幹是一段(&漢字語幹, &假名語幹);
+    let 一段 = 單字一段
+        || (!有短寫法.contains(&漢字語幹)
+            && 送假名數 > 1
+            && 送假名開頭.is_some_and(|c| {
+                "いきしちにひみりぎじぢびぴえけせてねへめれげぜでべぺ".contains(c)
+            }));
     let 有音便 = {
         // 一段的語尾帶著辭書形保留的那個假名（`変える` → 語尾「えった」），
         // 跳過它再看
-        let 起點 = if 一段 { 1 } else { 0 };
+        let 起點 = if 一段 {
+            送假名數.saturating_sub(1)
+        } else {
+            0
+        };
         語尾
             .chars()
             .nth(起點)
@@ -592,10 +625,46 @@ fn 接語尾(
     if 一段 && 有音便 {
         return None;
     }
-    if !一段 && 語尾.starts_with(['た', 'て']) {
+    if !一段 && 送假名數 == 1 {
+        // 送假名一個音的五段，活用音一定落在辭書形最後一個音那一行
+        // （切る → ら行／っ）。`kimasu` 不該組出「切ます」
+        let 行 = match 辭書假名.chars().last() {
+            Some('う') => "わいうえおっ",
+            Some('く') if 辭書假名.ends_with("いく") || 辭書假名.ends_with("ゆく") => {
+                "かきくけこいっ"
+            }
+            Some('く') => "かきくけこい",
+            Some('ぐ') => "がぎぐげごい",
+            Some('す') => "さしすせそ",
+            Some('つ') => "たちつてとっ",
+            Some('ぬ') => "なにぬねのん",
+            Some('ぶ') => "ばびぶべぼん",
+            Some('む') => "まみむめもん",
+            Some('る') => "らりるれろっ",
+            _ => "",
+        };
+        if !語尾.chars().next().is_some_and(|c| 行.contains(c)) {
+            return None;
+        }
+    } else if !一段 && 語尾.starts_with(['た', 'て']) {
         return None;
     }
     Some(format!("{漢字語幹}{語尾}"))
+}
+
+/// `寝`（ね）這種單字語幹是不是一段？詞典有裸語幹、而且**沒有**
+/// 五段連用形「語幹＋り」（帰り・切り・参り 都有，寝り・着り・見り 沒有）。
+fn 單字語幹是一段(漢字語幹: &str, 假名語幹: &str) -> bool {
+    let 有裸語幹 = crate::dict::cands_for_kana(假名語幹)
+        .iter()
+        .any(|c| c.surface == 漢字語幹);
+    if !有裸語幹 {
+        return false;
+    }
+    let 連用 = format!("{漢字語幹}り");
+    !crate::dict::cands_for_kana(&format!("{假名語幹}り"))
+        .iter()
+        .any(|c| c.surface == 連用)
 }
 
 /// 這個表記是**動詞**的寫法嗎——漢字＋u 段送假名。
@@ -879,6 +948,16 @@ fn 五段還原(low: &str) -> Option<String> {
         //
         // 所以候選要多幾個：把整個 i 段音節換掉的那些。
         let mut cands = vec![format!("{base}u")];
+        // **う 結尾的五段，未然形是「わ」不是「あ」**：買う kau → 買わない
+        // kawanai、間に合う maniau → 間に合わなかった。剝完語尾剩
+        // `kaw`／`maniaw`，把那個 `w` 拿掉才是語幹。
+        if *vowel == 'a' {
+            if let Some(head) = base.strip_suffix('w') {
+                if !head.is_empty() {
+                    cands.push(format!("{head}u"));
+                }
+            }
+        }
         for (i段, u段) in [
             ("sh", "su"),  // hanashi → hanasu
             ("s", "su"),   // hanasi  → hanasu（si 打法）
@@ -1245,6 +1324,121 @@ mod tests {
         // `KANA_FRAGMENT` 防的那批：從中文串切出來的短假名
         for k in ["ru", "su", "fu", "vu", "xu", "ta", "te", "ita", "tta"] {
             assert!(!is_inflected(k), "{k} 是碎片不是活用形");
+        }
+    }
+
+    /// **B-H3b 之一：送假名只有「る」的一段動詞（寝る・着る・見る）不能被
+    /// 誤判成五段**。
+    ///
+    /// 「寝る」的漢字把整個語幹吃掉，送假名只剩「る」，字面跟五段的
+    /// 「帰る・切る」一樣。判準要求送假名數 > 1 才算一段時，「寝た」
+    /// 完全不會出現在候選裡。
+    ///
+    /// 判準改成查詞典「有沒有五段的連用形『〜り』」：帰り／切り／参り
+    /// 都有 → 五段；寝り／着り／見り 都沒有 → 一段。
+    ///
+    /// **還原方式**：把 `接語尾` 裡「送假名數 > 1 且開頭是い／え段」
+    /// 那個一段判準改回唯一的判準（拿掉查詞典那條路），這條會紅
+    /// （候選裡沒有「寝た」）。
+    #[test]
+    fn 送假名只有一個字的一段動詞不被當成五段() {
+        if !有詞典() {
+            return;
+        }
+        assert_eq!(
+            漢字表記("neta").as_deref(),
+            Some("寝た"),
+            "寝る 是一段，寝た 該組得出來"
+        );
+        assert!(
+            漢字候選("neta").iter().any(|w| w == "寝た"),
+            "候選裡要看得到「寝た」：{:?}",
+            漢字候選("neta")
+        );
+    }
+
+    /// **B-H3b 之二：送假名只有一個音的五段動詞要檢查活用行**，
+    /// 不能把任何字接上「來」的一段語尾。
+    ///
+    /// 判準原本沒檢查活用音屬於辭書形最後一個音的哪一行，於是
+    /// `kimasu`（來ます／切ます 同音）用一段規則硬接會湊出文法錯誤的
+    /// 「切ます」；`kinai` 同理湊出「切ない」。
+    ///
+    /// **還原方式**：把 `接語尾` 裡「送假名只有一個音時，語尾第一個音
+    /// 要屬於辭書形最後一個音那一行」那道檢查拿掉，這條會紅
+    /// （`kimasu` 會多出病態的「切ます」候選）。
+    #[test]
+    fn 送假名一個音的五段要檢查活用行() {
+        if !有詞典() {
+            return;
+        }
+        assert!(
+            !漢字候選("kimasu").iter().any(|w| w == "切ます"),
+            "kimasu 不該湊出文法錯誤的「切ます」：{:?}",
+            漢字候選("kimasu")
+        );
+        assert!(
+            !漢字候選("kinai").iter().any(|w| w == "切ない"),
+            "kinai 不該湊出文法錯誤的「切ない」：{:?}",
+            漢字候選("kinai")
+        );
+    }
+
+    /// **B-H3b 之三：来る 的活用清單要涵蓋常見形式**，不能因為漏列
+    /// 就被判成同音的 着る。
+    ///
+    /// 原本的清單只有 9 條，清單外的形式（例如 `koyou` 沒漏，但漏列的
+    /// 那類）落回一般規則，被誤判成 `着る` 系。這裡釘住清單有的幾個
+    /// 常見形式，確認「来」排在候選最前面（遠比「着」常用）。
+    ///
+    /// **還原方式**：把 `漢字候選` 裡 `KURU` 那張表清空，這條會紅
+    /// （`kita`／`kite`／`kimasu` 都拿不到「来」開頭的候選）。
+    #[test]
+    fn 来る的活用形排最前面() {
+        if !有詞典() {
+            return;
+        }
+        assert_eq!(
+            漢字表記("kita").as_deref(),
+            Some("来た"),
+            "来る 該比 着る 常用"
+        );
+        assert_eq!(漢字表記("kite").as_deref(), Some("来て"));
+        assert_eq!(漢字表記("kimasu").as_deref(), Some("来ます"));
+        // 詞典會回 着ない（來る 的清單沒收 konai 之外的否定形也沒關係，
+        // 這裡守的是「有列在清單裡的形式排第一」，不是清單完整性本身）
+        assert_eq!(
+            漢字候選("konai").first().map(String::as_str),
+            Some("来ない")
+        );
+    }
+
+    /// **う 結尾的五段，未然形是「わ」不是「あ」**：買う kau → 買わない kawanai。
+    ///
+    /// 剝掉 `nai` 剩 `kawa`，照「a 段換回 u 段」只換最後一個母音會得到
+    /// `kawu`——不存在。う 行的未然形是わ，語幹要連那個 `w` 一起拿掉。
+    /// 修好之前這一整族（買わない、思わない、間に合わなかった）都認不出
+    /// 是活用形，排序就不會保護它們。
+    ///
+    /// 辭書形由 `mkkeys --ja` 產（買う kau、言う iu、使う tukau、思う omou、
+    /// 間に合う maniau）；`maniawanakatta` 是測資 japanese_verbs 那一句。
+    #[test]
+    fn う結尾五段的未然形是わ() {
+        // 這裡自己載詞庫——`有詞典()` 只問「載了沒」，並行時輪不到別人先載
+        // 的話整條會靜靜跳過
+        if !crate::compose::tests::load() || !dict::all_loaded() {
+            return;
+        }
+        for (活用, 辭書) in [
+            ("kawanai", "kau"),
+            ("kawanakatta", "kau"),
+            ("iwanai", "iu"),
+            ("tukawanakatta", "tukau"),
+            ("omowanai", "omou"),
+            ("maniawanakatta", "maniau"),
+        ] {
+            assert_eq!(辭書形(活用).as_deref(), Some(辭書), "{活用}");
+            assert!(is_inflected(活用), "{活用} 是活用形");
         }
     }
 }

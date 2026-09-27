@@ -34,6 +34,28 @@ if [ "$ALL" = 1 ]; then
 	"$CARGO" build --release -p ime-settings --manifest-path "$ROOT/Cargo.toml"
 fi
 
+# ★ 二進位詞庫：版面改了就重產 ★
+#
+# 對應 Windows 的 `build-ime.ps1` 那一段。程式改了詞庫的版面（VERSION
+# 加一）之後，磁碟上那份舊 `.bin` 就認不得了——這台的輸入法走指路檔讀
+# 專案的 data/，會退回從文字重建（每次啟動多等約 1 秒），症狀只是「變慢」，
+# 沒人會聯想到要重產。`--if-stale` 認得就跳過，認不得或不存在才重產。
+#
+# macOS 的 rename 直接蓋掉目標，輸入法行程映射著舊檔也不受影響
+# （`dict::write_data_file`）。日文那兩份的原料不進版控，沒下載過就跳過。
+echo "==> 檢查二進位詞庫的版面（這一版程式認不得就重產）"
+GENS="gen_dict_zh"
+if [ -d "$ROOT/data/japanese" ]; then
+	GENS="$GENS gen_dict_ja gen_connection"
+else
+	echo "    ⚠ 沒有 data/japanese（詞庫原始檔還沒下載），日文詞庫跳過——先跑 pwsh ./data/download.ps1"
+fi
+for g in $GENS; do
+	# pipefail 已開：產生器失敗會讓整支停下來，不會被 sed 吃掉結束碼
+	"$CARGO" run --release -q -p ime-core --bin "$g" --manifest-path "$ROOT/Cargo.toml" -- --if-stale \
+		| sed 's/^/    /'
+done
+
 echo "==> 組 bundle"
 rm -rf "$BUILT"
 mkdir -p "$BUILT/Contents/MacOS" "$BUILT/Contents/Resources"

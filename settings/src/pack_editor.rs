@@ -101,6 +101,17 @@ pub struct Meta {
     pub author: String,
     pub description: String,
     pub license: String,
+    /// 來源網址。**編輯器不提供這一欄的輸入框，但一定要原樣保留**。
+    ///
+    /// 它在這個 struct 裡的唯一任務是「載入時收下、存檔時寫回去」
+    /// ——少了它，`save()` 就得硬寫 `homepage: None`，於是**使用者
+    /// 開一次包再存檔，手寫的來源網址就無聲消失**。
+    ///
+    /// 這對 CC BY-SA 那類要求姓名標示的資料是**授權問題不是體驗問題**：
+    /// 台語包的檔頭寫著「上面那三行是正式欄位……不可以拿掉」，而
+    /// `homepage` 正是其中之一。（那個包目前靠 `readonly: true` 擋著，
+    /// 但第三方做的包沒有那道保險。）
+    pub homepage: String,
 }
 
 /// 編輯器的全部狀態。
@@ -112,6 +123,13 @@ pub struct State {
     pub editing: bool,
     /// 這是新的、還沒存過的包嗎
     pub is_new: bool,
+    /// 存檔時撞到同名的包，這裡放**建議的新名字**（`None` 是沒撞到）。
+    ///
+    /// 撞名不是錯誤而是**要使用者決定的事**，所以不只印一行紅字——
+    /// 旁邊給一個按鈕讓他一鍵改成這個名字再存（使用者裁定 2026-09-20：
+    /// 「擋下來或是幫他改」）。
+    pub name_clash: Option<String>,
+
     /// **這個包整包唯讀**（檔頭寫了 `# readonly: true`）。
     ///
     /// 內建包與官方語言包（台語那類）走這條——它們隨程式一起發布，
@@ -256,12 +274,38 @@ pub fn page(
         ui.colored_label(c, msg);
     }
 
+    // 撞名時給一個「改成這個名字再存」的按鈕——光印紅字的話使用者得自己
+    // 回去改名稱欄再按一次存檔，而那個名稱欄離狀態列很遠。
+    if let Some(建議) = state.name_clash.clone() {
+        ui.horizontal(|ui| {
+            if ui.button(format!("改名為「{建議}」並儲存")).clicked() {
+                state.meta.name = 建議;
+                state.name_clash = None;
+                save(state, &cfg.behavior.packs_dir);
+            }
+            if ui.button("我自己改").clicked() {
+                state.name_clash = None;
+            }
+        });
+    }
+
     legacy_ja_notice(ui, state, &cfg.behavior.packs_dir);
 
     ui.add_space(10.0);
     meta_section(ui, state);
     ui.add_space(14.0);
     rows_section(ui, state);
+
+    // ★ 整幀畫完才決定要不要收旗 ★
+    //
+    // 沒有任何按鍵欄舉旗（焦點離開了、或視窗退到背景）就立刻收掉，不要
+    // 讓輸入法繼續往別的 app 送按鍵串。旗子本身也會過期，這裡只是把那個
+    // 窗口從幾秒縮到一幀。
+    //
+    // **切到別的分頁時這支整個不會跑**，那時靠過期收尾。
+    if !RAISED_THIS_FRAME.replace(false) {
+        ime_core::keycapture::lower();
+    }
 }
 
 /// 舊版存壞的日文鍵：說清楚，並給一顆按鈕當場修掉。
@@ -869,7 +913,15 @@ fn row_widgets(
                 .memory_mut(|m| m.request_focus(egui::Id::new(("row_keys", i))));
         }
         if editing && !locked {
-            r.on_hover_text("點選以修改按鍵");
+            // **符號列的第二欄是名字不是按鍵**，而且逗號分隔就是多個
+            // 別名（`pack::split` 的行為）。那條規則在 UI 上完全看不見
+            // ——欄位不放提示文字是使用者定的原則（見檔頭），所以借
+            // hover 講一句。符號名字那格本來也不該說「修改按鍵」。
+            r.on_hover_text(if kind == Kind::Symbol {
+                "點選以修改名字。用逗號分隔可以給好幾個名字：星,hoshi,star"
+            } else {
+                "點選以修改按鍵"
+            });
         }
     }
 
@@ -1111,38 +1163,16 @@ fn draft_row(ui: &mut egui::Ui, state: &mut State, w_out: f32, w_keys: f32) {
     // 那支疊在一起（§2.75.12 的老毛病，2026-09-11 用這個方式再犯一次）
     ui.label("");
     if enter && ready {
-        // **同一組按鍵只能有一筆，新的蓋掉舊的**。
+        // **同一組按鍵可以有多筆**（2026-09-20 使用者裁定）。
         //
-        // 載入時是「先出現的贏」（`pack.rs` 的 `or_insert`），所以留兩筆
-        // 同按鍵的話**後面那筆永遠不會生效**，卻靜靜躺在檔案裡——
-        // 使用者以為改掉了，實際打出來還是舊的（實測回報：打同音的
-        // 「擬郝」想覆蓋「你好」，結果兩筆都在）。
+        // 以前這裡會把同按鍵的舊列刪掉，因為載入時是「先出現的贏」
+        // （`pack.rs` 的 `push_first`），留兩筆的話**後面那筆永遠不會
+        // 生效**，卻靜靜躺在檔案裡——使用者以為改掉了，實際打出來還是
+        // 舊的（實測回報：打同音的「擬郝」想覆蓋「你好」，結果兩筆都在）。
         //
-        // 舊的先拿掉、新的排最上面，畫面就跟實際行為一致。
-        // **同類別才算重複**：符號的名字跟某個英文詞的按鍵可能長得
-        // 一模一樣（`star`），那是兩回事，不該互相蓋掉
-        let is_sym = lang == Kind::Symbol;
-        let dup = state
-            .rows
-            .iter()
-            .position(|x| x.keys == keys && (x.lang == Kind::Symbol) == is_sym);
-        if let Some(i) = dup {
-            state.rows.remove(i);
-            if i < state.checked.len() {
-                state.checked.remove(i);
-            }
-            // 正在編輯的那一列如果排在被刪的後面，索引要往前挪
-            state.editing_keys = state.editing_keys.and_then(|k| match k.cmp(&i) {
-                std::cmp::Ordering::Equal => None,
-                std::cmp::Ordering::Greater => Some(k - 1),
-                std::cmp::Ordering::Less => Some(k),
-            });
-            state.editing_out = state.editing_out.and_then(|k| match k.cmp(&i) {
-                std::cmp::Ordering::Equal => None,
-                std::cmp::Ordering::Greater => Some(k - 1),
-                std::cmp::Ordering::Less => Some(k),
-            });
-        }
+        // 引擎改成多候選之後那個前提不成立了：三條同按鍵的條目全部
+        // 生效，選字時依序列出來，第一條是預設值。所以編輯器不再代替
+        // 使用者決定「只能留一筆」——**要覆蓋就自己改那一列**。
 
         // **新的排在最上面**——剛加的立刻看得到，不必捲下去找
         state.rows.insert(
@@ -1285,88 +1315,226 @@ fn bad_filename_chars(name: &str) -> String {
     out.trim_end().to_string()
 }
 
-/// 按鍵欄：**攔實體按鍵自己組，完全繞開輸入法**。
+thread_local! {
+    /// 這一幀有沒有哪個按鍵欄舉過旗。**收旗要等整幀畫完才能決定**——
+    /// 畫面上有好幾個按鍵欄，在沒焦點的那幾個裡直接收旗的話，會把同一幀
+    /// 稍早有焦點那個剛舉的旗子蓋掉（誰先畫誰倒楣，症狀是時好時壞）。
+    static RAISED_THIS_FRAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// 按鍵欄：唯讀的框，**輸入自己收**。
 ///
 /// # 為什麼不能用一般的文字框
 ///
 /// 使用者要在這一格打 `cj6wl6`，但他的系統輸入法（就是通譯自己）會把
-/// 它組成「胡桃」。先前試過讀 `Ime(Preedit)` 補救，**實測會掉字**：
-/// 第一個 `c` 已經被文字框當成一般字元吃掉，`Preedit` 才接手覆寫，
-/// 結果是 `:j6wl6`（使用者實測回報）。兩條路搶同一個欄位就是會漂。
+/// 它組成「胡桃」。也不能只靠 `Event::Key`：**輸入法開著時宿主收不到
+/// 任何鍵盤事件**，兩個平台都實測過（macOS 2026-09-20、Windows §2.75.8），
+/// 只認它的話這一格永遠打不進東西。
 ///
-/// 所以這裡不看文字內容，只看 `Event::Key`——**實體按鍵不經過輸入法**，
-/// 而注音鍵盤要的鍵（字母、數字、`;,./-` 與空白）egui 全都給得出來。
+/// # 三條來源，看內容不看平台
+///
+/// | 來源 | 什麼時候 | 內容 |
+/// |---|---|---|
+/// | `Event::Key` | 系統輸入法關著（ABC） | 實體按鍵 |
+/// | `Ime(Preedit)` | 組字中 | Windows 是按鍵、**macOS 是轉換後的國字** |
+/// | `Ime(Commit)` | 送出 | macOS **舉旗後**是原始按鍵 |
+///
+/// 收下去之前一律過 `looks_like_keys`——**像按鍵的才收**。macOS 組字中
+/// 那串國字就是這樣擋掉的（2026-09-19 實測回報：按鍵欄存進「你好」）。
+///
+/// 舉旗的事見 `ime_core::keycapture`：有焦點時一直舉著，輸入法看到就在
+/// 送出時改送原始按鍵，所以**組字中畫面上照舊是轉換後的字**，使用者
+/// 看得到自己在打什麼，按下送出才變成按鍵串。
 ///
 /// 回傳這一格有沒有焦點。
 fn keys_field(ui: &mut egui::Ui, keys: &mut String, id: egui::Id, width: f32) -> egui::Response {
-    // 唯讀的框：**顯示交給 egui，輸入自己來**。給它一份複本，
-    // 使用者打不進去（改動不會寫回 `keys`），但游標、選取、捲動照常
-    let mut shown = keys.clone();
-    let r = ui.add(
-        egui::TextEdit::singleline(&mut shown)
-            .id(id)
-            .desired_width(width),
-    );
-
-    if !r.has_focus() {
-        return r;
-    }
+    // ★ 事件全部在畫框之前處理 ★
+    //
+    // 框的內容在 `ui.add` 那一行就定案了，之後再改 `keys` 要等下一幀才看得
+    // 到。送出那一幀因此會閃一格空白（測試抓到的），打字也會慢一拍。
+    // `ui.input` 是唯讀的，先掃不影響 `TextEdit` 自己的處理。
+    let focused = ui.memory(|m| m.has_focus(id));
+    let window_active = ui.ctx().input(|i| i.viewport().focused.unwrap_or(true));
     // 視窗在背景時一律不收——不然別的視窗打字會寫進來
-    if !ui.ctx().input(|i| i.viewport().focused.unwrap_or(true)) {
-        return r;
-    }
+    let live = focused && window_active;
 
-    // **兩種來源都要收**。
-    //
-    // 輸入法關著時按鍵直接來（`Event::Key`）；**開著時按鍵被輸入法
-    // 吃掉組字**，egui 收到的是 `Ime` 事件，`Event::Key` 一個都沒有
-    // ——只認前者的話這一格永遠打不進東西（使用者實測回報：
-    // 「英雄聯盟」的按鍵欄填不了）。
-    //
-    // spike 驗過 `Ime(Preedit)` 帶著完整的原始按鍵串（§2.75.8），
-    // 拿它就對了。
-    let mut preedit: Option<String> = None;
-    ui.input(|i| {
-        for e in &i.events {
-            match e {
-                // 組字中：整串原始按鍵在這裡
-                egui::Event::Ime(egui::ImeEvent::Preedit(s)) => {
-                    preedit = Some(s.clone());
-                }
-                // 組字結束：輸入法送出組好的字，但**我們要的是按鍵**，
-                // 所以把最後看到的那串 preedit 留著，不理會送出的內容
-                egui::Event::Ime(egui::ImeEvent::Commit(_)) => {}
-                egui::Event::Key {
+    let (committed, preedit) = if live {
+        scan_ime_events(ui)
+    } else {
+        (None, None)
+    };
+
+    if live {
+        // ★ 有焦點期間一直舉旗 ★
+        //
+        // 旗子是給輸入法看的：看到就在**送出**時改送原始按鍵而不是轉換後
+        // 的字（見 `ime_core::keycapture`）。**旗子會過期**，所以每一幀重
+        // 舉；失焦、關視窗、程式當掉都自動失效，最多殘留幾秒。
+        ime_core::keycapture::raise();
+        RAISED_THIS_FRAME.with(|c| c.set(true));
+
+        // 輸入法**關著**時按鍵直接來（`Event::Key`）。開著時它一個都不會
+        // 有——按鍵被輸入法吃掉了，只剩上面那兩條 `Ime` 事件。
+        // 全選是**跨幀狀態**：`Cmd+A` 一幀、刪除鍵是下一幀。
+        let sel = id.with("select_all");
+        let mut select_all: bool = ui.data_mut(|d| d.get_temp(sel).unwrap_or(false));
+
+        ui.input(|i| {
+            for e in &i.events {
+                let egui::Event::Key {
                     key,
                     pressed: true,
                     modifiers,
                     ..
-                } => {
-                    // 有修飾鍵的一律不收（Ctrl+A 之類的留給 egui）
-                    if modifiers.ctrl || modifiers.alt || modifiers.command {
-                        continue;
+                } = e
+                else {
+                    continue;
+                };
+                // **全選要自己記**：框裡放的是複本，egui 選給誰看都改不到
+                // `keys`，刪除那一下得由我們動手（實測回報：全選刪不掉）。
+                if modifiers.command || modifiers.ctrl {
+                    if *key == egui::Key::A {
+                        select_all = true;
                     }
-                    match key {
-                        egui::Key::Backspace => {
-                            keys.pop();
-                        }
-                        egui::Key::Delete => keys.clear(),
-                        _ => {
-                            if let Some(c) = key_char(*key) {
-                                keys.push(c);
+                    // 其餘的組合鍵留給 egui（複製、貼上⋯⋯）
+                    continue;
+                }
+                if modifiers.alt {
+                    continue;
+                }
+                match key {
+                    // 全選狀態下的退格是「刪掉選起來的」＝整串
+                    egui::Key::Backspace if select_all => keys.clear(),
+                    egui::Key::Backspace => {
+                        keys.pop();
+                    }
+                    egui::Key::Delete => keys.clear(),
+                    _ => {
+                        if let Some(c) = key_char(*key) {
+                            // 選起來再打字＝取代
+                            if select_all {
+                                keys.clear();
                             }
+                            keys.push(c);
                         }
                     }
                 }
+                // 動過就不再是「全選」狀態了
+                select_all = false;
+            }
+        });
+
+        // 組字或送出也結束全選——那一下本來就會整欄換掉
+        if committed.is_some() || preedit.is_some() {
+            select_all = false;
+        }
+        ui.data_mut(|d| d.insert_temp(sel, select_all));
+
+        if let Some(picked) = pick_keys(committed.as_deref(), preedit.as_deref()) {
+            *keys = picked.to_string();
+        }
+    }
+
+    // ★ 組字中的內容要**跨幀存住** ★
+    //
+    // `Ime` 事件只在「組字內容變了」那一幀送來，而 egui 每秒重繪幾十幀。
+    // 直接拿本幀的 `preedit` 來畫的話，只有收到事件那一幀看得到，下一幀
+    // 就變回 `keys`——畫面上等於閃一下就沒了，使用者的感受是「還是看不到
+    // 自己在打什麼」（2026-09-20 實測回報，第一版修完仍在）。
+    //
+    // 所以存進 egui 的暫存，直到送出或組字結束才清掉。
+    let memo = id.with("composing");
+    let mut composing: String = ui.data_mut(|d| d.get_temp(memo).unwrap_or_default());
+    if let Some(p) = &preedit {
+        // 空的 `Preedit` 是「組字取消了」
+        composing = p.clone();
+    }
+    if committed.is_some() || !live {
+        composing.clear();
+    }
+    ui.data_mut(|d| d.insert_temp(memo, composing.clone()));
+
+    // 組字中畫的是**輸入法給的那串**（macOS 是「你好」，Windows 是按鍵），
+    // 那只是顯示；收不收進 `keys` 是另一回事，由 `pick_keys` 決定。
+    let mut shown = if composing.is_empty() {
+        keys.clone()
+    } else {
+        composing
+    };
+    記下按鍵欄顯示(&shown);
+
+    // 唯讀的框：**顯示交給 egui，輸入自己來**。給它一份複本，
+    // 使用者打不進去（改動不會寫回 `keys`），但游標、選取、捲動照常
+    ui.add(
+        egui::TextEdit::singleline(&mut shown)
+            .id(id)
+            .desired_width(width),
+    )
+}
+
+/// 這一幀的組字事件：`(送出的, 組字中的)`。
+///
+/// **在畫框之前掃**——框要顯示什麼得先知道使用者正在組什麼字。
+/// `ui.input` 是唯讀的，掃過不影響 `TextEdit` 自己的處理。
+///
+/// 兩者的內容**是平台造成的**：
+///
+/// | | 組字中的 `Preedit` | 送出的 `Commit` |
+/// |---|---|---|
+/// | Windows | `su3cl3`（原始按鍵） | 「你好」 |
+/// | macOS | 「你好」（轉換後） | `su3cl3`（**舉旗後**） |
+///
+/// 所以收進欄位之前不看平台、**看內容**（`pick_keys`），而畫面上
+/// 一律照原樣顯示——使用者要看得到自己在打什麼。
+fn scan_ime_events(ui: &egui::Ui) -> (Option<String>, Option<String>) {
+    let mut committed = None;
+    let mut preedit = None;
+    ui.input(|i| {
+        for e in &i.events {
+            match e {
+                egui::Event::Ime(egui::ImeEvent::Preedit(s)) => preedit = Some(s.clone()),
+                egui::Event::Ime(egui::ImeEvent::Commit(s)) => committed = Some(s.clone()),
                 _ => {}
             }
         }
     });
-    // 組字中的話，畫面上顯示的就是那串原始按鍵
-    if let Some(p) = preedit {
-        *keys = p;
-    }
-    r
+    (committed, preedit)
+}
+
+/// 這一幀收到的兩種文字裡，哪一個該寫進按鍵欄（都不該就回 `None`）。
+///
+/// **抽成純函式是為了測得到**——判斷若留在 `keys_field` 裡面就只能靠
+/// 真的開視窗打字驗證，而那正是這個欄位已經靜默壞過一次的地方。
+/// 驗收方式：把規則改回「無條件收 preedit」，`按鍵欄收什麼` 會紅。
+///
+/// 規則：
+///
+/// - **送出優先**——macOS 舉旗後那裡才是原始按鍵
+/// - 其次組字中的內容——Windows 的組字區本來就是按鍵
+/// - **兩者都要像按鍵**，不像的丟掉（macOS 組字中的國字走這條）
+fn pick_keys<'a>(committed: Option<&'a str>, preedit: Option<&'a str>) -> Option<&'a str> {
+    [committed, preedit]
+        .into_iter()
+        .flatten()
+        .find(|s| looks_like_keys(s))
+}
+
+/// 這串東西像不像「使用者按出來的鍵」。
+///
+/// **這是內容側的判準，不是平台判斷**——同一份程式碼在 Windows 收組字區
+/// 的按鍵、在 macOS 收送出的按鍵，兩邊都對。拿平台來分的話，哪天某一邊
+/// 改了組字區的內容就又會靜默壞掉（這個欄位已經這樣壞過一次）。
+///
+/// 空字串回 `false`：組字被取消時 `Commit("")` 會進來，收下去會把使用者
+/// 已經填好的按鍵清空。
+fn looks_like_keys(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(key_char_allowed)
+}
+
+/// 按鍵欄收得下的字元。跟 `key_char` 那張表同一組——26 個字母、
+/// 10 個數字、`;,./-` 與空白，大千配置把這些全用掉了。
+fn key_char_allowed(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, ';' | ',' | '.' | '/' | '-' | ' ')
 }
 
 /// 實體按鍵 → 它在鍵盤上印的那個字元。
@@ -1453,6 +1621,21 @@ fn 記下排版(頭右緣: f32, 身體右緣: f32) {
     排版.with(|c| c.set((頭右緣, 身體右緣)));
 }
 
+// 按鍵欄這一幀畫了什麼。**組字中的內容是跨幀狀態**，只有連著幾幀
+// 一起看才驗得出「事件那一幀之後還在不在」——所以記下來讓測試比對。
+#[cfg(test)]
+thread_local! {
+    static 按鍵欄顯示: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+#[cfg(test)]
+fn 記下按鍵欄顯示(s: &str) {
+    按鍵欄顯示.with(|c| *c.borrow_mut() = s.to_string());
+}
+
+#[cfg(not(test))]
+fn 記下按鍵欄顯示(_s: &str) {}
+
 /// 這串符號會拆成幾個？**問 core，不要自己拆**。
 ///
 /// 拆法有兩套（空白分隔／舊格式逐字元），還要處理 `+` 展開成 ZWJ 與
@@ -1531,12 +1714,29 @@ fn load(state: &mut State, packs_dir: &str, file: &str) {
                 author: data.meta.author.unwrap_or_default(),
                 description: data.meta.description.unwrap_or_default(),
                 license: data.meta.license.unwrap_or_default(),
+                // 沒有輸入框，純粹收著等存檔時寫回去，見 `Meta::homepage`
+                homepage: data.meta.homepage.unwrap_or_default(),
             };
             state.rows = data.entries.iter().map(to_row).collect();
             // **用檔案裡原本的樣子判**，不是畫面上的：`to_row` 已經把
             // 假名轉成按鍵了，轉完兩種來源長得一模一樣
             state.legacy_ja = data.entries.iter().filter(|e| is_legacy_ja(e)).count();
-            state.status = None;
+            // **開到的這份生效嗎**——同名的 `.bin` 存在的話，載入時贏的
+            // 一直是它，這裡打開的 `.txt` 只是一份不生效的副本。不講的話
+            // 使用者改了半天完全沒反應，而且沒有任何線索
+            //  （2026-09-19 實測回報）。
+            state.status = ime_core::pack::name_taken_by(packs_dir, file, false)
+                .filter(|p| p.extension().is_some_and(|e| e == "bin"))
+                .map(|_| {
+                    (
+                        format!(
+                            "注意：同一個資料夾裡有「{file}.bin」，載入時它會整份蓋過這裡的 \
+                             .txt——**你在這裡改的東西不會生效**。要讓它生效的話，把這個包\
+                             改成別的名字再存。"
+                        ),
+                        false,
+                    )
+                });
         }
         Err(e) => {
             state.meta = Meta::default();
@@ -1686,27 +1886,39 @@ fn save(state: &mut State, packs_dir: &str) {
         return;
     }
 
+    // ★ 名字被別的包佔住就擋下來 ★
+    //
+    // 載入時同一個資料夾裡 `.bin` 永遠贏過 `.txt`，而且是整份取代。所以
+    // 名字撞到官方包的話，使用者存下去的這一份**從來不會生效**，而他完全
+    // 看不出來——改了沒反應是唯一的線索（2026-09-19 實測回報）。
+    //
+    // 判準刻意**不問「誰是官方」**：以後可能會有只發 `.txt` 的官方包
+    // （使用者裁定 2026-09-20），那樣「有 .bin 就是官方」當場就漏。改成
+    // 「同一個資料夾不准有兩個同名的包」，誰是官方變成不相干的事。
+    //
+    // 編輯既有的那份 `.txt` 時不算撞名（`ignore_txt`）——那就是他自己。
+    let editing_same = !state.is_new && state.file == name;
+    if let Some(taken) = ime_core::pack::name_taken_by(packs_dir, &name, editing_same) {
+        let 建議 = ime_core::pack::suggest_free_name(packs_dir, &name);
+        state.name_clash = Some(建議.clone());
+        state.status = Some((
+            format!(
+                "「{name}」這個名字已經被 {} 佔用了，存下去不會生效——換個名字，\
+                 例如「{建議}」。",
+                taken.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            false,
+        ));
+        return;
+    }
+    state.name_clash = None;
+
     // 存檔時自動進版
     if state.bump_version {
         state.meta.version = bump(&state.meta.version);
     }
 
-    let data = ime_core::pack::Editable {
-        meta: ime_core::pack::Meta {
-            name: Some(name.clone()),
-            version: opt(&state.meta.version),
-            author: opt(&state.meta.author),
-            description: opt(&state.meta.description),
-            license: opt(&state.meta.license),
-            // **更新日期自己填**——使用者不必去想今天幾號
-            updated: Some(today()),
-            homepage: None,
-            // 走到這裡的一定不是唯讀的包（上面擋掉了），
-            // 而使用者自己做的包本來就該可以再改
-            readonly: false,
-        },
-        entries: state.rows.iter().map(to_entry).collect(),
-    };
+    let data = to_editable(state, &name);
 
     match ime_core::pack::write_editable(packs_dir, &name, &data) {
         Ok(path) => {
@@ -1730,6 +1942,33 @@ fn save(state: &mut State, packs_dir: &str) {
 }
 
 /// 空字串當成「沒填」。
+/// 把編輯器的狀態組成要寫出去的東西。
+///
+/// **從 `save()` 抽出來是為了能測**——`save()` 本身要寫真的檔案、還要
+/// 動 `state.status`，測試不好碰。而這裡正是「哪些欄位會被寫回去」的
+/// 唯一決定點，`homepage` 曾經在這裡被硬寫成 `None`（見 `Meta::homepage`）。
+fn to_editable(state: &State, name: &str) -> ime_core::pack::Editable {
+    ime_core::pack::Editable {
+        meta: ime_core::pack::Meta {
+            name: Some(name.to_string()),
+            version: opt(&state.meta.version),
+            author: opt(&state.meta.author),
+            description: opt(&state.meta.description),
+            license: opt(&state.meta.license),
+            // **更新日期自己填**——使用者不必去想今天幾號
+            updated: Some(today()),
+            // **原樣寫回去，不是清掉**。編輯器沒有這一欄的輸入框，
+            // 但手寫的包可能有，而它可能是授權義務的一部分，
+            // 見 `Meta::homepage`
+            homepage: opt(&state.meta.homepage),
+            // 走到這裡的一定不是唯讀的包（`save` 上面擋掉了），
+            // 而使用者自己做的包本來就該可以再改
+            readonly: false,
+        },
+        entries: state.rows.iter().map(to_entry).collect(),
+    }
+}
+
 fn opt(s: &str) -> Option<String> {
     let t = s.trim();
     (!t.is_empty()).then(|| t.to_string())
@@ -1911,6 +2150,12 @@ fn delete(
         return;
     };
     let path = dir.join(format!("{}.txt", state.file));
+    // **同名的 `.bin` 刪不到，也不該偷偷刪**——那多半是官方包，使用者
+    // 按的是「刪掉我這一份」。但要**老實講**：`.txt` 刪掉之後那個名字
+    // 照樣生效（生效的一直是 `.bin`），不講的話畫面說「已刪除」而包還在，
+    // 使用者只會更糊塗（2026-09-19 實測回報的一環）。
+    let bin = dir.join(format!("{}.bin", state.file));
+    let bin_left = bin.is_file();
     match std::fs::remove_file(&path) {
         Ok(()) => {
             cfg.behavior.packs.retain(|p| p != &state.file);
@@ -1925,7 +2170,18 @@ fn delete(
             state.editing_out = None;
             *cache = None;
             state.available = None;
-            state.status = Some((format!("已刪除「{name}」。"), true));
+            state.status = Some(if bin_left {
+                (
+                    format!(
+                        "已刪除「{name}.txt」，但同名的「{name}.bin」還在——\
+                         那個包仍然會生效（生效的一直是 .bin）。要整個移除的話，\
+                         請自己到擴充包資料夾刪掉 .bin。"
+                    ),
+                    false,
+                )
+            } else {
+                (format!("已刪除「{name}」。"), true)
+            });
         }
         Err(e) => {
             state.confirm_delete = false;
@@ -1991,6 +2247,73 @@ mod tests {
         let e = to_entry(&row);
         assert_eq!(e.input, "すごい");
         assert_eq!(e.output, "すごい");
+    }
+
+    /// **檔頭的每個欄位都要能往返**——編輯器沒有輸入框的也一樣。
+    ///
+    /// `homepage` 曾經在 `save()` 裡被硬寫成 `None`（編輯器的 `Meta`
+    /// 根本沒有那個欄位），於是**手寫的包開一次再存檔，來源網址就無聲
+    /// 消失**。對 CC BY-SA 那類要求姓名標示的資料，那是授權問題不是
+    /// 體驗問題（台語包的檔頭自己寫著「不可以拿掉」）。
+    ///
+    /// 這條守的是「core 的 `Meta` 加了新欄位，而編輯器忘了跟上」——
+    /// 那種漏不會有編譯錯誤，存檔也不會報錯，只是資料靜靜不見。
+    #[test]
+    fn 檔頭欄位要能原樣往返() {
+        let dir = std::env::temp_dir().join("tsunagi-meta-roundtrip-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let d = dir.to_str().unwrap_or("");
+        let name = "zz檔頭往返";
+
+        // 帶著**編輯器沒有輸入框**的 homepage 寫一份出去
+        let before = ime_core::pack::Editable {
+            meta: ime_core::pack::Meta {
+                name: Some(name.into()),
+                version: Some("1.0".into()),
+                author: Some("某某教授".into()),
+                description: Some("測試".into()),
+                license: Some("CC BY-SA 4.0".into()),
+                updated: Some("2026-09-15".into()),
+                homepage: Some("https://example.com/source".into()),
+                readonly: false,
+            },
+            entries: vec![entry("en", "roundtrip", "roundtrip")],
+        };
+        ime_core::pack::write_editable(d, name, &before).unwrap();
+
+        // 讀回來灌進編輯器的狀態——**這段要跟 `load` 一致**
+        let loaded = ime_core::pack::read_editable(d, name).unwrap();
+        let mut state = State {
+            meta: Meta {
+                name: loaded.meta.name.clone().unwrap_or_default(),
+                version: loaded.meta.version.clone().unwrap_or_default(),
+                author: loaded.meta.author.clone().unwrap_or_default(),
+                description: loaded.meta.description.clone().unwrap_or_default(),
+                license: loaded.meta.license.clone().unwrap_or_default(),
+                homepage: loaded.meta.homepage.clone().unwrap_or_default(),
+            },
+            ..Default::default()
+        };
+        state.rows = loaded.entries.iter().map(to_row).collect();
+        assert_eq!(
+            state.meta.homepage, "https://example.com/source",
+            "載入時就要收下 homepage，不然存檔時無從寫回"
+        );
+
+        // **走 `save()` 真正用的那支**——測試自己組 `Editable` 的話，
+        // 改壞 `to_editable` 也抓不到（第一版就是這樣白寫的）
+        let again = to_editable(&state, name);
+        ime_core::pack::write_editable(d, name, &again).unwrap();
+
+        let after = ime_core::pack::read_editable(d, name).unwrap();
+        assert_eq!(
+            after.meta.homepage, before.meta.homepage,
+            "存檔不可以吃掉 homepage——那可能是授權義務的一部分"
+        );
+        assert_eq!(after.meta.author, before.meta.author, "姓名標示也要留著");
+        assert_eq!(after.meta.license, before.meta.license, "授權條款要留著");
+
+        let _ = std::fs::remove_file(dir.join(format!("{name}.txt")));
     }
 
     /// 符號列**讀進來、存回去都不轉**——第二欄是名字不是按鍵。
@@ -2200,6 +2523,214 @@ mod 排版 {
             content <= viewport + 0.5,
             "整頁內容寬 {content} 超過視窗 {viewport}——清單裡有一欄沒設上限"
         );
+    }
+
+    /// 按鍵欄組字中要看得到自己在打什麼——**而且要撐過沒有事件的那些幀**。
+    ///
+    /// `Ime` 事件只在「組字內容變了」那一幀送來，egui 每秒卻重繪幾十幀。
+    /// 第一版直接拿本幀的 `preedit` 來畫，於是只有那一幀看得到、下一幀就
+    /// 變回空的——使用者的感受是「還是不知道自己在打什麼」（2026-09-20
+    /// 實測回報，修完第一版仍在）。
+    ///
+    /// **靜態的判斷測不出這種 bug**，一定要連著跑好幾幀才看得出來。
+    mod 按鍵欄組字中顯示什麼 {
+        use super::*;
+
+        /// 跑一輪：每個元素是那一幀要送的事件，回傳每一幀畫了什麼。
+        fn 打一輪(每幀事件: Vec<Vec<egui::Event>>) -> Vec<String> {
+            let ctx = egui::Context::default();
+            let id = egui::Id::new("測試按鍵欄");
+            let mut keys = String::new();
+            let mut 畫面 = Vec::new();
+
+            for events in 每幀事件 {
+                let raw = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::pos2(0.0, 0.0),
+                        egui::vec2(400.0, 200.0),
+                    )),
+                    events,
+                    ..Default::default()
+                };
+                let _ = ctx.run(raw, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        // 焦點要在這一格上，不然 `live` 是假的
+                        ui.memory_mut(|m| m.request_focus(id));
+                        keys_field(ui, &mut keys, id, 200.0);
+                    });
+                });
+                畫面.push(按鍵欄顯示.with(|c| c.borrow().clone()));
+            }
+            畫面
+        }
+
+        fn preedit(s: &str) -> egui::Event {
+            egui::Event::Ime(egui::ImeEvent::Preedit(s.to_string()))
+        }
+
+        fn commit(s: &str) -> egui::Event {
+            egui::Event::Ime(egui::ImeEvent::Commit(s.to_string()))
+        }
+
+        /// ★ 這一條是修正的重點 ★
+        ///
+        /// 第 2、3 幀沒有任何事件，畫面上仍要留著「你好」。把跨幀那段
+        /// 拿掉（直接用本幀的 preedit）的話，這兩幀會變回空字串。
+        #[test]
+        fn 組字中的字要留在畫面上_不是閃一下() {
+            let 畫面 = 打一輪(vec![
+                vec![preedit("你")],
+                vec![],
+                vec![preedit("你好")],
+                vec![],
+                vec![],
+            ]);
+            assert_eq!(畫面[0], "你");
+            assert_eq!(畫面[1], "你", "沒有事件的那一幀不該變回空的");
+            assert_eq!(畫面[2], "你好");
+            assert_eq!(畫面[3], "你好", "沒有事件的那一幀不該變回空的");
+            assert_eq!(畫面[4], "你好");
+        }
+
+        /// 送出之後換成按鍵串，而且**留在畫面上**（macOS 舉旗後 commit
+        /// 帶的就是原始按鍵）。
+        #[test]
+        fn 送出之後換成按鍵串() {
+            let 畫面 = 打一輪(vec![vec![preedit("你好")], vec![commit("su3cl3")], vec![]]);
+            assert_eq!(畫面[0], "你好", "組字中看得到轉換後的字");
+            assert_eq!(畫面[1], "su3cl3", "送出那一幀換成按鍵串");
+            assert_eq!(畫面[2], "su3cl3", "之後一直留著");
+        }
+
+        fn key(k: egui::Key, mods: egui::Modifiers) -> egui::Event {
+            egui::Event::Key {
+                key: k,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: mods,
+            }
+        }
+
+        /// **全選刪除要真的刪得掉**（2026-09-20 實測回報）。
+        ///
+        /// 框裡放的是 `keys` 的複本，egui 把它選起來、刪掉都改不到真正的
+        /// `keys`，下一幀就原樣回來。所以全選得自己記、刪除得自己動手。
+        ///
+        /// 而且它是**跨幀**的：`Cmd+A` 一幀、刪除鍵是下一幀。
+        #[test]
+        fn 全選之後退格清空整欄() {
+            let 畫面 = 打一輪(vec![
+                vec![key(egui::Key::S, egui::Modifiers::NONE)],
+                vec![key(egui::Key::U, egui::Modifiers::NONE)],
+                vec![key(egui::Key::A, egui::Modifiers::COMMAND)],
+                vec![key(egui::Key::Backspace, egui::Modifiers::NONE)],
+            ]);
+            assert_eq!(畫面[1], "su", "沒有輸入法時按鍵直接進欄位");
+            assert_eq!(畫面[2], "su", "Cmd+A 本身不改內容");
+            assert_eq!(畫面[3], "", "全選之後退格要清掉整欄");
+        }
+
+        /// 沒有全選的時候，退格還是只退一個字元。
+        #[test]
+        fn 沒全選的退格只退一個() {
+            let 畫面 = 打一輪(vec![
+                vec![key(egui::Key::S, egui::Modifiers::NONE)],
+                vec![key(egui::Key::U, egui::Modifiers::NONE)],
+                vec![key(egui::Key::Backspace, egui::Modifiers::NONE)],
+            ]);
+            assert_eq!(畫面[2], "s");
+        }
+
+        /// 全選之後直接打字＝取代整欄，不是接在後面。
+        #[test]
+        fn 全選之後打字是取代() {
+            let 畫面 = 打一輪(vec![
+                vec![key(egui::Key::S, egui::Modifiers::NONE)],
+                vec![key(egui::Key::A, egui::Modifiers::COMMAND)],
+                vec![key(egui::Key::U, egui::Modifiers::NONE)],
+                vec![key(egui::Key::U, egui::Modifiers::NONE)],
+            ]);
+            assert_eq!(畫面[2], "u", "全選後第一個字取代整欄");
+            assert_eq!(畫面[3], "uu", "之後就恢復正常接在後面");
+        }
+
+        /// 組字取消（空的 `Preedit`）要收乾淨，不能把「你好」留在畫面上。
+        #[test]
+        fn 組字取消就清掉() {
+            let 畫面 = 打一輪(vec![vec![preedit("你好")], vec![preedit("")], vec![]]);
+            assert_eq!(畫面[0], "你好");
+            assert_eq!(畫面[1], "", "取消組字後不該還留著");
+            assert_eq!(畫面[2], "");
+        }
+    }
+
+    /// 按鍵欄的守門：**像按鍵的才收得下去**。
+    ///
+    /// 這一條守的是 2026-09-19 實測回報的 bug——macOS 組字中的內容是
+    /// 轉換後的國字（「你好」），無條件收下去就存成了國字，而欄位看起來
+    /// 完全正常，只有真的去打才會發現那條叫不出來。
+    ///
+    /// **判準是內容不是平台**：同一份程式碼在 Windows 收組字區的按鍵、
+    /// 在 macOS 收送出的按鍵。拿 `cfg` 分的話，哪天某一邊改了組字區的
+    /// 內容就會再靜默壞一次。
+    mod 按鍵欄收什麼 {
+        use super::*;
+
+        #[test]
+        fn 按鍵串收得下() {
+            for s in ["su3cl3", "cj6wl6", "hello", "a;,./-", "wo3 hao3"] {
+                assert!(looks_like_keys(s), "{s} 是合法按鍵串，該收");
+            }
+        }
+
+        #[test]
+        fn 國字不能收() {
+            // macOS 組字中的 preedit，以及組到一半的混合態
+            for s in ["你好", "你c", "胡桃", "すし"] {
+                assert!(!looks_like_keys(s), "{s} 不是按鍵串，收下去欄位就壞了");
+            }
+        }
+
+        /// 組字被取消時 `Commit("")` 會進來——收下去會把使用者已經
+        /// 填好的按鍵**清空**。
+        #[test]
+        fn 空字串不能收() {
+            assert!(!looks_like_keys(""), "空字串不該覆蓋既有的按鍵");
+        }
+
+        /// ★ 走真正的那條決策 ★
+        ///
+        /// 上面三條測的是判準本身；這幾條測的是「欄位到底會收下哪一個」
+        /// ——把規則改回無條件收 preedit 的話，這裡會紅。
+        #[test]
+        fn macos_組字中的國字不收送出的按鍵才收() {
+            // 組字中：preedit 是國字，沒有東西該進欄位
+            assert_eq!(
+                pick_keys(None, Some("你好")),
+                None,
+                "組字中的國字不該進欄位"
+            );
+            // 送出：舉旗後 commit 是原始按鍵
+            assert_eq!(pick_keys(Some("su3cl3"), None), Some("su3cl3"));
+        }
+
+        #[test]
+        fn windows_組字中的按鍵照舊直接收() {
+            assert_eq!(pick_keys(None, Some("cj6wl6")), Some("cj6wl6"));
+        }
+
+        /// 兩個都在的時候**送出優先**：Windows 送出的是「你好」（不像
+        /// 按鍵、會被擋掉），macOS 送出的才是按鍵，兩邊都得到對的那個。
+        #[test]
+        fn 送出優先於組字中() {
+            assert_eq!(pick_keys(Some("su3cl3"), Some("你好")), Some("su3cl3"));
+            assert_eq!(
+                pick_keys(Some("你好"), Some("cj6wl6")),
+                Some("cj6wl6"),
+                "送出的不像按鍵時要退回組字中那串"
+            );
+        }
     }
 
     /// **表頭不可以比資料列寬**。

@@ -40,9 +40,20 @@
 //! 14.7ms、預算 16ms——**餘裕只剩 1.3ms，不夠賭**。雜湊表多花 4 MB
 //! 換回 O(1)。
 
-/// 檔案識別碼。改版面就換尾巴那兩碼，舊檔會被認出來而重建。
+/// 檔案識別碼：只用來認「這是日文版面檔」，**不要再拿它當版本號**。
 const MAGIC: &[u8; 8] = b"TSNGJA02";
-const VERSION: u16 = 2;
+/// 版面版本。**改版面、或改了建表邏輯讓內容變了（格式沒變也算），就加一**
+/// ——舊檔會被拒收（`is_current`），執行期退回從文字重建。
+///
+/// 加一之後**不必靠人記得重產**：`build-ime.ps1`／`build-app.sh` 建置時、
+/// 打包腳本打包前都會跑 `gen_dict_ja --if-stale`，打包另外用 `--check`
+/// 守門。不加一的話那些關卡全都看不出來——它們只比這個號碼。
+///
+/// 3：同表記不同詞性要保留（活用語／付屬語），版面沒變、內容變了。
+/// 4：同表記不同詞類一律保留，不再限定活用語或純假名——一般日文
+/// 輸入法（mozc 本身）就是這樣用這份資料的，簡化版會把「させ」
+/// 「し」這類詞性變體刪掉；量測：泛化測資 90 句 58→65。
+const VERSION: u16 = 4;
 
 /// 前綴共用的塊大小：每 16 個讀音存一次完整的鍵。
 ///
@@ -220,9 +231,12 @@ pub fn build_index(keys: &[&str], counts: &[u32]) -> IndexParts {
 }
 
 /// 查詢端：借用那塊 bytes，用四個位移把鍵找回來。
+///
+/// 帶生命週期參數是為了**驗檔**：`dict_bin_zh::is_current` 拿一份借來的
+/// bytes（不是 `'static`）直接呼叫 `new`，驗的就是執行期那一套。
 #[derive(Clone, Copy)]
-pub struct IndexRef {
-    bytes: &'static [u8],
+pub struct IndexRef<'a> {
+    bytes: &'a [u8],
     n: usize,
     slots: usize,
     off_hash: usize,
@@ -231,13 +245,13 @@ pub struct IndexRef {
     off_starts: usize,
 }
 
-impl IndexRef {
+impl<'a> IndexRef<'a> {
     /// `at` 是索引四塊的起點、`n` 是鍵的數量、`keys_len` 是鍵 blob 的
     /// 長度（那個長度沒有存進索引本身，得由檔頭帶過來）。
     ///
     /// 回 `None` 代表算出來的範圍超出檔尾——那是壞檔，**不要當成空表
     /// 默默吞掉**，讓呼叫端退回從文字重建。
-    pub fn new(bytes: &'static [u8], at: usize, n: usize, keys_len: usize) -> Option<Self> {
+    pub fn new(bytes: &'a [u8], at: usize, n: usize, keys_len: usize) -> Option<Self> {
         let slots = hash_slots(n);
         let off_hash = at;
         let off_blk = off_hash + slots * 4;
@@ -394,7 +408,27 @@ pub fn build(mut entries: Vec<(String, Vec<RawCand>)>, confident_cost: u32) -> V
         // 萬一第一個因為超長被丟掉，位元就對應到別的表記了
         cands.retain(|c| c.surface.len() <= MAX_LEN);
         cands.sort_by_key(|c| c.total);
-        cands.dedup_by(|a, b| a.surface == b.surface);
+        // **同表記不同詞類要留著，Viterbi 接續要靠詞類 id**。
+        //
+        // mozc 的同一個讀音、同一個表記常有好幾筆，差在左右 id（詞類）。
+        // 原本只依表記去重、只留「放在句首最便宜」的那一筆，句中文法
+        // 接續要用的詞類（使役「させる」未然形、サ変「する」未然形、
+        // 形容詞「ない」……）常常不是句首最便宜的那個，被去重掉之後
+        // Viterbi 只好改接同音的實詞（させ→刺せ、し→師、ない→無い）。
+        //
+        // **一律依 (表記,lid,rid) 保留，不再限定「全平假名或會活用的
+        // 詞類」**——一般日文輸入法（mozc 本身）就是把整份資料原樣
+        // 拿去查、不簡化：`させ`／`し` 這類詞性變體、名詞的詞類變體，
+        // 全部留著讓 Viterbi 自己依接續成本挑，簡化版等於幫使用者先
+        // 刪掉一部分正確答案。候選數變多但排序看的是接續成本，不是
+        // candidate 數量。
+        //
+        // **不能用 `dedup_by`**：`cands` 已依 `total` 排序，同一組
+        // (surface,lid,rid) 不保證相鄰，要用集合記住看過的鍵。
+        {
+            let mut seen = std::collections::HashSet::new();
+            cands.retain(|c| seen.insert((c.surface.clone(), c.lid, c.rid)));
+        }
         if cands.first().is_some_and(|c| c.total <= confident_cost) {
             confident[i / 8] |= 1 << (i % 8);
         }
@@ -457,9 +491,22 @@ pub fn build(mut entries: Vec<(String, Vec<RawCand>)>, confident_cost: u32) -> V
     out
 }
 
-/// 查詢用的門面。**只借用那塊 bytes，自己不持有任何字串。**
-pub struct KanaDict {
-    bytes: &'static [u8],
+/// 這份 bytes 是不是**這一版程式認得的**日文版面。
+///
+/// 給 `gen_dict_ja --if-stale`／`--check` 用：打包與建置腳本靠它決定要
+/// 不要重產、包出去的是不是能用的檔。**判準就是 `KanaDict::new` 用的那
+/// 一套**（同一個 `Header::read`），不在別處另抄一份檔頭格式——兩邊各寫
+/// 各的，總有一天會出現「腳本說是最新、執行期卻認不得」。
+///
+/// 為什麼這很要緊：執行期認不得就退回從文字詞典重建，而**安裝版只帶
+/// `.bin`、沒有文字詞典**，退路不存在——日文詞典整個消失，而且沒有任何
+/// 錯誤訊息。`VERSION` 2→3（保留同表記不同詞性）那次就差點這樣包出去。
+pub fn is_current(bytes: &[u8]) -> bool {
+    Header::read(bytes).is_some()
+}
+
+/// 檔頭解出來的數量與各區塊位移。只看檔頭與檔案長度，不碰內容。
+struct Header {
     n_read: usize,
     slots: usize,
     off_blk: usize,
@@ -470,17 +517,16 @@ pub struct KanaDict {
     off_conf: usize,
 }
 
-impl KanaDict {
-    /// 認檔頭。版面對不上就回 `None`——呼叫端會退回從文字重建。
-    pub fn new(bytes: &'static [u8]) -> Option<Self> {
+impl Header {
+    /// 認檔頭。版面對不上、或數字塞不進檔案，就回 `None`。
+    fn read(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < HEADER || &bytes[..8] != MAGIC {
             return None;
         }
         if get_u16(bytes, 8) != VERSION {
             return None;
         }
-        let d = KanaDict {
-            bytes,
+        let h = Header {
             n_read: get_u32(bytes, 12) as usize,
             slots: get_u32(bytes, 20) as usize,
             off_blk: get_u32(bytes, 24) as usize,
@@ -496,18 +542,51 @@ impl KanaDict {
         // 的空間，不然 `slots`／`n_read` 灌大之後查詢會切到別區甚至檔尾外。
         // 這個檔案是誰都能寫的資料，而讀它的是每一個宿主行程，檔頭要當
         // 敵意輸入看
-        let ok = d.off_blk <= d.off_kana
-            && d.off_kana <= d.off_cstart
-            && d.off_cstart <= d.off_cand
-            && d.off_cand <= d.off_surf
-            && d.off_surf <= d.off_conf
-            && d.off_conf + d.n_read.div_ceil(8) <= bytes.len()
-            && d.slots.is_power_of_two()
-            && HEADER + d.slots * 4 <= d.off_blk
-            && d.off_blk + d.n_read.div_ceil(BLOCK) * 4 <= d.off_kana
-            && d.off_cstart + (d.n_read + 1) * 4 <= d.off_cand
-            && d.off_cand + get_u32(bytes, 16) as usize * CAND_SIZE <= d.off_surf;
-        ok.then_some(d)
+        let ok = h.off_blk <= h.off_kana
+            && h.off_kana <= h.off_cstart
+            && h.off_cstart <= h.off_cand
+            && h.off_cand <= h.off_surf
+            && h.off_surf <= h.off_conf
+            && h.off_conf + h.n_read.div_ceil(8) <= bytes.len()
+            && h.slots.is_power_of_two()
+            && HEADER + h.slots * 4 <= h.off_blk
+            && h.off_blk + h.n_read.div_ceil(BLOCK) * 4 <= h.off_kana
+            && h.off_cstart + (h.n_read + 1) * 4 <= h.off_cand
+            && h.off_cand + get_u32(bytes, 16) as usize * CAND_SIZE <= h.off_surf;
+        ok.then_some(h)
+    }
+}
+
+/// 查詢用的門面。**只借用那塊 bytes，自己不持有任何字串。**
+pub struct KanaDict {
+    bytes: &'static [u8],
+    n_read: usize,
+    slots: usize,
+    off_blk: usize,
+    off_kana: usize,
+    off_cstart: usize,
+    off_cand: usize,
+    off_surf: usize,
+    off_conf: usize,
+}
+
+impl KanaDict {
+    /// 認檔頭。版面對不上就回 `None`——呼叫端會退回從文字重建。
+    ///
+    /// 檢查全在 `Header::read`，跟 `is_current` 是同一套。
+    pub fn new(bytes: &'static [u8]) -> Option<Self> {
+        let h = Header::read(bytes)?;
+        Some(KanaDict {
+            bytes,
+            n_read: h.n_read,
+            slots: h.slots,
+            off_blk: h.off_blk,
+            off_kana: h.off_kana,
+            off_cstart: h.off_cstart,
+            off_cand: h.off_cand,
+            off_surf: h.off_surf,
+            off_conf: h.off_conf,
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -704,6 +783,27 @@ mod tests {
         assert!(KanaDict::new(Box::leak(bad.into_boxed_slice())).is_none());
     }
 
+    /// `gen_dict_ja --if-stale`／`--check` 的判準：**跟執行期認檔是同一套**。
+    ///
+    /// 兩個會出事的方向都要擋：舊版面被當成「已是最新」（安裝版因此整個
+    /// 沒有日文詞典），以及檔頭對、內容壞掉的檔被放行（同一個下場）。
+    #[test]
+    fn 目前版面才算最新_跟執行期同一套() {
+        let good = built();
+        assert!(is_current(good));
+        // 上一版的檔頭：`VERSION` 2→3 那次，手上那份舊 .bin 就長這樣
+        let mut old = good.to_vec();
+        old[8..10].copy_from_slice(&(VERSION - 1).to_le_bytes());
+        assert!(!is_current(&old), "舊版面不能算最新");
+        // 檔頭完全正確、但尾巴少一個位元組：只看檔頭會放行
+        let cut = &good[..good.len() - 1];
+        assert!(!is_current(cut), "截斷的檔不能算最新");
+        for b in [good.to_vec(), old, cut.to_vec(), b"TSNGJA02".to_vec()] {
+            let runtime = KanaDict::new(Box::leak(b.clone().into_boxed_slice())).is_some();
+            assert_eq!(is_current(&b), runtime, "腳本與執行期的判斷不一致");
+        }
+    }
+
     /// 檔頭每個數字都合理、但雜湊表每一槽都填了東西——原本的 `find`
     /// 會永遠轉下去（實測三秒還在跑），而且不是 panic、宿主攔不到。
     #[test]
@@ -736,5 +836,69 @@ mod tests {
         let mut bad = built().to_vec();
         bad[16..20].copy_from_slice(&(1u32 << 30).to_le_bytes()); // n_cand
         assert!(KanaDict::new(Box::leak(bad.into_boxed_slice())).is_none());
+    }
+
+    /// 依 lid／rid 造一筆候選。
+    fn raw_pos(surface: &str, lid: u16, rid: u16, total: u32) -> RawCand {
+        RawCand {
+            surface: surface.to_string(),
+            lid,
+            rid,
+            cost: 3,
+            total,
+        }
+    }
+
+    /// **同表記不同詞類要各自保留，不能只留一筆**。
+    ///
+    /// mozc 的同一個讀音、同一個表記常有好幾筆，差在左右 id（詞類）。
+    /// 只依表記去重、只留「總成本最低」的那一筆的話，句中文法接續要用
+    /// 的詞類（例如使役「させる」的未然形）常常不是最便宜的那個，被
+    /// 去重掉之後 Viterbi 只好改接同音的實詞。
+    ///
+    /// 這裡造兩筆同表記「帰り」、lid 不同：即使總成本差很多，兩筆都要
+    /// 保留（依 (表記,lid,rid) 去重，不是只依表記）。
+    ///
+    /// **還原方式**：把 `build` 裡的去重改回只依表記（不看 lid/rid），
+    /// 這條會紅（只剩總成本最低的一筆）。
+    #[test]
+    fn 同表記不同詞類都保留() {
+        let e = vec![(
+            "かえり".to_string(),
+            vec![
+                raw_pos("帰り", 577, 1, 100), // 體言接續，總成本較低
+                raw_pos("帰り", 476, 1, 900), // 連用形，總成本較高
+            ],
+        )];
+        let d = KanaDict::new(Box::leak(build(e, 500).into_boxed_slice())).unwrap();
+        let i = d.find("かえり").unwrap();
+        let lids: Vec<u16> = d.cands(i).map(|c| c.lid).collect();
+        assert_eq!(lids.len(), 2, "兩種詞類都要留著：{lids:?}");
+        assert!(lids.contains(&577) && lids.contains(&476));
+    }
+
+    /// **非活用語（一般名詞那類）同表記不同詞類現在也全部保留**。
+    ///
+    /// 拿掉「只有全平假名或會活用的詞類才保留」那個限制之前，這種
+    /// 名詞的詞類變體會被去重成一筆——「本」在 mozc 資料裡有普通名詞、
+    /// 形式名詞等好幾個 lid，簡化版只留總成本最低那個。一般日文輸入法
+    /// （mozc 本身）不做這個簡化，全部交給 Viterbi 依接續成本挑。
+    ///
+    /// **還原方式**：`build` 裡的去重加回「非活用語只留一筆」的判斷，
+    /// 這條會紅（只剩一筆）。
+    #[test]
+    fn 非活用語同表記不同詞類也全留() {
+        let e = vec![(
+            "ほん".to_string(),
+            vec![
+                raw_pos("本", 100, 1, 100),
+                raw_pos("本", 200, 1, 200), // 不同 lid，非活用語
+            ],
+        )];
+        let d = KanaDict::new(Box::leak(build(e, 500).into_boxed_slice())).unwrap();
+        let i = d.find("ほん").unwrap();
+        let lids: Vec<u16> = d.cands(i).map(|c| c.lid).collect();
+        assert_eq!(lids.len(), 2, "同表記不同詞類全部保留：{lids:?}");
+        assert!(lids.contains(&100) && lids.contains(&200));
     }
 }

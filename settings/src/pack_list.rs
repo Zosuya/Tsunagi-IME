@@ -76,7 +76,7 @@ pub fn show(
         ui.add_space(4.0);
         ui.label(
             egui::RichText::new(
-                "請按上方的「＋新增包」建立，或將 .txt 檔放入資料夾後按「重新整理」。",
+                "請按上方的「＋ 新增擴充包」建立，或將 .txt 檔放入資料夾後按「重新整理」。",
             )
             .weak(),
         );

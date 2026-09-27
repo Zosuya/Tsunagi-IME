@@ -39,6 +39,14 @@ thread_local! {
     /// 面板只造一次，之後重複使用——每次組字都重造會閃。
     /// **主執行緒限定**，所以用 `thread_local` 而不是全域。
     static PANEL: RefCell<Option<Panel>> = const { RefCell::new(None) };
+
+    /// 上一筆診斷紀錄的內容——**一樣就不再寫**。組字中每按一鍵都會問一次
+    /// 座標，不去重的話異常一發生就會把 log 灌爆。
+    static LAST_DIAG: RefCell<Option<String>> = const { RefCell::new(None) };
+
+    /// 面板因為「不在目前的 Space」被丟掉重建過幾次（兩個面板合計）。
+    /// 寫進診斷紀錄——帶著次數，連續兩次才不會被上面的去重吃掉。
+    static REBUILDS: Cell<u32> = const { Cell::new(0) };
 }
 
 struct Panel {
@@ -404,6 +412,7 @@ pub fn caret_rect(sender: &AnyObject) -> Option<NSRect> {
         sender,
         sel!(attributesForCharacterIndex:lineHeightRectangle:),
     ) {
+        diag(sender, "宿主沒有 attributesForCharacterIndex:，面板不顯示");
         return None;
     }
     let mut rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
@@ -417,9 +426,198 @@ pub fn caret_rect(sender: &AnyObject) -> Option<NSRect> {
     // 零矩形代表宿主答不出來。**退路要留**——雖然 §2.52.20 量到的 7 個
     // 宿主都沒發生過，但這是防禦性的，不是常態路徑。
     if rect.size.height == 0.0 {
+        diag(sender, "宿主回零矩形，問不到插入點座標，面板不顯示");
         return None;
     }
+    // 座標落在所有螢幕之外。**面板還是畫得出來**（`place` 會夾回螢幕內），
+    // 記這一筆純粹是留線索：宿主答錯座標跟宿主答不出座標，從外面看都是
+    // 「打得出字、面板不見」，分不出來。
+    if let Some(mtm) = MainThreadMarker::new() {
+        let inside = NSScreen::screens(mtm).iter().any(|s| {
+            let f = s.frame();
+            rect.origin.x >= f.origin.x
+                && rect.origin.x <= f.origin.x + f.size.width
+                && rect.origin.y >= f.origin.y
+                && rect.origin.y <= f.origin.y + f.size.height
+        });
+        if !inside {
+            diag(
+                sender,
+                &format!(
+                    "插入點座標落在所有螢幕之外：({:.0}, {:.0}) 高 {:.0}",
+                    rect.origin.x, rect.origin.y, rect.size.height
+                ),
+            );
+        }
+    }
     Some(rect)
+}
+
+/// 診斷紀錄：寫進跟 `keyprobe` 同一個 log，前綴用 `[panel]`。
+///
+/// # 為什麼需要這個
+///
+/// 候選面板出不來時，從外面**完全分不出**是「宿主答不出插入點座標」還是
+/// 「答出來的座標離譜」——兩者的症狀一模一樣：打得出字、面板不見。
+/// 2026-09-16 在 VS Code 的全螢幕視窗遇到一次，就因為沒有這行紀錄，只能
+/// 靠讀程式碼推理，最後仍然沒能定案。
+///
+/// **正常情況一行都不會寫**，所以不必擔心檔案長大。
+/// `tools/keyprobe.py` 只認 `[key]` 開頭的行，混在同一個檔案不干擾它。
+fn diag(sender: &AnyObject, msg: &str) {
+    let host = if responds(sender, sel!(bundleIdentifier)) {
+        let s: Option<Retained<NSString>> = unsafe { msg_send![sender, bundleIdentifier] };
+        s.map(|s| s.to_string()).unwrap_or_else(|| "?".into())
+    } else {
+        "?".to_string()
+    };
+    let line = format!("[panel] {host} {msg}\n");
+
+    let dup = LAST_DIAG.with(|c| {
+        let mut last = c.borrow_mut();
+        if last.as_deref() == Some(line.as_str()) {
+            true
+        } else {
+            *last = Some(line.clone());
+            false
+        }
+    });
+    if dup {
+        return;
+    }
+
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(home)
+        .join("Library/Application Support/tsunagi-ime")
+        .join("keyprobe.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write as _;
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+/// 面板剛打開，卻不在使用者眼前的 Space——回 `true` 時呼叫端要**丟掉
+/// 面板重建**。候選面板與全半形那條共用。
+///
+/// # 病因（2026-09-23 量到）
+///
+/// **任何一個全螢幕 Space 被收掉的那一刻**（退出全螢幕、或全螢幕中的
+/// app 結束），**收起中**的面板會被系統從「每個 Space 都在」降成「只屬於
+/// 一般桌面」。之後在**原本就開著**的全螢幕 app 裡打字，面板開在桌面那
+/// 一格，使用者看不到——「打得出字、面板不見」。新開的全螢幕 Space 會把
+/// 它收進去、回到桌面也正常，所以看起來時有時無。
+///
+/// `collectionBehavior` 讀回來**完全沒變**，是 window server 那邊掉的。
+/// 同值重設、清空再設回、`orderFrontRegardless`、收起再開**實測全部無效**，
+/// **只有重建有效**——新造的視窗重新向系統登記一次。
+///
+/// # 為什麼只在「收起 → 打開」時查
+///
+/// **開著的面板不會被降級**（同一輪實測），所以組字中每按一鍵不必多問
+/// 一次。`isOnActiveSpace` 在 `orderFront` 當下就準，不用等。
+pub(crate) fn stranded(panel: &NSPanel, was_hidden: bool, sender: &AnyObject, which: &str) -> bool {
+    if !was_hidden || panel.isOnActiveSpace() {
+        return false;
+    }
+    let n = REBUILDS.with(|c| {
+        c.set(c.get() + 1);
+        c.get()
+    });
+    diag(
+        sender,
+        &format!("{which}不在目前的 Space（全螢幕 Space 收掉時被系統降級），丟掉重建（第 {n} 次）"),
+    );
+    true
+}
+
+/// 這個點落在哪台螢幕的可用範圍（`visibleFrame`，已扣掉選單列與 Dock）。
+///
+/// **不能直接用 `mainScreen`**——多螢幕時宿主不一定在主螢幕上。點落在
+/// 所有螢幕之外（宿主回了離譜的座標）才退回主螢幕。
+pub(crate) fn screen_at(mtm: MainThreadMarker, pt: NSPoint) -> Option<NSRect> {
+    NSScreen::screens(mtm)
+        .iter()
+        .find(|s| {
+            let f = s.frame();
+            pt.x >= f.origin.x
+                && pt.x <= f.origin.x + f.size.width
+                && pt.y >= f.origin.y
+                && pt.y <= f.origin.y + f.size.height
+        })
+        .or_else(|| NSScreen::mainScreen(mtm))
+        .map(|s| s.visibleFrame())
+}
+
+/// 面板該擺在哪（螢幕座標，回傳**左下角**）。
+///
+/// `caret` 是組字那一行在螢幕上的矩形，`screen` 是那台螢幕的可用範圍。
+/// `prefer_above` 決定優先擺游標的上方還是下方——候選面板在下、全半形
+/// 那條在上，兩個才不會疊在一起。
+///
+/// 規則跟 Windows 的 `candidate_window::place` 對齊（**那邊是左上原點、
+/// 這邊是左下原點**，所以上下的加減相反）：
+///
+/// 1. 先放偏好的那一側
+/// 2. 放不下就翻到另一側
+/// 3. 兩側都放不下（螢幕很矮）就貼著下緣，至少看得到前幾列
+/// 4. 水平方向超出右緣就往左推，但不推出左緣
+/// 5. **最後無條件夾回螢幕內**——見下面那段
+///
+/// # 第 5 條是這支函式的重點
+///
+/// 前四條處理的是「螢幕放不放得下」，前提是游標座標本身合理。但**宿主
+/// 回的座標可能整個落在螢幕外**，那時前四條算出來的位置照樣在螢幕外，
+/// 面板就被擺到看不見的地方——症狀是「**打得出字、面板無聲消失**」，
+/// 極難查（2026-09-16 在 VS Code 的全螢幕視窗遇過一次）。所以最後一定
+/// 要再夾一次，不管前面算出什麼。
+///
+/// 全部是純數值運算，所以測得起來——邊界情況用手測很難蓋全。
+pub(crate) fn place(caret: NSRect, w: f64, h: f64, screen: NSRect, prefer_above: bool) -> NSPoint {
+    let bottom = screen.origin.y;
+    let top = screen.origin.y + screen.size.height;
+
+    // 兩個候選位置都是「面板左下角的 y」。左下原點，所以往下是減。
+    let below = caret.origin.y - h - GAP;
+    let above = caret.origin.y + caret.size.height + GAP;
+    let fits_below = below >= bottom;
+    let fits_above = above + h <= top;
+
+    let y = if prefer_above {
+        if fits_above {
+            above
+        } else if fits_below {
+            below
+        } else {
+            bottom
+        }
+    } else if fits_below {
+        below
+    } else if fits_above {
+        above
+    } else {
+        bottom
+    };
+
+    // ★ 最後的保險：一律夾回可視範圍 ★
+    //
+    // `min` 在前、`max` 在後：面板比螢幕高時寧可貼著下緣被切掉上面，
+    // 也不要整個看不到。跟下面 x 的處理對稱。
+    let y = y.min(top - h).max(bottom);
+
+    // `max` 放在 `min` 之後：面板比螢幕寬時，寧可切右邊也要對齊左緣
+    let x = caret
+        .origin
+        .x
+        .min(screen.origin.x + screen.size.width - w)
+        .max(screen.origin.x);
+
+    NSPoint::new(x, y)
 }
 
 fn make_panel(mtm: MainThreadMarker, theme: Theme) -> Panel {
@@ -436,8 +634,13 @@ fn make_panel(mtm: MainThreadMarker, theme: Theme) -> Panel {
 
     // 浮在一般視窗之上。用選單的層級（101）而不是 Floating（3）——
     // 候選視窗跟選單是同一類東西，要蓋得過宿主自己的浮動面板。
-    panel.setLevel(NSPopUpMenuWindowLevel);
+    //
+    // ★ `setFloatingPanel` 一定要在 `setLevel` **前面** ★
+    //   它的副作用是把層級設成 Floating（3）。原本順序反過來，層級實際
+    //   一直是 3——2026-09-23 用 `CGWindowList` 量到才發現，程式碼寫著
+    //   101 不代表視窗就是 101。層級 3 會被宿主自己的浮動視窗蓋掉。
     panel.setFloatingPanel(true);
+    panel.setLevel(NSPopUpMenuWindowLevel);
     // 只有真的需要時才當 key window。預設是「點了就變 key」，那會中斷組字。
     panel.setBecomesKeyOnlyIfNeeded(true);
     // 我們的行程是 LSUIElement，本來就不會「作用中」；沒有這行的話
@@ -466,6 +669,7 @@ fn make_panel(mtm: MainThreadMarker, theme: Theme) -> Panel {
 /// - `columns`：分成幾欄。`1` 是一般的一直排，`>1` 是展開全部的網格
 /// - `hint`：底部那行小字（指令提示、引擎停用之類），空字串就不畫
 /// - `target`：點下去要收 `tsunagiSelectCandidate:` 的物件
+/// - `sender`：宿主，只用在診斷紀錄（記下是哪個 app）
 /// - `caret`：`caret_rect()` 問來的那一行的矩形
 ///
 /// **只有提示、沒有候選字時照樣要開面板**——那正是「打了 `config`，
@@ -479,6 +683,7 @@ pub fn show(
     columns: usize,
     hint: &str,
     target: &AnyObject,
+    sender: &AnyObject,
     caret: NSRect,
 ) {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -490,55 +695,44 @@ pub fn show(
     }
     PANEL.with(|cell| {
         let mut slot = cell.borrow_mut();
-        let p = slot.get_or_insert_with(|| make_panel(mtm, crate::settings::theme()));
-        // 主題每次都換成最新的——改設定要立刻看得到。
-        *p.view.ivars().theme.borrow_mut() = crate::settings::theme();
+        // 最多兩輪：第一輪發現面板被系統降級（見 `stranded`）就丟掉，
+        // 第二輪用新造的。新造的不再查——剛向系統登記過，不會有事。
+        for attempt in 0..2 {
+            let p = slot.get_or_insert_with(|| make_panel(mtm, crate::settings::theme()));
+            let was_hidden = !p.panel.isVisible();
+            // 主題每次都換成最新的——改設定要立刻看得到。
+            *p.view.ivars().theme.borrow_mut() = crate::settings::theme();
 
-        *p.view.ivars().items.borrow_mut() = items.to_vec();
-        *p.view.ivars().hint.borrow_mut() = hint.to_owned();
-        p.view
-            .ivars()
-            .selected
-            .set(selected.min(items.len().saturating_sub(1)));
-        p.view.ivars().columns.set(columns.max(1));
-        *p.view.ivars().target.borrow_mut() = Some(target.retain());
+            *p.view.ivars().items.borrow_mut() = items.to_vec();
+            *p.view.ivars().hint.borrow_mut() = hint.to_owned();
+            p.view
+                .ivars()
+                .selected
+                .set(selected.min(items.len().saturating_sub(1)));
+            p.view.ivars().columns.set(columns.max(1));
+            *p.view.ivars().target.borrow_mut() = Some(target.retain());
 
-        let size = p.view.layout();
-        let (w, h) = (size.width, size.height);
+            let size = p.view.layout();
+            // 定位整段交給 `place`——它保證算出來的位置一定落在螢幕內，
+            // 不管宿主回的游標座標多離譜。
+            let pos = match screen_at(mtm, caret.origin) {
+                Some(f) => place(caret, size.width, size.height, f, false),
+                // 連一台螢幕都問不到（幾乎不可能）：至少擺在游標下方
+                None => NSPoint::new(caret.origin.x, caret.origin.y - size.height - GAP),
+            };
 
-        // 螢幕座標是**左下角原點**，所以「貼在游標那行下面」是減。
-        let mut x = caret.origin.x;
-        let mut y = caret.origin.y - h - GAP;
+            p.panel.setFrame_display(NSRect::new(pos, size), true);
+            p.view.setNeedsDisplay(true);
+            p.panel.orderFront(None);
 
-        // 掉出螢幕就翻到行的上方／往左收。找游標所在的那個螢幕來夾，
-        // 不能用 mainScreen——多螢幕時宿主不一定在主螢幕上。
-        if let Some(screen) = NSScreen::screens(mtm)
-            .iter()
-            .find(|s| {
-                let f = s.frame();
-                caret.origin.x >= f.origin.x
-                    && caret.origin.x <= f.origin.x + f.size.width
-                    && caret.origin.y >= f.origin.y
-                    && caret.origin.y <= f.origin.y + f.size.height
-            })
-            .or_else(|| NSScreen::mainScreen(mtm))
-        {
-            let f = screen.visibleFrame();
-            if y < f.origin.y {
-                y = caret.origin.y + caret.size.height + GAP;
+            if attempt == 0 && stranded(&p.panel, was_hidden, sender, "候選面板") {
+                p.panel.orderOut(None);
+                *p.view.ivars().target.borrow_mut() = None;
+                *slot = None;
+                continue;
             }
-            if x + w > f.origin.x + f.size.width {
-                x = f.origin.x + f.size.width - w;
-            }
-            if x < f.origin.x {
-                x = f.origin.x;
-            }
+            break;
         }
-
-        p.panel
-            .setFrame_display(NSRect::new(NSPoint::new(x, y), NSSize::new(w, h)), true);
-        p.view.setNeedsDisplay(true);
-        p.panel.orderFront(None);
     });
 }
 
@@ -574,4 +768,114 @@ pub fn hide() {
             *p.view.ivars().target.borrow_mut() = None;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 一台 1920x1080、底部有 40px Dock 的螢幕（`visibleFrame` 已扣掉）。
+    /// **左下原點**：origin 是左下角。
+    fn 螢幕() -> NSRect {
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1920.0, 1040.0))
+    }
+
+    /// 一行文字的矩形：`(x, y)` 是**左下角**，寬 100、高 20
+    fn 文字(x: f64, y: f64) -> NSRect {
+        NSRect::new(NSPoint::new(x, y), NSSize::new(100.0, 20.0))
+    }
+
+    // ── 下面六條對應 Windows 的 `candidate_window::place` 那六條 ──
+    // 兩邊的規則刻意一致，只有座標系上下相反。
+
+    #[test]
+    fn 位置夠時放在文字下方() {
+        let p = place(文字(300.0, 500.0), 200.0, 300.0, 螢幕(), false);
+        assert_eq!(
+            (p.x, p.y),
+            (300.0, 196.0),
+            "貼著文字下緣（500-300-4）、左緣對齊"
+        );
+    }
+
+    #[test]
+    fn 螢幕底部放不下就翻到上方() {
+        // 文字下緣在 100，下方只剩 100px，放不下 300px 高的面板
+        let p = place(文字(300.0, 100.0), 200.0, 300.0, 螢幕(), false);
+        assert_eq!((p.x, p.y), (300.0, 124.0), "面板下緣貼著文字上緣（120+4）");
+        assert!(p.y >= 120.0, "不能蓋住正在打的字");
+    }
+
+    #[test]
+    fn 上下都放不下就貼著下緣() {
+        // 螢幕只有 200px 高，面板 300px——怎麼放都超出
+        let 矮螢幕 = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1920.0, 200.0));
+        let p = place(文字(300.0, 100.0), 200.0, 300.0, 矮螢幕, false);
+        assert_eq!(p.y, 0.0, "至少對齊下緣，看得到前面幾列");
+    }
+
+    #[test]
+    fn 超出右緣就往左推() {
+        let p = place(文字(1850.0, 500.0), 200.0, 300.0, 螢幕(), false);
+        assert_eq!(p.x, 1720.0, "右緣貼齊螢幕（1920-200）");
+    }
+
+    #[test]
+    fn 面板比螢幕寬時對齊左緣() {
+        // 寧可切右邊也不要左邊看不到——編號在左邊
+        let p = place(文字(100.0, 500.0), 3000.0, 300.0, 螢幕(), false);
+        assert_eq!(p.x, 0.0);
+    }
+
+    #[test]
+    fn 第二台螢幕的負座標也要正確() {
+        // 副螢幕常在主螢幕左邊，座標是負的
+        let 副螢幕 = NSRect::new(NSPoint::new(-2560.0, 0.0), NSSize::new(2560.0, 1400.0));
+        let p = place(文字(-2500.0, 100.0), 200.0, 300.0, 副螢幕, false);
+        assert_eq!((p.x, p.y), (-2500.0, 124.0), "一樣要翻到上方");
+    }
+
+    // ── 下面兩條是 macOS 這邊補的：**游標座標本身就在螢幕外** ──
+    //
+    // 2026-09-16 在 VS Code 的全螢幕視窗遇到「打得出字、候選面板不出現」，
+    // 沒有量到當時的座標所以根因未定，但舊的定位邏輯確實會在這種輸入下
+    // 把面板擺到看不見的地方。這兩條把那個缺口鎖住。
+
+    #[test]
+    fn 游標座標高到離譜時面板仍留在螢幕內() {
+        // 宿主回了一個遠超螢幕上緣的 y
+        let p = place(文字(300.0, 5000.0), 200.0, 300.0, 螢幕(), false);
+        assert!(
+            p.y >= 0.0 && p.y + 300.0 <= 1040.0,
+            "面板必須完全在螢幕內，實際 y={}",
+            p.y
+        );
+        assert_eq!(p.y, 740.0, "頂到上緣就貼著上緣（1040-300）");
+    }
+
+    #[test]
+    fn 游標座標掉到螢幕下方外時面板仍留在螢幕內() {
+        let p = place(文字(300.0, -500.0), 200.0, 300.0, 螢幕(), false);
+        assert!(
+            p.y >= 0.0 && p.y + 300.0 <= 1040.0,
+            "面板必須完全在螢幕內，實際 y={}",
+            p.y
+        );
+        assert_eq!(p.y, 0.0, "貼著下緣");
+    }
+
+    // ── prefer_above：全半形那條 bar 走這一側 ──
+
+    #[test]
+    fn 偏好上方時放在文字上方() {
+        let p = place(文字(300.0, 500.0), 200.0, 100.0, 螢幕(), true);
+        assert_eq!(p.y, 524.0, "貼著文字上緣（500+20+4）");
+    }
+
+    #[test]
+    fn 偏好上方但上方放不下就翻到下方() {
+        // 文字接近螢幕頂端，上方塞不進 100px
+        let p = place(文字(300.0, 1000.0), 200.0, 100.0, 螢幕(), true);
+        assert_eq!(p.y, 896.0, "翻到文字下方（1000-100-4）");
+    }
 }

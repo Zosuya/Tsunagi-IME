@@ -109,13 +109,51 @@ macOS 用的是 `seg_confirm()`＝永遠往下一段。但那個設定**選字�
 | API | 為什麼不是洞 |
 |---|---|
 | `cutting_*`／`next_cutting`／`prev_cutting`／`expand_cutting`／`collapse_cutting`／`set_cutting_index` | 舊的整句選單，Windows 也沒有入口了，段選單穩定後要一起刪 |
-| `arrow_left`／`arrow_right` | 只有「沒在選字時按方向鍵」那條分支跟 `select_left/right` 不同，而 Windows 只在選字模式綁它們——實際等價 |
+| ~~`arrow_left`／`arrow_right`~~ | ~~只有「沒在選字時按方向鍵」那條分支跟 `select_left/right` 不同，而 Windows 只在選字模式綁它們——實際等價~~ **⚠ 2026-09-19 發現這是誤判，見下** |
 | `cand_scroll`／`set_cand_col_first` | 候選捲軸，macOS 還沒做（已知缺口） |
 | `composition_text` | macOS 刻意用 `text() + pending_symbols()`——自動模式下 `composition_text` 回的是原始按鍵（[[接上引擎：詞庫定位、Session 取代自己記的緩衝]]） |
 | `engines` | macOS 從 `settings::engines()` 拿，同一份設定 |
 | `push_punct` | `ctrl_punct` 的路，macOS 不做語言鎖定以外的 Ctrl 組合（而且 Ctrl 到不了我們，[[語言鎖定接上 macOS，鍵位改成空白鍵那一族]]） |
 | `seg_reset` | macOS 的 Esc 是「關掉但保留」（使用者裁定，[[段選單與學習存檔：三個狀態機接完]]） |
 | `set_lock` | macOS 走 `cycle_lock()`，它內部就呼叫這支 |
+
+### ⚠ 判讀錯了一支：`arrow_*`（2026-09-19 發現）
+
+上表第二列的理由**是錯的**，而且錯得很典型——**把 Mode 搞混了**。
+
+當時寫「Windows 只在選字模式綁它們」，但對照 `core/src/binding.rs`：
+
+```
+(Mode::Typing, Combo::plain(Key::Left),  Action::EnterSelectLast)
+(Mode::Typing, Combo::plain(Key::Right), Action::EnterSelect)
+```
+
+**那兩個綁在 `Mode::Typing`，不是 `Mode::Selecting`。** 判讀時把
+`Mode::Selecting` 底下的 `SelectLeft`／`SelectRight`（那兩支兩平台**確實**
+一致）跟 `Mode::Typing` 底下的 `EnterSelect` 搞混，於是 `arrow_*`
+被從候選缺口裡刷掉。
+
+**實際的差異**：`arrow_right()` 比 `enter_select_first()` 多一條分支——
+
+| 狀態 | Windows（`arrow_right`） | macOS（`enter_select_first`） |
+|---|---|---|
+| 沒有框 | 出框 | 出框（一樣） |
+| **框還留著** | **往右移一格** ✔ | `resume_or()` 回到**同一格**，框不動 ✘ |
+
+症狀是**按兩下才動一格**——而 `select.rs` 的註解早就寫著
+「不吸收掉的話會變成按兩下才動一格，很莫名其妙」，那正是這條分支存在的理由。
+
+macOS 還多呼叫了 `open_cands()`，Windows 沒有。Windows 的左右鍵是
+**只出框、不列候選**（「框與候選是兩件事」，見上面③）。所以 macOS 按左右鍵
+會直接彈出候選面板，這也是不一致。
+
+> **教訓（比這個 bug 本身值錢）**：這套稽核的產出是**一張要人判讀的表**，
+> 而判讀會錯。**「為什麼不是洞」的理由裡只要提到 Mode、狀態、時機，
+> 就要回去對一次綁定表**——光憑函式名相似度判斷不夠。
+>
+> 十六支裡錯了一支（6%）。**這不代表方法不好**：它照樣抓出了三個真的洞
+> 而且都修好了。但它提醒「刷掉」這個動作要跟「找到」一樣謹慎——
+> 找到的會被驗證，刷掉的不會有人再看。
 
 ### 這個方法值得留著
 

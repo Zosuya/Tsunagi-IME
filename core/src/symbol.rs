@@ -83,17 +83,23 @@ pub fn lookup(name: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// 預載包在專案根的 `packs/`。使用者目錄指向不存在的路徑，
-    /// 測試才不會被本機 `%APPDATA%` 裡的包影響。
+    /// 走共用的 `compose::tests::load()`——它本來就載了內建符號
+    /// （預載包在專案根的 `packs/`，使用者目錄指向釘死的 `testdata/packs`，
+    /// 不受本機 `%APPDATA%` 影響）。
+    ///
+    /// # 為什麼不自己 `pack::load` 一份
+    ///
+    /// 原本這裡只載內建符號——那會把**全域**索引換成「只有符號」的
+    /// 版本，而且從不還原。2026-09-23 查 `session::segmenu::taigi_tests`
+    /// 隨機掛的時候埋 log 看到：整批跑完，最後一次換索引的就是這裡。
+    /// 那一次台語測試剛好已經跑完才沒出事；排程一變，正在半途的台語
+    /// 測試就會查不到台語——跟 `pack` 那三條換索引的測試是同一種洞。
+    /// **索引只有一份，測試的載入也該只有一份**。
+    ///
+    /// 回傳看 `any_sym()` 不看 `load()` 的結果：後者是「詞庫在不在」，
+    /// 符號不需要詞庫（CI 上沒有詞庫，符號測試照樣要跑）。
     fn load() -> bool {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap();
-        crate::pack::set_bundled_dir(Some(root.join("packs")));
-        crate::pack::load(
-            "__測試用_不存在的資料夾__",
-            &[crate::pack::BUNDLED_SYMBOLS.to_string()],
-        );
+        crate::compose::tests::load();
         crate::pack::any_sym()
     }
 

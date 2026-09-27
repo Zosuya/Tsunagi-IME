@@ -1,6 +1,6 @@
 [package]
 name = "ime-settings"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 
 # 設定頁是**獨立執行檔**，不是 DLL 的一部分。

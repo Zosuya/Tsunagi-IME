@@ -271,7 +271,15 @@ impl Combo {
 #[rustfmt::skip]
 const DEFAULT_BINDINGS: &[(Mode, Combo, Action)] = &[
     // ── 打字中 ──
-    (Mode::Typing, Combo::plain(Key::Backspace), Action::Backspace),
+    // 倒退鍵送 `DeleteCell`：**有框刪框、沒框退一個輸入單位**（使用者裁定
+    // 2026-09-20）。三態設定在動作內部判斷，跟 `Mode::Selecting` 那兩條同一個
+    // 模式——設定關掉、或設成只認 `Shift+`倒退鍵而這一下沒按，平台層就退回
+    // `session.backspace()` 刪一個鍵，鎖定模式也走那條退路。
+    //
+    // **不要改回 `Action::Backspace`**：那支直接刪一個鍵，`delete_marked_cell()`
+    // 整段邏輯就永遠到不了（2026-09-20 實測「沒效果」的根因）。
+    (Mode::Typing, Combo::plain(Key::Backspace), Action::DeleteCell),
+    (Mode::Typing, Combo::shift(Key::Backspace), Action::DeleteCell),
     (Mode::Typing, Combo::plain(Key::Esc),       Action::Cancel),
     (Mode::Typing, Combo::plain(Key::Enter),     Action::Commit),
     // TAB 開**段選單**（新的）。舊的整句選單留在程式碼裡但沒有入口，
@@ -528,6 +536,37 @@ mod tests {
                 primary: true,
             },
         )
+    }
+
+    /// 打字中的倒退鍵要走 `DeleteCell`，**不是** `Backspace`。
+    ///
+    /// 「沒有框時退一個輸入單位」整段邏輯掛在 `Session::delete_marked_cell`
+    /// 裡，而那支只有 `Action::DeleteCell` 會呼叫。分派表送 `Action::Backspace`
+    /// 的話直接刪一個鍵，新規格永遠到不了——2026-09-20 實測回報「沒效果」
+    /// 就是這樣來的：core 測試直接呼叫 `delete_marked_cell()`，**繞過了分派**，
+    /// 所以測試全綠而產品是壞的。這一條從分派表這端守著。
+    mod 打字中的倒退鍵 {
+        use super::*;
+
+        #[test]
+        fn 單按是_delete_cell() {
+            assert_eq!(
+                按(Mode::Typing, Key::Backspace),
+                Some(Action::DeleteCell),
+                "沒有框時要退一個輸入單位，得走 DeleteCell"
+            );
+        }
+
+        /// 設定成「只認 `Shift+`倒退鍵」時這條才是主角；三態判斷在平台層的
+        /// 動作內部，分派表兩個都要送得到。
+        #[test]
+        fn shift版也是_delete_cell() {
+            assert_eq!(
+                shift按(Mode::Typing, Key::Backspace),
+                Some(Action::DeleteCell),
+                "Shift+倒退鍵在打字中不能沒綁定"
+            );
+        }
     }
 
     /// 2026-09-09 換鍵位：`Shift+空白` 從全半形改成語言鎖定輪替，
