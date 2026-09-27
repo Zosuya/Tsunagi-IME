@@ -14,7 +14,7 @@
 切換到通譯輸入法之後，直接按照正常方式打字。它會自動辨識你打的是甚麼語言。
 
 <div align="center">
-  <img src="doc/gif/preview.gif" width="720" alt="自動辨識中英日混合輸入">
+  <img src="site/assets/gif/preview.gif" width="720" alt="自動辨識中英日混合輸入">
 </div>
 
 | 你打                                         | 出來                   |
@@ -103,7 +103,7 @@
 因為擴充包是可以流動的，所以你也可以把你的包分享出來給大家使用。現成的包放在 **[Tsunagi-packs](https://github.com/Zosuya/Tsunagi-packs)**，下載丟進資料夾就能用。
 
 <div align="center">
-  <img src="doc/gif/pack.gif" width="720" alt="擴充包">
+  <img src="site/assets/gif/pack.gif" width="720" alt="擴充包">
 </div>
 
 ### 台語
@@ -152,7 +152,7 @@
 支援自訂主題，你可以調整候選框的顏色，樣式等等，甚至還可以使用圖片。所有的設定也都是純文字檔，你可以把你製作的夢幻芭比粉主題分享給你的好兄弟用。
 
 <div align="center">
-  <img src="doc/gif/theme.gif" width="720" alt="自訂主題">
+  <img src="site/assets/gif/theme.gif" width="720" alt="自訂主題">
 </div>
 
 
@@ -163,7 +163,7 @@
 可以利用想輸入的類型直接在輸入框輸入並搭配快速設定組合鍵來改變設定。例如你可以用任何語言輸入「設定」之後 再使用↑ ↑ ↓ ↓來快速進入輸入法的設定頁面，或是輸入語言來快速啟用和停用。
 
 <div align="center">
-  <img src="doc/gif/fast-settings.gif" width="720" alt="快速設定">
+  <img src="site/assets/gif/fast-settings.gif" width="720" alt="快速設定">
 </div>
 
 ## 智慧標點
@@ -173,7 +173,7 @@
 自動模式下，直接輸入標點符號的按鍵，會根據前面一句的語言來自動套用相對應全半形的標點符號。在遇到比較少打或是不確定的符號情況下，可以打按鍵之後像選字一樣選用不同的標點符號。例如打"...(三個英文句號)"時能夠自動轉換為"…(刪節號)"，符號也支援使用擴充包建立，詳情參閱相關說明。
 
 <div align="center">
-  <img src="doc/gif/punctuation.gif" width="720" alt="智慧標點">
+  <img src="site/assets/gif/punctuation.gif" width="720" alt="智慧標點">
 </div>
 
 ## 符號
@@ -194,7 +194,7 @@
 內建收了四十組常用的（星、心、箭頭、勾叉、數學、圖形、音樂、天氣、貨幣、撲克……），不夠的話用擴充包自己加。
 
 <div align="center">
-  <img src="doc/gif/symbol.gif" width="720" alt="符號輸入">
+  <img src="site/assets/gif/symbol.gif" width="720" alt="符號輸入">
 </div>
 
 ## 語言停用
@@ -203,7 +203,7 @@
 你可以利用上面的快速設定或是設定頁面中，關閉不需要的語言，這樣在混合輸入中被關閉的語言就不會參與辨識，可以讓剩下的語言辨識準確度大幅提升。
 
 <div align="center">
-  <img src="doc/gif/language-toggle.gif" width="720" alt="語言停用">
+  <img src="site/assets/gif/language-toggle.gif" width="720" alt="語言停用">
 </div>
 
 # 隱私權聲明

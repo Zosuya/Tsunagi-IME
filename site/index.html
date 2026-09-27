@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>通譯輸入法 · Tsunagi</title>
+<meta name="description" content="通譯輸入法（Tsunagi）：注音、日文羅馬字、英文混著打，不用切換。引擎邊打邊判斷語言，Windows 與 macOS 皆可用，開源免費。" />
+<link rel="icon" href="assets/icon.png" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <img src="assets/icon.png" alt="" />
+      通譯 Tsunagi
+    </a>
+    <div class="links">
+      <a href="#langs">三種語言</a>
+      <a href="#fix">切錯怎麼辦</a>
+      <a href="#features">功能</a>
+      <a href="#privacy">隱私</a>
+      <a href="#install">安裝</a>
+    </div>
+    <a class="btn btn-primary cta" href="#install">下載</a>
+  </div>
+</nav>
+
+<!-- 開頭 -->
+<header class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div class="hero-text">
+      <img class="hero-logo" src="assets/logo.png" alt="通譯 Tsunagi" />
+      <h1>想打哪種語言，<br />直接打就對了。</h1>
+      <p class="lede">
+        注音、日文羅馬字、英文，同一個輸入法、同一串按鍵。
+        通譯會邊打邊判斷你在寫哪種語言——不必按切換鍵，
+        也不必對著一串 <code>rup wu0</code> 狂按退格。
+      </p>
+      <div class="btn-row">
+        <a class="btn btn-primary" data-dl="auto"
+           href="https://github.com/Zosuya/Tsunagi-IME/releases/download/v1.1.0/tsunagi-ime-1.1.0-win-setup.exe">
+          下載 <span data-dl-label>Windows 版</span>
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/Zosuya/Tsunagi-IME">GitHub 原始碼</a>
+      </div>
+      <p class="platforms">
+        <span data-dl-version>v1.1.0</span> · 免費開源 ·
+        <a data-dl="other" href="https://github.com/Zosuya/Tsunagi-IME/releases/download/v1.1.0/tsunagi-ime-1.1.0-macos.pkg">改下載 <span data-dl-other-label>macOS 版</span></a>
+      </p>
+    </div>
+
+    <div class="demo" aria-label="打字示範">
+      <div class="demo-bar"><span></span><span></span><span></span></div>
+      <div class="demo-body">
+        <div class="demo-label">按下的鍵</div>
+        <div class="demo-keys" id="demo-keys"></div>
+        <div class="demo-label">出來的字</div>
+        <div class="demo-out" id="demo-out"></div>
+        <div class="demo-legend">
+          <span class="tag zh">中</span>
+          <span class="tag ja">日</span>
+          <span class="tag en">英</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- 三種語言 -->
+<section id="langs">
+  <div class="wrap">
+    <p class="kicker">三種語言，一次搞定</p>
+    <h2>不是三個輸入法綁在一起</h2>
+    <p class="section-lead">
+      引擎先看每一段按鍵在哪種語言裡「拼得通」，再從所有說得通的切法裡，挑最像你要的那一個。
+      中間夾一個英文單字、句尾接一段日文，都不用停下來切換。
+    </p>
+
+    <div class="lang-grid">
+      <div class="lang-card">
+        <span class="tag zh">中</span>
+        <h3>注音</h3>
+        <div class="io"><code>su3cl3</code><span class="arrow">→</span><strong>你好</strong></div>
+        <p>標準大千排列，照你平常的打法就行。同音字會看前後文來挑，ㄣ／ㄥ 這類常見的混淆也容得下。</p>
+      </div>
+      <div class="lang-card">
+        <span class="tag ja">日</span>
+        <h3>日文羅馬字</h3>
+        <div class="io"><code>watashihagakuseidesu</code><span class="arrow">→</span><strong>私は学生です</strong></div>
+        <p>拼法跟一般日文輸入法一樣，整句轉成漢字假名混寫。動詞變化認得出原形，轉換不會卡在活用上。</p>
+      </div>
+      <div class="lang-card">
+        <span class="tag en">英</span>
+        <h3>英文</h3>
+        <div class="io"><code>hello</code><span class="arrow">→</span><strong>hello</strong></div>
+        <p>認得出是英文單字就原樣放行，不會被拆去湊注音或假名。自己加進擴充包的詞也算數。</p>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat">
+        <strong>10.5<small>ms</small></strong>
+        <span>按鍵延遲（p99）<br />畫面一幀是 16ms</span>
+      </div>
+      <div class="stat">
+        <strong>9.0<small>MB</small></strong>
+        <span>記憶體增量<br />多開幾個程式也共用同一份</span>
+      </div>
+      <div class="stat">
+        <strong>94.4<small>%</small></strong>
+        <span>整句全對<br />1464 句中英日混打測資</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 實際畫面 -->
+<section class="band">
+  <div class="wrap">
+    <p class="kicker">實際打起來</p>
+    <h2>一路打下去，候選跟著長出來</h2>
+    <div class="media-frame big">
+      <img data-src="assets/gif/preview.gif" alt="中英日混打的實際畫面" loading="lazy" />
+    </div>
+  </div>
+</section>
+
+<!-- 切錯怎麼辦 -->
+<section id="fix">
+  <div class="wrap split">
+    <div>
+      <p class="kicker">猜錯了也不怕</p>
+      <h2>按 Tab，換一種讀法</h2>
+      <p class="section-lead">
+        混著打，總有猜錯的時候。像 <code>loggerul4</code> 想打「logger ㄨㄞˋ」，
+        引擎卻切成 <code>log</code>＋<code>geru</code>＋<code>l4</code>。
+      </p>
+      <p class="section-lead">
+        按 <kbd>Tab</kbd> 會反白其中一段，底下列出這段所有可能的讀法：長一點、短一點、換一種語言，全都在同一張清單裡。
+        不用先想「是切錯還是認錯語言」，看到要的就挑。
+      </p>
+      <p class="section-lead">
+        選好按 <kbd>Enter</kbd>，前面鎖住、後面重新算——已經定下的，不會再被翻掉。
+      </p>
+    </div>
+
+    <div class="mock" aria-label="段選單示意">
+      <div class="mock-line">
+        <span class="seg hl">log</span><span class="seg">geru</span><span class="seg">l4</span>
+      </div>
+      <ul class="mock-menu">
+        <li class="on"><b>1</b><span>log</span><em class="tag en">英</em><small>現在的樣子</small></li>
+        <li><b>2</b><span>logger</span><em class="tag en">英</em><small>往右延伸</small></li>
+        <li><b>3</b><span>lo</span><em class="tag en">英</em><small>往左收縮</small></li>
+        <li><b>4</b><span>ログ</span><em class="tag ja">日</em><small>換一種語言</small></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="keys">
+      <div class="key"><span><kbd>Tab</kbd></span>開關段選單</div>
+      <div class="key"><span><kbd>←</kbd><kbd>→</kbd></span>逐字移動選字</div>
+      <div class="key"><span><kbd>↑</kbd><kbd>↓</kbd></span>叫出這格的候選</div>
+      <div class="key"><span><kbd>1</kbd>–<kbd>9</kbd></span>直接挑第幾個</div>
+      <div class="key"><span><kbd>Shift</kbd>+<kbd>空白</kbd></span>鎖定語言</div>
+      <div class="key"><span><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>空白</kbd></span>全形／半形</div>
+      <div class="key"><span><kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd></span>拉寬拉窄範圍</div>
+      <div class="key"><span><kbd>Esc</kbd></span>退回上一層</div>
+    </div>
+    <p class="fine">macOS 的全半形是 <kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>空白</kbd>。滑鼠直接點候選也可以。</p>
+  </div>
+</section>
+
+<!-- 功能展示 -->
+<section id="features" class="band">
+  <div class="wrap">
+    <p class="kicker">細節</p>
+    <h2>打字時會卡住的小地方，都想過了</h2>
+
+    <div class="showcase">
+      <div class="show-tabs" role="tablist">
+        <button class="show-tab active" data-show="pack">擴充包</button>
+        <button class="show-tab" data-show="theme">自訂主題</button>
+        <button class="show-tab" data-show="quick">快速設定</button>
+        <button class="show-tab" data-show="punct">智慧標點</button>
+        <button class="show-tab" data-show="symbol">符號</button>
+        <button class="show-tab" data-show="toggle">語言開關</button>
+      </div>
+
+      <div class="show-panels">
+        <div class="show-panel active" id="show-pack">
+          <div class="media-frame"><img data-src="assets/gif/pack.gif" alt="擴充包編輯畫面" loading="lazy" /></div>
+          <h3>擴充包：把你的專有名詞教給它</h3>
+          <p>角色名、遊戲術語、工作上的縮寫，做成一份詞表就好。在設定頁直接加詞，存檔馬上生效，不必重開。
+            加進來的英文詞還會影響「這串是不是英文」的判斷。現成的包在 <a href="https://github.com/Zosuya/Tsunagi-packs">Tsunagi-packs</a>。</p>
+        </div>
+        <div class="show-panel" id="show-theme">
+          <div class="media-frame"><img data-src="assets/gif/theme.gif" alt="自訂主題" loading="lazy" /></div>
+          <h3>自訂主題：候選視窗長什麼樣你決定</h3>
+          <p>顏色、樣式都能調，還能放背景圖。主題存成純文字檔，做好一套直接傳給朋友就能用。</p>
+        </div>
+        <div class="show-panel" id="show-quick">
+          <div class="media-frame"><img data-src="assets/gif/fast-settings.gif" alt="快速設定" loading="lazy" /></div>
+          <h3>快速設定：打字的地方就是選單</h3>
+          <p>在輸入框打「設定」再按 <kbd>↑</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>↓</kbd>，設定頁就開了。
+            打語言名稱配同一組手勢，可以直接開關那個語言。</p>
+        </div>
+        <div class="show-panel" id="show-punct">
+          <div class="media-frame"><img data-src="assets/gif/punctuation.gif" alt="智慧標點" loading="lazy" /></div>
+          <h3>智慧標點：全形半形看上下文</h3>
+          <p>中文句子後面出全形，英文後面出半形。拿不準的符號像選字一樣往下挑——連打三個句點，也能換成刪節號「…」。</p>
+        </div>
+        <div class="show-panel" id="show-symbol">
+          <div class="media-frame"><img data-src="assets/gif/symbol.gif" alt="符號輸入" loading="lazy" /></div>
+          <h3>符號：叫名字就出來</h3>
+          <p>用反斜線把名字包起來：<code>\star\</code>、<code>\hoshi\</code>，或用注音打「星」，都會變成 ★。
+            名字用哪種語言打都行。沒挑就維持原樣，所以打 <code>C:\star\file</code> 這種路徑不會被吃掉。</p>
+        </div>
+        <div class="show-panel" id="show-toggle">
+          <div class="media-frame"><img data-src="assets/gif/language-toggle.gif" alt="語言開關" loading="lazy" /></div>
+          <h3>語言開關：用不到的就關掉</h3>
+          <p>只打中英文？把日文關了。關掉的語言完全不參與判斷，剩下的猜得更準，也不會冒出一堆用不到的假名。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card-grid">
+      <div class="card">
+        <h3>台語</h3>
+        <p>打華語詞，換成台語漢字——「沙發」在段選單裡可以換成「膨椅」。不佔平常的候選，也不會被學起來，不會打過一次「感恩」之後「謝謝」就出不來。</p>
+        <p class="fine">語言包另外到 <a href="https://github.com/Zosuya/Tsunagi-packs">Tsunagi-packs</a> 下載。</p>
+      </div>
+      <div class="card">
+        <h3>模糊音</h3>
+        <p>ㄣ／ㄥ、ㄓ／ㄗ、ㄔ／ㄘ、ㄕ／ㄙ 分不清也沒關係。打偏的注音會在預覽列直接改正，改了哪裡看得一清二楚。用不到可以關。</p>
+      </div>
+      <div class="card">
+        <h3>選字學習</h3>
+        <p>你改過的字會慢慢記住，改越多次越優先。刻意不做「選一次就置頂」——免得手滑選到一次生僻字，常用字就再也回不來。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 隱私 -->
+<section id="privacy">
+  <div class="wrap">
+    <p class="kicker">隱私</p>
+    <h2>你打的字，只留在你的電腦裡</h2>
+    <div class="privacy-grid">
+      <div class="p-item">
+        <h3>不碰密碼欄</h3>
+        <p>在密碼欄位裡完全不介入、不學習，按鍵原封不動交給程式。</p>
+      </div>
+      <div class="p-item">
+        <h3>不上傳</h3>
+        <p>輸入內容和學習紀錄都只存在本機，沒有任何雲端同步。</p>
+      </div>
+      <div class="p-item">
+        <h3>不記號碼</h3>
+        <p>看起來像帳號、電話、卡號的內容，不會寫進學習紀錄。判斷看內容本身，不靠欄位標記。</p>
+      </div>
+      <div class="p-item">
+        <h3>只查一件事</h3>
+        <p>唯一的連線是檢查有沒有新版，不帶個人資料。設定頁可以關掉，關了就完全離線。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 安裝 -->
+<section id="install" class="band">
+  <div class="wrap">
+    <p class="kicker">安裝</p>
+    <h2>下載，照著點完就好</h2>
+    <p class="section-lead">
+      目前版本 <strong data-dl-version>v1.1.0</strong>。安裝程式只含輸入法本體，台語等語言包另外到
+      <a href="https://github.com/Zosuya/Tsunagi-packs">Tsunagi-packs</a> 下載，放進擴充包資料夾就能用。
+    </p>
+
+    <div class="tabs" role="tablist">
+      <button class="tab-btn active" data-tab="win">Windows</button>
+      <button class="tab-btn" data-tab="mac">macOS</button>
+    </div>
+
+    <div class="tab-panel active" id="tab-win">
+      <a class="btn btn-primary btn-lg" data-dl="win"
+         href="https://github.com/Zosuya/Tsunagi-IME/releases/download/v1.1.0/tsunagi-ime-1.1.0-win-setup.exe">
+        下載 Windows 安裝檔（.exe）
+      </a>
+      <ol class="steps">
+        <li><b>確認系統</b>需要 Windows 11 x64。</li>
+        <li><b>執行安裝檔</b>照著精靈走完，輸入法會自動加進 Windows 的輸入法清單。</li>
+        <li><b>跳出藍色警告時</b>這個版本還沒有程式碼簽章，SmartScreen 會擋一下。按「其他資訊」→「仍要執行」。</li>
+      </ol>
+      <p class="fine">解除安裝走「設定 → 應用程式」，註冊與資料夾會一併清掉。</p>
+    </div>
+
+    <div class="tab-panel" id="tab-mac">
+      <a class="btn btn-primary btn-lg" data-dl="mac"
+         href="https://github.com/Zosuya/Tsunagi-IME/releases/download/v1.1.0/tsunagi-ime-1.1.0-macos.pkg">
+        下載 macOS 安裝檔（.pkg）
+      </a>
+      <ol class="steps">
+        <li><b>確認系統</b>需要 macOS 13 以上、Apple Silicon（M 系列）。</li>
+        <li><b>放行</b>還沒有 Apple 簽章，第一次打開會被擋。到「系統設定 → 隱私權與安全性」按「強制打開」，輸入密碼後再開一次安裝檔。</li>
+        <li><b>登出再登入</b>讓系統重新找到新的輸入法。</li>
+        <li><b>加進輸入來源</b>「系統設定 → 鍵盤 → 輸入來源 → ＋ → 繁體中文 → 通譯-Tsunagi」。這一步 macOS 規定要自己點。</li>
+      </ol>
+      <p class="fine">習慣終端機的話，也可以先跑 <code>xattr -dr com.apple.quarantine</code> 加上安裝檔路徑，拿掉隔離標記再安裝。</p>
+    </div>
+
+    <p class="fine">舊版本與更新紀錄在 <a href="https://github.com/Zosuya/Tsunagi-IME/releases">GitHub Releases</a>。</p>
+  </div>
+</section>
+
+<!-- 結尾 -->
+<section class="outro">
+  <div class="wrap">
+    <h2>一個人做的輸入法，歡迎一起讓它更好</h2>
+    <p class="section-lead">通譯是開源的個人專案。打出奇怪的結果、想要什麼功能，都歡迎到 GitHub 開 issue。</p>
+    <div class="btn-row">
+      <a class="btn btn-primary" href="#install">下載通譯</a>
+      <a class="btn btn-ghost" href="https://github.com/Zosuya/Tsunagi-IME/issues">回報問題</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="footer-links">
+      <a href="https://github.com/Zosuya/Tsunagi-IME">GitHub</a>
+      <a href="https://github.com/Zosuya/Tsunagi-IME/releases">更新紀錄</a>
+      <a href="https://github.com/Zosuya/Tsunagi-packs">語言擴充包</a>
+      <a href="https://github.com/Zosuya/Tsunagi-IME/blob/main/LICENSE">GPL-3.0-or-later</a>
+    </div>
+    <p>通譯輸入法 · つなぎ · Tsunagi</p>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>

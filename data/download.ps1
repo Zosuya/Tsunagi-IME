@@ -35,7 +35,23 @@ function Get-File($url, $dest) {
         return
     }
     Write-Output "下載: $url"
-    Invoke-WebRequest -Uri $url -OutFile $dest
+    # **網路斷線要重試**：GitHub Actions 的機器抓上游時偶爾被對方直接
+    # 切斷（「An existing connection was forcibly closed by the remote
+    # host」），一次失敗整個發布流程就停在這裡。重試 4 次、間隔拉長；
+    # 失敗時把半截的檔案刪掉，不然下次會被當成「已存在」略過
+    $tries = 4
+    for ($i = 1; $i -le $tries; $i++) {
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $dest
+            return
+        } catch {
+            if (Test-Path $dest) { Remove-Item $dest -Force }
+            if ($i -eq $tries) { throw }
+            $wait = 5 * $i
+            Write-Output "  失敗（第 $i 次）：$($_.Exception.Message)，$wait 秒後重試"
+            Start-Sleep -Seconds $wait
+        }
+    }
 }
 
 # 把教育部字頻總表（Big5 + 表格框線）轉成「字 頻次」的純文字。

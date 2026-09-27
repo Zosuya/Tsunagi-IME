@@ -113,7 +113,7 @@ doc/backup/
 # 這裡，每動一下就變——進版控只會製造雜訊，而且那是每個人各自的東西。
 .obsidian/
 
-# 示範影片的原始檔（doc/gif/ 的來源素材）。GIF 才是成品，原影片
+# 示範影片的原始檔（site/assets/gif/ 的來源素材）。GIF 才是成品，原影片
 # 只留在本機——性質同 doc/af file 的設計原始檔。
 doc/video/
 
